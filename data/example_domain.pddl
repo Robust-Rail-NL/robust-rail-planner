@@ -1,0 +1,10 @@
+(define (domain scenario_solver_example1-domain)
+ (:requirements :strips :typing)
+ (:types trackpart arrivaltrain trainunit)
+ (:predicates (free ?trackpart - trackpart) (at_ ?unit - arrivaltrain ?trackpart - trackpart))
+ (:functions (arrival ?train - arrivaltrain))
+ (:action move
+  :parameters ( ?t - arrivaltrain ?l_from - trackpart ?l_to - trackpart)
+  :precondition (and (at_ ?t ?l_from))
+  :effect (and (at_ ?t ?l_to) (not (at_ ?t ?l_from))))
+)
