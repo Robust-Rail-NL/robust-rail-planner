@@ -1,0 +1,26 @@
+{
+  "location": "KleineBinckhorst",
+  "number_of_trains": 3,
+  "start_time": 0,
+  "end_time": 1080,
+  "seed": 42,
+  "use_default_material": true,
+  "trains_given": false,
+  "track_ids_used": true,
+  "perform_servicing": false,
+  "mixed_traffic": false,
+  "matching": 0,
+  "min_gap_on_gateway": 180,
+  "gateway": {
+    "arrival": [15],
+    "departure": [15]
+  },
+  "train_unit_distribution": {
+    "train_unit_types": ["SLT-4"],
+    "super_type_ratio": 0.0,
+    "units_per_composition": [1],
+    "type_ratio": 0.0,
+    "instanding_ratio": 0.0,
+    "outstanding_ratio": 0.0
+  }
+}
