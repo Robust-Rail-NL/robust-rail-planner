@@ -25,3 +25,23 @@ Thesis:
 - [Repository with experiment setup for thesis](https://github.com/LonyuNaz/tusp-pddl-experiments)
   - [Older version](https://github.com/LonyuNaz/tusp-cp-postprocessing)
 - [Comparison of numeric and temporal models](https://github.com/LonyuNaz/tusp-numeric-temporal-pddl)
+
+## Coupling/uncoupling modelling ladder
+
+The converter can generate three matching/coupling variants from Robust-Rail solver scenarios:
+
+- `implicit_free_uncoupling`: individual train units are matched directly to departure slots. Coupling is implicit, and units in arriving compositions are immediately available.
+- `implicit_explicit_uncoupling`: units in multi-unit arriving compositions must first be released with `uncouple(unit, composition)`.
+- `explicit_coupling`: after matching, each slot must also be finalized with `couple_to_request(unit, slot, request)`.
+
+Run the default experiment ladder with:
+
+```powershell
+python scripts\run_coupling_study.py
+```
+
+To test one scenario and one variant:
+
+```powershell
+python scripts\run_coupling_study.py --scenarios scenario_solver_example2.json --modes explicit_coupling
+```

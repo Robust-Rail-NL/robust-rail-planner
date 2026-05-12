@@ -1,2 +1,5 @@
 **/__pycache__/
 Manifest.toml
+data/coupling-study/*
+!data/coupling-study/
+!data/coupling-study/RESULTS_NOTES.md
