@@ -1,4 +1,5 @@
 import os
+from shutil import move
 import sys
 import json
 import logging
@@ -133,8 +134,14 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move.add_precondition(at(move.t, move.l_from))
     # Ensure that the train will only move to a connected track
     move.add_precondition(connected(move.l_from, move.l_to))
+    # The train can only move to a track if it is free
+    move.add_precondition(free(move.l_to))
     move.add_effect(at(move.t, move.l_to), True)
     move.add_effect(at(move.t, move.l_from), False)
+    # After the move the from track becomes free and the to track becomes occupied
+    # We might want to make all tracks unfree if we know that a train is going to be on it
+    move.add_effect(free(move.l_to), False)
+    move.add_effect(free(move.l_from), True)
     problem.add_action(move)
 
     park = up.InstantaneousAction('park', t=arrival_train_type, l=track_part_type)
@@ -188,6 +195,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     for train in inbound_trains:
         arrival_train = problem.add_object("train" + train["id"], arrival_train_type)
         problem.set_initial_value(arrival(arrival_train), up.Int(int(train["arrival"])))
+        # The initial position of the train is at its entry track, and that track becomes occupied (not free)
+        problem.set_initial_value(free(id_to_track_part[train["firstParkingTrackPart"]]), False)
         problem.set_initial_value(at(arrival_train, id_to_track_part[train["firstParkingTrackPart"]]), True)
         problem.set_initial_value(departure_rank(arrival_train), up.Int(train_to_rank[train["id"]]))
         problem.add_goal(parked(arrival_train))
@@ -207,7 +216,18 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         writer.write_domain(domain_file)
 
 
+    ### Debug the files that were written to
+    print(f"Written problem to {output_file}")
+    print(f"Domain file written to {domain_file}" if domain_file else "No domain file written.")
+
+
 if __name__ == "__main__":
     args = parser.parse_args()
     logging.basicConfig(level=args.log_level.upper())
+
+    # If the domain file is not specified default it to {scenario_name}_domain.pddl in the same output directory
+    if args.domain_file is None:
+        args.domain_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", f"{args.scenario_file.replace('.json', '')}_domain.pddl")
+
+
     create_instance_from_scenario(domain_file=args.domain_file, path_to_folder=args.path_to_folder, scenario_file=args.scenario_file, location_file=args.location_file, output_file=args.output_file)

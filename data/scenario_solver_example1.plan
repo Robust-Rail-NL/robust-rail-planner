@@ -1,0 +1,8 @@
+move(train2000, o_906a, wissel963)
+move(train2000, wissel963, o_906b)
+park(train2000, o_906b)
+move(train3000, o_906a, wissel963)
+move(train3000, wissel963, o_961_963)
+move(train3000, o_961_963, wissel961)
+move(train3000, wissel961, o_52)
+park(train3000, o_52)

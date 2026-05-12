@@ -4,7 +4,7 @@ function run_planner()
     data_dir = joinpath(dirname(dirname(dirname(@__FILE__))), "data")
 
     # Allow passing domain and problem files as command line arguments, fallback to defaults
-    domain_file = length(ARGS) > 0 ? ARGS[1] : joinpath(data_dir, "domain.pddl")
+    domain_file = length(ARGS) > 0 ? ARGS[1] : joinpath(data_dir, "scenario_solver_example1_domain.pddl")
     problem_file = length(ARGS) > 1 ? ARGS[2] : joinpath(data_dir, "scenario_solver_example1.pddl")
 
     println("Loading domain from: ", domain_file)
