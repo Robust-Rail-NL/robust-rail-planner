@@ -4,6 +4,7 @@
 | Version | Date  | Summary of Changes |
 |---------|------|---------------|--------------------|
 | v0.1 | 2026-04-28 | Summary of changes |
+| v0.2 | 2026-05-12 | Added `park` action, `parking_allowed` and `parked` fluents |
 
 ---
 
@@ -33,6 +34,8 @@
 | `free` | `(trackpart)` | Bool | Whether a track is unoccupied. Default: true | v0.1 |
 | `arrival` | `(arrivaltrain)` | Int | Arrival timestamp of a train | v0.1 |
 | `at` | `(arrivaltrain, trackpart)` | Bool | Whether a train is at a given track. Default: false | v0.1 |
+| `parking_allowed` | `(trackpart)` | Bool | Whether a track part permits parking. Default: false. Set from `parkingAllowed` in `location_solver.json` | v0.2 |
+| `parked` | `(arrivaltrain)` | Bool | Whether a train has been parked. Default: false | v0.2 |
 
 ---
 
@@ -46,6 +49,16 @@
   - `at(t, l_from) = false`
 - **Introduced:** v0.1
 - **Notes:** 
+
+### `park`
+- **Parameters:** `t - arrivaltrain`, `l - trackpart`
+- **Preconditions:**
+  - `at(t, l)`
+  - `parking_allowed(l)`
+- **Effects:**
+  - `parked(t) = true`
+- **Introduced:** v0.2
+- **Notes:** Every inbound train has `parked(t)` as a goal. A train must already be at the target track part and that track part must permit parking.
 
 ---
 
