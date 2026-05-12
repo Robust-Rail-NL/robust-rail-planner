@@ -1,18 +1,31 @@
 using PDDL, SymbolicPlanners
 
-
 function run_planner()
-    planner = AStarPlanner(HAdd())
-    domain = load_domain(joinpath(dirname(dirname(dirname(@__FILE__))), "data", "example_domain.pddl"))
+    data_dir = joinpath(dirname(dirname(dirname(@__FILE__))), "data")
 
-    problem_file = joinpath(dirname(dirname(dirname(@__FILE__))), "data", "scenario_solver_example1.pddl")
+    # Allow passing domain and problem files as command line arguments, fallback to defaults
+    domain_file = length(ARGS) > 0 ? ARGS[1] : joinpath(data_dir, "domain.pddl")
+    problem_file = length(ARGS) > 1 ? ARGS[2] : joinpath(data_dir, "scenario_solver_example1.pddl")
+
+    println("Loading domain from: ", domain_file)
+    domain = load_domain(domain_file)
+
+    println("Loading problem from: ", problem_file)
     problem = load_problem(problem_file)
+
+    println("Planning...")
+    planner = AStarPlanner(HAdd())
     sol = planner(domain, problem)
+
     if sol.status == :success
-        println("Solved $(domain) problem $(problem.name), plan length $(length(sol.plan))")
-        open(replace(problem_file, ".pddl" => ".plan"), "w") do file
+        println("Solved problem $(problem.name), plan length $(length(sol.plan))")
+        out_file = replace(problem_file, ".pddl" => ".plan")
+        open(out_file, "w") do file
             write(file, join(sol.plan, '\n'))
         end
+        println("Plan written to: ", out_file)
+    else
+        println("Failed to find a solution.")
     end
 end
 

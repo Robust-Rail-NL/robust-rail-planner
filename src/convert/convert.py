@@ -77,6 +77,9 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     arrival = problem.add_fluent(up.Fluent("arrival", up.IntType(), train=arrival_train_type))
     at = problem.add_fluent(up.Fluent("at", up.BoolType(), unit=arrival_train_type, trackpart=track_part_type), default_initial_value=False)
 
+    parking_allowed = problem.add_fluent(up.Fluent("parking_allowed", up.BoolType(), trackpart=track_part_type), default_initial_value=False)
+    parked = problem.add_fluent(up.Fluent("parked", up.BoolType(), train=arrival_train_type), default_initial_value=False)
+
     available = problem.add_fluent(up.Fluent("available", up.BoolType(), unit=train_unit_type), default_initial_value=False)
     request_open = problem.add_fluent(up.Fluent("request_open", up.BoolType(), request=departure_request_type), default_initial_value=False)
     slot_open = problem.add_fluent(up.Fluent("slot_open", up.BoolType(), slot=request_slot_type), default_initial_value=False)
@@ -120,11 +123,19 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     match.add_effect(slot_open(match.slot), False)
     problem.add_action(match)
 
+    park = up.InstantaneousAction('park', t=arrival_train_type, l=track_part_type)
+    park.add_precondition(at(park.t, park.l))
+    park.add_precondition(parking_allowed(park.l))
+    park.add_effect(parked(park.t), True)
+    problem.add_action(park)
+
     # Example add objects for track parts
     id_to_track_part = {}
     for track_part in location_object["trackParts"]:
         obj = problem.add_object(track_part["name"], track_part_type)
         id_to_track_part[track_part["id"]] = obj
+        if track_part.get("parkingAllowed", False):
+            problem.set_initial_value(parking_allowed(obj), True)
 
     id_to_unit = {}
     unit_type_by_id = {}
@@ -170,8 +181,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             for unit_id, unit_obj in id_to_unit.items():
                 if unit_type_by_id[unit_id] == requested_key:
                     problem.set_initial_value(compatible(unit_obj, slot_obj), True)
-
-
 
     ### Write to files
     if output_file is None:
