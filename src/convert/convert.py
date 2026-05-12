@@ -17,6 +17,80 @@ parser.add_argument("-d", "--domain-file", help="Specifies the name of the outpu
 ### Add logging to the arguments
 parser.add_argument("--log-level", default="ERROR", required=False, help="Configure the logging level (e.g., INFO, WARNING, ERROR) default=ERROR.")
 
+
+def _build_adjacency(location_object):
+    # Undirected graph: each trackpart id maps to the set of ids it shares an aSide/bSide connection with.
+    # Both directions are added so BFS and connectivity checks work without caring about direction.
+    # In: location object, contains "trackParts" section which has for every object:
+    # - key "aSide" and "bSide" which contains ID's of neighboring track parts
+    # - key "id" containing the ID of this track part
+    # Out: dictionary mapping track part ID -> two neighboring track part ID's
+
+    adjacency = {tp["id"]: set() for tp in location_object["trackParts"]}
+    for tp in location_object["trackParts"]:
+        for nb_id in tp.get("aSide", []) + tp.get("bSide", []):
+            if nb_id in adjacency:
+                adjacency[tp["id"]].add(nb_id)
+                adjacency[nb_id].add(tp["id"])
+    return adjacency
+
+
+def _bfs_from(adjacency, start_ids):
+    # Returns hop-distance from any of the start nodes to every reachable node.
+    # Used to measure how far each track part is from the yard's departure point(s).
+    # In: adjacency (see _build_adjacency), start_ids (list of ID's of all track parts that are marked as entry tracks)
+    # Out: a dictionary mapping ID -> shortest hop distance from any of the start_ids tracks
+    dist = {}
+    queue = deque()
+    for t_id in start_ids:
+        if t_id in adjacency and t_id not in dist:
+            dist[t_id] = 0
+            queue.append(t_id)
+    while queue:
+        current = queue.popleft()
+        for nb in adjacency[current]:
+            if nb not in dist:
+                dist[nb] = dist[current] + 1
+                queue.append(nb)
+    return dist
+
+
+def _departure_exit_ids(scenario_object):
+    # The departure track is where outbound trains leave the yard — the BFS root for entry_distance.
+    # Falls back to inbound entry tracks if no outbound requests are present in the scenario.
+    # In: a scenario object containing:
+    # - a section "out", containing the list "trainRequests" where each element has:
+    #   - "leaveTrackPart", containing a specification of from which track part a train should leave
+    # - a section "in", containing the list "trains" where each element has:
+    #   - "entryTrackPart", containing a specification of at which track a train will enter the yard
+    # Out: a list of all trackparts that are mentioned as "leaveTrackPart" in any "out" train Request if present.
+    # If there are no leaveTrackParts, it returns a list of all trackparts that are mentioned as "entryTrackPart" for any "in" train
+    ids = [req["leaveTrackPart"] for req in scenario_object.get("out", {}).get("trainRequests", []) if "leaveTrackPart" in req]
+    if not ids:
+        ids = [t["entryTrackPart"] for t in scenario_object.get("in", {}).get("trains", []) if "entryTrackPart" in t]
+    return ids
+
+
+def _compute_departure_ranks(inbound_trains):
+    # Assigns rank 1 to the earliest-departing train, 2 to the next, etc.
+    # Trains with equal departure times share a rank (lenient parking: either can use the same entry_distance level).
+    # In: inbound_trains, a list of elements each containing:
+    # - "arrival", the arrival time of the train
+    # - "departure", the departure time of the train
+    # Out: ranks, a dictionary mapping train ID -> rank (int), where rank indicates as the rank of when the train must leave the yard compared to other trains
+    sorted_trains = sorted(inbound_trains, key=lambda t: int(t.get("departure", t["arrival"])))
+    ranks = {}
+    rank = 1
+    prev_dep = None
+    for train in sorted_trains:
+        dep = int(train.get("departure", train["arrival"]))
+        if dep != prev_dep and prev_dep is not None:
+            rank += 1
+        prev_dep = dep
+        ranks[train["id"]] = rank
+    return ranks
+
+
 def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None):
     # Path defaults to ../../scenario-planning-inputs/Location_KleineBinckhorst/
     if path_to_folder is None:
