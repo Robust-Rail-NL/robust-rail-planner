@@ -37,7 +37,9 @@
 | `at` | `(arrivaltrain, trackpart)` | Bool | Whether a train is at a given track. Default: false | v0.1 |
 | `parking_allowed` | `(trackpart)` | Bool | Whether a track part permits parking. Default: false. Set from `parkingAllowed` in `location_solver.json` | v0.2 |
 | `parked` | `(arrivaltrain)` | Bool | Whether a train has been parked. Default: false | v0.2 |
+| `departed` | `(arrivaltrain)` | Bool | Whether a train has left the yard after parking. Default: false | v0.4 |
 | `connected` | `(trackpart, trackpart)` | Bool | Whether two track parts are directly adjacent. Default: false. Set bidirectionally from `aSide`/`bSide` in `location_solver.json` | v0.3 |
+| `departure_exit` | `(trackpart)` | Bool | Whether a track part is a yard exit where a train may depart. Default: false | v0.4 |
 | `entry_distance` | `(trackpart)` | Int | Normalised hop-distance from the yard's departure track (BFS). Rank 1 = closest to exit. Default: 0 (non-parking tracks). | v0.3 |
 | `departure_rank` | `(arrivaltrain)` | Int | Rank of the train's departure time among all inbound trains (1 = first to depart). Ties get the same rank (lenient). | v0.3 |
 
@@ -65,6 +67,21 @@
   - `parked(t) = true`
 - **Introduced:** v0.2 (departure ordering precondition added v0.3)
 - **Notes:** Every inbound train has `parked(t)` as a goal. The `departure_rank = entry_distance` constraint enforces that earlier-departing trains park closer to the yard exit, preventing blocking. Lenient: multiple tracks can share the same `entry_distance`, giving the planner a choice.
+
+### `depart`
+- **Parameters:** `t - arrivaltrain`, `l - trackpart`
+- **Preconditions:**
+  - `at(t, l)`
+  - `parked(t)`
+  - `departure_exit(l)`
+- **Effects:**
+  - `at(t, l) = false`
+  - `parked(t) = false`
+  - `departed(t) = true`
+  - `free(l) = true`
+  - `occupied_length(l)` decreases by `train_length(t)`
+- **Introduced:** v0.4
+- **Notes:** Routing is still handled by `move`; `depart` only removes a parked train once it reaches an exit track. The final goal is now `departed(t)`.
 
 ---
 
