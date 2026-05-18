@@ -168,6 +168,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     move = up.InstantaneousAction('move', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
     move.add_precondition(at(move.t, move.l_from))
+    move.add_precondition(up.Not(parked(move.t)))
     # Ensure that the train will only move to a connected track
     move.add_precondition(connected(move.l_from, move.l_to))
     move.add_effect(at(move.t, move.l_to), True)
