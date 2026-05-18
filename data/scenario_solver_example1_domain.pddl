@@ -9,11 +9,13 @@
              (departed ?train - arrivaltrain)
              (connected ?from_ - trackpart ?to - trackpart)
              (departure_exit ?trackpart - trackpart)
+             (track_is_parked_at ?trackpart - trackpart)
  )
  (:functions 
              (arrival ?train - arrivaltrain)
              (entry_distance ?trackpart - trackpart)
              (departure_rank ?train - arrivaltrain)
+             (num_of_departed_trains)
              (track_capacity ?trackpart - trackpart)
              (train_length ?train - arrivaltrain)
              (occupied_length ?trackpart - trackpart)
@@ -21,13 +23,13 @@
  (:action move
   :parameters ( ?t - arrivaltrain ?l_from - trackpart ?l_to - trackpart)
   :precondition (and (at ?t ?l_from) (connected ?l_from ?l_to) (free ?l_to))
-  :effect (and (at ?t ?l_to) (not (at ?t ?l_from)) (not (free ?l_to)) (free ?l_from)))
+  :effect (and (at ?t ?l_to) (not (at ?t ?l_from)) (not (free ?l_to)) (free ?l_from) (not (parked ?t)) (not (track_is_parked_at ?l_from))))
  (:action depart
   :parameters ( ?t - arrivaltrain ?l - trackpart)
   :precondition (and (at ?t ?l) (parked ?t) (departure_exit ?l))
-  :effect (and (not (at ?t ?l)) (free ?l) (assign (occupied_length ?l) (- (occupied_length ?l) (train_length ?t))) (not (parked ?t)) (departed ?t)))
+  :effect (and (not (at ?t ?l)) (free ?l) (assign (occupied_length ?l) (- (occupied_length ?l) (train_length ?t))) (not (parked ?t)) (departed ?t) (assign (num_of_departed_trains) (+ 1 (num_of_departed_trains)))))
  (:action park
   :parameters ( ?t - arrivaltrain ?l - trackpart)
-  :precondition (and (at ?t ?l) (parking_allowed ?l) (= (departure_rank ?t) (entry_distance ?l)) (<= (+ (train_length ?t) (occupied_length ?l)) (track_capacity ?l)))
-  :effect (and (parked ?t) (assign (occupied_length ?l) (+ (train_length ?t) (occupied_length ?l)))))
+  :precondition (and (at ?t ?l) (parking_allowed ?l) (<= (+ (train_length ?t) (occupied_length ?l)) (track_capacity ?l)))
+  :effect (and (parked ?t) (track_is_parked_at ?l) (assign (occupied_length ?l) (+ (train_length ?t) (occupied_length ?l)))))
 )
