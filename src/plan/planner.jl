@@ -1,12 +1,35 @@
 using PDDL, SymbolicPlanners
 
-function run_planner()
-    data_dir = joinpath(dirname(dirname(dirname(@__FILE__))), "data")
+function workspace_root()
+    return dirname(dirname(dirname(dirname(dirname(@__FILE__)))))
+end
 
-    # Allow passing domain and problem files as command line arguments, fallback to defaults
+function default_enhsp_jar()
+    return joinpath(
+        workspace_root(),
+        "public",
+        "tusp-pddl-experiments-setups",
+        "ENHSP-Public",
+        "enhsp-dist",
+        "enhsp.jar",
+    )
+end
+
+function default_java()
+    microsoft_java = raw"C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot\bin\java.exe"
+    return isfile(microsoft_java) ? microsoft_java : "java"
+end
+
+function parse_args()
+    data_dir = joinpath(dirname(dirname(dirname(@__FILE__))), "data")
     domain_file = length(ARGS) > 0 ? ARGS[1] : joinpath(data_dir, "domain.pddl")
     problem_file = length(ARGS) > 1 ? ARGS[2] : joinpath(data_dir, "scenario_solver_example1.pddl")
+    backend = length(ARGS) > 2 ? lowercase(ARGS[3]) : "symbolic"
+    return domain_file, problem_file, backend
+end
 
+function run_symbolic_planner(domain_file, problem_file)
+    println("Planner backend: SymbolicPlanners.jl AStarPlanner(HAdd())")
     println("Loading domain from: ", domain_file)
     domain = load_domain(domain_file)
 
@@ -24,9 +47,50 @@ function run_planner()
             write(file, join(sol.plan, '\n'))
         end
         println("Plan written to: ", out_file)
+        return true
     else
         println("Failed to find a solution.")
+        return false
     end
+end
+
+function run_enhsp_planner(domain_file, problem_file)
+    println("Planner backend: ENHSP via Julia subprocess")
+    plan_file = replace(problem_file, ".pddl" => ".plan")
+    java = get(ENV, "JAVA_EXE", default_java())
+    enhsp_jar = get(ENV, "ENHSP_JAR", default_enhsp_jar())
+
+    if !isfile(enhsp_jar)
+        error("ENHSP jar not found: $(enhsp_jar)")
+    end
+
+    command = `$(java) -jar $(enhsp_jar) -sp $(plan_file) -h hmax -s wa_star_4 -o $(domain_file) -f $(problem_file)`
+    println("Running: ", command)
+    run(command)
+
+    if isfile(plan_file)
+        steps = filter(line -> !isempty(strip(line)), readlines(plan_file))
+        println("Plan written to: ", plan_file)
+        println("Plan length: ", length(steps), " steps")
+        return true
+    else
+        println("ENHSP finished without writing a plan file.")
+        return false
+    end
+end
+
+function run_planner()
+    domain_file, problem_file, backend = parse_args()
+
+    if backend == "symbolic"
+        ok = run_symbolic_planner(domain_file, problem_file)
+    elseif backend == "enhsp"
+        ok = run_enhsp_planner(domain_file, problem_file)
+    else
+        error("Unknown planner backend '$(backend)'. Use 'symbolic' or 'enhsp'.")
+    end
+
+    ok || exit(1)
 end
 
 run_planner()
