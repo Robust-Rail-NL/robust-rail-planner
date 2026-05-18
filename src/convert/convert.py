@@ -172,6 +172,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     location_object = json.load(open(location_file))
     scenario_object = json.load(open(scenario_file))
 
+    # --------------------------- start model construction --------------------------
+
     # In unified planning the domain information is included in the problem class
     problem = up.Problem(scenario_name)
     track_part_type = up.UserType("trackpart")
@@ -364,6 +366,9 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         track_obj = id_to_track_part[track_id]
         problem.set_initial_value(free(track_obj), False)
         problem.set_initial_value(occupied_length(track_obj), up.Real(occupied_length_value))
+
+
+    # -------------------------- end model construction, start writing to file --------------------------
 
     ### Write to files
     if output_file is None:
