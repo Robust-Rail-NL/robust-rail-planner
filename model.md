@@ -18,12 +18,24 @@
 
 ---
 
+## Branch Additions
+- `convert.py` can emit `parking`, `matching`, or `combined` variants with `--subproblem`.
+- Matching adds request slots and the `match` action; compatibility uses unit type, carriage count, and length.
+- `--coupling-mode` can switch between free uncoupling, explicit uncoupling, and explicit coupling.
+- Explicit uncoupling adds `uncouple`; explicit coupling adds `couple_to_request`.
+- `run.py` exposes subproblem, coupling-mode, and planner-backend choices.
+
+---
+
 ## Types
 | Type | Description | Introduced |
 |------|-------------|------------|
 | `trackpart` | A piece of track on the shunting yard | v0.1 |
 | `trainunit` | An individual train unit (atomic) | v0.1 |
 | `arrivaltrain` | An arriving train | v0.1 |
+| `departurerequest` | An outgoing train request used by matching | coupling/parking branch |
+| `requestslot` | One required unit position inside an outgoing request | coupling/parking branch |
+| `arrivalcomposition` | A multi-unit incoming composition that may need uncoupling | coupling/parking branch |
 
 ---
 
@@ -93,6 +105,8 @@
 ---
 
 ### Gap 5 — No matching subproblem (Subproblem 4)
+**Branch note:** Partially addressed in the coupling/parking branch. Matching now creates request-slot objects and uses `compatible(unit, slot)`, `matched(unit, slot)`, and `match(unit, slot)`.
+
 **What's missing:** No train-type predicates (`train_type_SLT`, `train_type_VIRM`, etc.) and no outbound train-request objects. There is no mechanism to ensure that a parked `arrivaltrain` is of the correct type to satisfy an outbound departure request.
 **Impact:** The planner can assign any train to any parking slot regardless of type. In a real scenario, an SLT unit cannot substitute for a VIRM unit on a scheduled service.
 **Fix:** Add one boolean fluent per train type (e.g. `is_type_SLT(arrivaltrain)`). Introduce outbound request objects with a required type, and link them to parked trains via a `matched` fluent and a `match` action (or type precondition in `park`).
@@ -107,6 +121,8 @@
 ---
 
 ### Gap 7 — Multi-unit train composition not modelled (Subproblem 5)
+**Branch note:** Partially addressed in the coupling/parking branch. The model can require explicit `uncouple` actions for multi-unit incoming compositions and optional `couple_to_request` actions for outgoing request slots. It still does not validate physical location or ordering during coupling.
+
 **What's missing:** `trainunit` objects are created in the problem file but have no fluents, no `at` or `free` facts, and no actions. Train coupling (combining two units into one consist) and splitting are absent.
 **Impact:** Trains are treated as indivisible atoms. The planner cannot reason about coupling two SLT units into a longer consist, which is required for many NS departure schedules.
 **Fix:** Add `unit_in_train(trainunit, arrivaltrain)` and `unit_at(trainunit, trackpart)` fluents. Add `couple` and `decouple` actions. This is a significant extension; treat as a separate domain variant.
