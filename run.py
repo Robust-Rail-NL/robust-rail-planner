@@ -11,11 +11,25 @@ from questionary import Style
 
 REPO_ROOT       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCENARIO_INPUTS = os.path.join(REPO_ROOT, "scenario-planning-inputs")
+if not os.path.isdir(SCENARIO_INPUTS):
+    SCENARIO_INPUTS = os.path.join(os.path.dirname(REPO_ROOT), "Robust-Rail-NL", "scenario-planning-inputs")
 DATA_DIR        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 CONVERT_SCRIPT  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "convert", "convert.py")
 PLANNER_SCRIPT  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "plan", "planner.jl")
 PYTHON          = sys.executable
 JULIA           = "julia"
+
+SUBPROBLEM_CHOICES = {
+    "Parking only": "parking",
+    "Coupling / matching only": "matching",
+    "Parking + coupling / matching": "combined",
+}
+
+COUPLING_MODE_CHOICES = {
+    "Implicit coupling, free uncoupling": "implicit_free_uncoupling",
+    "Implicit coupling, explicit uncoupling": "implicit_explicit_uncoupling",
+    "Explicit coupling and explicit uncoupling": "explicit_coupling",
+}
 
 STYLE = Style([
     ("qmark",     "fg:#00aabb bold"),
@@ -91,7 +105,7 @@ def run_paths(location, scenario_name, run_num):
 # Pipeline steps
 # ---------------------------------------------------------------------------
 
-def run_convert(location, scenario_file, run_num):
+def run_convert(location, scenario_file, run_num, subproblem="parking", coupling_mode="implicit_free_uncoupling"):
     location_dir  = os.path.join(SCENARIO_INPUTS, location)
     scenario_name = scenario_file.replace(".json", "")
     problem_file, domain_file, _ = run_paths(location, scenario_name, run_num)
@@ -99,15 +113,20 @@ def run_convert(location, scenario_file, run_num):
     os.makedirs(os.path.dirname(problem_file), exist_ok=True)
 
     print(f"\n  Converting  {scenario_file}")
-    print(f"  Problem  →  {os.path.relpath(problem_file, REPO_ROOT)}")
-    print(f"  Domain   →  {os.path.relpath(domain_file,  REPO_ROOT)}")
+    print(f"  Subproblem ->  {subproblem}")
+    if subproblem in ("matching", "combined"):
+        print(f"  Coupling   ->  {coupling_mode}")
+    print(f"  Problem    ->  {os.path.relpath(problem_file, REPO_ROOT)}")
+    print(f"  Domain     ->  {os.path.relpath(domain_file,  REPO_ROOT)}")
 
     result = subprocess.run(
         [PYTHON, CONVERT_SCRIPT,
          "-p", location_dir,
          "-s", scenario_file,
          "-o", problem_file,
-         "-d", domain_file],
+         "-d", domain_file,
+         "--subproblem", subproblem,
+         "--coupling-mode", coupling_mode],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
@@ -196,8 +215,28 @@ def main():
     print()
 
     if action in ("Convert to PDDL", "Convert then plan"):
+        selected_subproblem = questionary.select(
+            "Subproblem model:",
+            choices=list(SUBPROBLEM_CHOICES.keys()),
+            style=STYLE,
+        ).ask()
+        if selected_subproblem is None:
+            return
+        subproblem = SUBPROBLEM_CHOICES[selected_subproblem]
+
+        coupling_mode = "implicit_free_uncoupling"
+        if subproblem in ("matching", "combined"):
+            selected_coupling_mode = questionary.select(
+                "Coupling mode:",
+                choices=list(COUPLING_MODE_CHOICES.keys()),
+                style=STYLE,
+            ).ask()
+            if selected_coupling_mode is None:
+                return
+            coupling_mode = COUPLING_MODE_CHOICES[selected_coupling_mode]
+
         run_num = next_run_number(location, scenario_name)
-        ok = run_convert(location, scenario, run_num)
+        ok = run_convert(location, scenario, run_num, subproblem=subproblem, coupling_mode=coupling_mode)
         if not ok and action == "Convert then plan":
             print()
             return
