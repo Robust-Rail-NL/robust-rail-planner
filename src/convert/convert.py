@@ -259,13 +259,13 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     id_to_unit = {}
     unit_type_by_id = {}
 
-    # Add inbound trains
-    for train in inbound_trains:
-        arrival_train = problem.add_object("train" + train["id"], arrival_train_type)
-        problem.set_initial_value(arrival(arrival_train), up.Int(int(train["arrival"])))
-        problem.set_initial_value(at(arrival_train, id_to_track_part[train["firstParkingTrackPart"]]), True)
-        problem.set_initial_value(departure_rank(arrival_train), up.Int(train_to_rank[train["id"]]))
-        if include_parking:
+    if include_parking:
+        # Add inbound trains
+        for train in inbound_trains:
+            arrival_train = problem.add_object("train" + train["id"], arrival_train_type)
+            problem.set_initial_value(arrival(arrival_train), up.Int(int(train["arrival"])))
+            problem.set_initial_value(at(arrival_train, id_to_track_part[train["firstParkingTrackPart"]]), True)
+            problem.set_initial_value(departure_rank(arrival_train), up.Int(train_to_rank[train["id"]]))
             problem.add_goal(parked(arrival_train))
 
     for train in all_trains(scenario_object):
