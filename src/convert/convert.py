@@ -14,6 +14,7 @@ parser.add_argument("-l", "--location-file", help="Specifies the name of the loc
 parser.add_argument("-o", "--output-file", help="Specifies the name of the output pddl instance file. Defaults to {scenario_file}.pddl. Will be stored in /data/", required=False, default=None)
 parser.add_argument("-d", "--domain-file", help="Specifies the name of the output pddl domain file. If none, the domain is not written. Will be stored in /data/", required=False, default=None)
 parser.add_argument("--coupling-mode", choices=["implicit_free_uncoupling", "implicit_explicit_uncoupling", "explicit_coupling"], default="implicit_free_uncoupling", required=False, help="Controls the matching/coupling modelling ladder.")
+parser.add_argument("--subproblem", choices=["matching", "parking", "combined"], default="combined", required=False, help="Selects which subproblem goals to emit.")
 
 
 ### Add logging to the arguments
@@ -116,7 +117,7 @@ def all_train_requests(scenario_object):
     return requests
 
 
-def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None, coupling_mode="implicit_free_uncoupling"):
+def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None, coupling_mode="implicit_free_uncoupling", subproblem="combined"):
     # Path defaults to ../../scenario-planning-inputs/Location_KleineBinckhorst/
     if path_to_folder is None:
         path_to_folder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "scenario-planning-inputs", "Location_KleineBinckhorst")
@@ -137,6 +138,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     location_object = json.load(open(location_file))
     scenario_object = json.load(open(scenario_file))
+    include_parking = subproblem in ["parking", "combined"]
+    include_matching = subproblem in ["matching", "combined"]
 
     # In unified planning the domain information is included in the problem class
     problem = up.Problem(scenario_name)
@@ -262,7 +265,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         problem.set_initial_value(arrival(arrival_train), up.Int(int(train["arrival"])))
         problem.set_initial_value(at(arrival_train, id_to_track_part[train["firstParkingTrackPart"]]), True)
         problem.set_initial_value(departure_rank(arrival_train), up.Int(train_to_rank[train["id"]]))
-        problem.add_goal(parked(arrival_train))
+        if include_parking:
+            problem.add_goal(parked(arrival_train))
 
     for train in all_trains(scenario_object):
         train_members = train["members"]
@@ -281,25 +285,26 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             else:
                 problem.set_initial_value(part_of_composition(unit_obj, composition_obj), True)
 
-    for request in all_train_requests(scenario_object):
-        request_name = "request" + request["displayName"]
-        request_obj = problem.add_object(request_name, departure_request_type)
-        problem.set_initial_value(request_open(request_obj), True)
+    if include_matching:
+        for request in all_train_requests(scenario_object):
+            request_name = "request" + request["displayName"]
+            request_obj = problem.add_object(request_name, departure_request_type)
+            problem.set_initial_value(request_open(request_obj), True)
 
-        for index, requested_unit in enumerate(request["trainUnits"]):
-            slot_obj = problem.add_object(f"{request_name}_slot{index}", request_slot_type)
-            requested_key = train_unit_type_key(requested_unit)
+            for index, requested_unit in enumerate(request["trainUnits"]):
+                slot_obj = problem.add_object(f"{request_name}_slot{index}", request_slot_type)
+                requested_key = train_unit_type_key(requested_unit)
 
-            problem.set_initial_value(slot_open(slot_obj), True)
-            problem.set_initial_value(slot_for_request(slot_obj, request_obj), True)
-            if explicit_coupling:
-                problem.add_goal(slot_coupled(slot_obj))
-            else:
-                problem.add_goal(slot_filled(slot_obj))
+                problem.set_initial_value(slot_open(slot_obj), True)
+                problem.set_initial_value(slot_for_request(slot_obj, request_obj), True)
+                if explicit_coupling:
+                    problem.add_goal(slot_coupled(slot_obj))
+                else:
+                    problem.add_goal(slot_filled(slot_obj))
 
-            for unit_id, unit_obj in id_to_unit.items():
-                if unit_type_by_id[unit_id] == requested_key:
-                    problem.set_initial_value(compatible(unit_obj, slot_obj), True)
+                for unit_id, unit_obj in id_to_unit.items():
+                    if unit_type_by_id[unit_id] == requested_key:
+                        problem.set_initial_value(compatible(unit_obj, slot_obj), True)
 
     ### Write to files
     if output_file is None:
@@ -317,4 +322,4 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 if __name__ == "__main__":
     args = parser.parse_args()
     logging.basicConfig(level=args.log_level.upper())
-    create_instance_from_scenario(domain_file=args.domain_file, path_to_folder=args.path_to_folder, scenario_file=args.scenario_file, location_file=args.location_file, output_file=args.output_file, coupling_mode=args.coupling_mode)
+    create_instance_from_scenario(domain_file=args.domain_file, path_to_folder=args.path_to_folder, scenario_file=args.scenario_file, location_file=args.location_file, output_file=args.output_file, coupling_mode=args.coupling_mode, subproblem=args.subproblem)
