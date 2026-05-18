@@ -9,15 +9,15 @@ import time
 import questionary
 from questionary import Style
 
-REPO_ROOT       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCENARIO_INPUTS = os.path.join(REPO_ROOT, "scenario-planning-inputs")
 if not os.path.isdir(SCENARIO_INPUTS):
     SCENARIO_INPUTS = os.path.join(os.path.dirname(REPO_ROOT), "Robust-Rail-NL", "scenario-planning-inputs")
-DATA_DIR        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-CONVERT_SCRIPT  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "convert", "convert.py")
-PLANNER_SCRIPT  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "plan", "planner.jl")
-PYTHON          = sys.executable
-JULIA           = "julia"
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+CONVERT_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "convert", "convert.py")
+PLANNER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "plan", "planner.jl")
+PYTHON = sys.executable
+JULIA = "julia"
 
 SUBPROBLEM_CHOICES = {
     "Parking only": "parking",
@@ -31,12 +31,17 @@ COUPLING_MODE_CHOICES = {
     "Explicit coupling and explicit uncoupling": "explicit_coupling",
 }
 
+PLANNER_BACKEND_CHOICES = {
+    "ENHSP via Julia": "enhsp",
+    "SymbolicPlanners.jl A* HAdd": "symbolic",
+}
+
 STYLE = Style([
-    ("qmark",     "fg:#00aabb bold"),
-    ("question",  "bold"),
-    ("answer",    "fg:#00aabb bold"),
-    ("pointer",   "fg:#00aabb bold"),
-    ("selected",  "fg:#00aabb"),
+    ("qmark", "fg:#00aabb bold"),
+    ("question", "bold"),
+    ("answer", "fg:#00aabb bold"),
+    ("pointer", "fg:#00aabb bold"),
+    ("selected", "fg:#00aabb"),
     ("separator", "fg:#555555"),
 ])
 
@@ -106,7 +111,7 @@ def run_paths(location, scenario_name, run_num):
 # ---------------------------------------------------------------------------
 
 def run_convert(location, scenario_file, run_num, subproblem="parking", coupling_mode="implicit_free_uncoupling"):
-    location_dir  = os.path.join(SCENARIO_INPUTS, location)
+    location_dir = os.path.join(SCENARIO_INPUTS, location)
     scenario_name = scenario_file.replace(".json", "")
     problem_file, domain_file, _ = run_paths(location, scenario_name, run_num)
 
@@ -117,7 +122,7 @@ def run_convert(location, scenario_file, run_num, subproblem="parking", coupling
     if subproblem in ("matching", "combined"):
         print(f"  Coupling   ->  {coupling_mode}")
     print(f"  Problem    ->  {os.path.relpath(problem_file, REPO_ROOT)}")
-    print(f"  Domain     ->  {os.path.relpath(domain_file,  REPO_ROOT)}")
+    print(f"  Domain     ->  {os.path.relpath(domain_file, REPO_ROOT)}")
 
     result = subprocess.run(
         [PYTHON, CONVERT_SCRIPT,
@@ -136,7 +141,7 @@ def run_convert(location, scenario_file, run_num, subproblem="parking", coupling
     return True
 
 
-def run_planner(location, scenario_name, run_num):
+def run_planner(location, scenario_name, run_num, planner_backend="enhsp"):
     problem_file, domain_file, plan_file = run_paths(location, scenario_name, run_num)
 
     if not os.path.exists(problem_file):
@@ -149,12 +154,13 @@ def run_planner(location, scenario_name, run_num):
         return False
 
     print(f"\n  Planning  {os.path.relpath(problem_file, REPO_ROOT)}")
-    print(f"  Domain    {os.path.relpath(domain_file,   REPO_ROOT)}\n")
+    print(f"  Domain    {os.path.relpath(domain_file, REPO_ROOT)}\n")
+    print(f"  Planner   {planner_backend}\n")
 
     # Stream Julia output line-by-line with elapsed timestamps so slow searches are visible.
     start = time.monotonic()
     process = subprocess.Popen(
-        [JULIA, PLANNER_SCRIPT, domain_file, problem_file],
+        [JULIA, "--project=" + os.path.dirname(os.path.abspath(__file__)), PLANNER_SCRIPT, domain_file, problem_file, planner_backend],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
     for line in process.stdout:
@@ -167,7 +173,7 @@ def run_planner(location, scenario_name, run_num):
         print("  [planner ERROR]")
         return False
 
-    # planner.jl writes to problem_file.replace(".pddl", ".plan") — that is already plan_file
+    # planner.jl writes to problem_file.replace(".pddl", ".plan"); that is already plan_file.
     if os.path.exists(plan_file):
         print(f"\n  Plan written to {os.path.relpath(plan_file, REPO_ROOT)}")
         with open(plan_file) as f:
@@ -214,6 +220,17 @@ def main():
     scenario_name = scenario.replace(".json", "")
     print()
 
+    planner_backend = "enhsp"
+    if action in ("Run planner", "Convert then plan"):
+        selected_planner_backend = questionary.select(
+            "Planner backend:",
+            choices=list(PLANNER_BACKEND_CHOICES.keys()),
+            style=STYLE,
+        ).ask()
+        if selected_planner_backend is None:
+            return
+        planner_backend = PLANNER_BACKEND_CHOICES[selected_planner_backend]
+
     if action in ("Convert to PDDL", "Convert then plan"):
         selected_subproblem = questionary.select(
             "Subproblem model:",
@@ -241,7 +258,7 @@ def main():
             print()
             return
         if action == "Convert then plan":
-            run_planner(location, scenario_name, run_num)
+            run_planner(location, scenario_name, run_num, planner_backend=planner_backend)
 
     elif action == "Run planner":
         existing = discover_runs(location, scenario_name)
@@ -255,7 +272,7 @@ def main():
         if chosen is None:
             return
         run_num = int(chosen[3:])
-        run_planner(location, scenario_name, run_num)
+        run_planner(location, scenario_name, run_num, planner_backend=planner_backend)
 
     print()
 
