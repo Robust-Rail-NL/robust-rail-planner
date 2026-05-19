@@ -3,6 +3,7 @@ import sys
 import json
 import logging
 import argparse
+from collections import deque
 import unified_planning.shortcuts as up
 from unified_planning.io import PDDLReader, PDDLWriter
 
@@ -16,6 +17,80 @@ parser.add_argument("-d", "--domain-file", help="Specifies the name of the outpu
 
 ### Add logging to the arguments
 parser.add_argument("--log-level", default="ERROR", required=False, help="Configure the logging level (e.g., INFO, WARNING, ERROR) default=ERROR.")
+
+
+def _build_adjacency(location_object):
+    # Undirected graph: each trackpart id maps to the set of ids it shares an aSide/bSide connection with.
+    # Both directions are added so BFS and connectivity checks work without caring about direction.
+    # In: location object, contains "trackParts" section which has for every object:
+    # - key "aSide" and "bSide" which contains ID's of neighboring track parts
+    # - key "id" containing the ID of this track part
+    # Out: dictionary mapping track part ID -> two neighboring track part ID's
+
+    adjacency = {tp["id"]: set() for tp in location_object["trackParts"]}
+    for tp in location_object["trackParts"]:
+        for nb_id in tp.get("aSide", []) + tp.get("bSide", []):
+            if nb_id in adjacency:
+                adjacency[tp["id"]].add(nb_id)
+                adjacency[nb_id].add(tp["id"])
+    return adjacency
+
+
+def _bfs_from(adjacency, start_ids):
+    # Returns hop-distance from any of the start nodes to every reachable node.
+    # Used to measure how far each track part is from the yard's departure point(s).
+    # In: adjacency (see _build_adjacency), start_ids (list of ID's of all track parts that are marked as entry tracks)
+    # Out: a dictionary mapping ID -> shortest hop distance from any of the start_ids tracks
+    dist = {}
+    queue = deque()
+    for t_id in start_ids:
+        if t_id in adjacency and t_id not in dist:
+            dist[t_id] = 0
+            queue.append(t_id)
+    while queue:
+        current = queue.popleft()
+        for nb in adjacency[current]:
+            if nb not in dist:
+                dist[nb] = dist[current] + 1
+                queue.append(nb)
+    return dist
+
+
+def _departure_exit_ids(scenario_object):
+    # The departure track is where outbound trains leave the yard — the BFS root for entry_distance.
+    # Falls back to inbound entry tracks if no outbound requests are present in the scenario.
+    # In: a scenario object containing:
+    # - a section "out", containing the list "trainRequests" where each element has:
+    #   - "leaveTrackPart", containing a specification of from which track part a train should leave
+    # - a section "in", containing the list "trains" where each element has:
+    #   - "entryTrackPart", containing a specification of at which track a train will enter the yard
+    # Out: a list of all trackparts that are mentioned as "leaveTrackPart" in any "out" train Request if present.
+    # If there are no leaveTrackParts, it returns a list of all trackparts that are mentioned as "entryTrackPart" for any "in" train
+    ids = [req["leaveTrackPart"] for req in scenario_object.get("out", {}).get("trainRequests", []) if "leaveTrackPart" in req]
+    if not ids:
+        ids = [t["entryTrackPart"] for t in scenario_object.get("in", {}).get("trains", []) if "entryTrackPart" in t]
+    return ids
+
+
+def _compute_departure_ranks(inbound_trains):
+    # Assigns rank 1 to the earliest-departing train, 2 to the next, etc.
+    # Trains with equal departure times share a rank (lenient parking: either can use the same entry_distance level).
+    # In: inbound_trains, a list of elements each containing:
+    # - "arrival", the arrival time of the train
+    # - "departure", the departure time of the train
+    # Out: ranks, a dictionary mapping train ID -> rank (int), where rank indicates as the rank of when the train must leave the yard compared to other trains
+    sorted_trains = sorted(inbound_trains, key=lambda t: int(t.get("departure", t["arrival"])))
+    ranks = {}
+    rank = 1
+    prev_dep = None
+    for train in sorted_trains:
+        dep = int(train.get("departure", train["arrival"]))
+        if dep != prev_dep and prev_dep is not None:
+            rank += 1
+        prev_dep = dep
+        ranks[train["id"]] = rank
+    return ranks
+
 
 def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None):
     # Path defaults to ../../scenario-planning-inputs/Location_KleineBinckhorst/
@@ -45,31 +120,79 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     train_unit_type = up.UserType("trainunit")
     arrival_train_type = up.UserType("arrivaltrain")
 
-    free = problem.add_fluent(up.Fluent("free", up.BoolType(), trackpart=track_part_type), default_initial_value=True)
-    arrival = problem.add_fluent(up.Fluent("arrival", up.IntType(), train=arrival_train_type))
-    at = problem.add_fluent(up.Fluent("at", up.BoolType(), unit=arrival_train_type, trackpart=track_part_type), default_initial_value=False)
+    free           = problem.add_fluent(up.Fluent("free",           up.BoolType(), trackpart=track_part_type),                          default_initial_value=True)
+    arrival        = problem.add_fluent(up.Fluent("arrival",        up.IntType(),  train=arrival_train_type))
+    at             = problem.add_fluent(up.Fluent("at",             up.BoolType(), unit=arrival_train_type, trackpart=track_part_type),  default_initial_value=False)
+    parking_allowed = problem.add_fluent(up.Fluent("parking_allowed", up.BoolType(), trackpart=track_part_type),                         default_initial_value=False)
+    parked         = problem.add_fluent(up.Fluent("parked",         up.BoolType(), train=arrival_train_type),                           default_initial_value=False)
+    connected      = problem.add_fluent(up.Fluent("connected",      up.BoolType(), from_=track_part_type, to=track_part_type),           default_initial_value=False)
+    entry_distance = problem.add_fluent(up.Fluent("entry_distance", up.IntType(),  trackpart=track_part_type),                          default_initial_value=up.Int(0))
+    departure_rank = problem.add_fluent(up.Fluent("departure_rank", up.IntType(),  train=arrival_train_type),                           default_initial_value=up.Int(0))
 
     move = up.InstantaneousAction('move', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
     move.add_precondition(at(move.t, move.l_from))
+    # Ensure that the train will only move to a connected track
+    move.add_precondition(connected(move.l_from, move.l_to))
     move.add_effect(at(move.t, move.l_to), True)
     move.add_effect(at(move.t, move.l_from), False)
     problem.add_action(move)
 
-    # Example add objects for track parts
+    park = up.InstantaneousAction('park', t=arrival_train_type, l=track_part_type)
+    park.add_precondition(at(park.t, park.l))
+    park.add_precondition(parking_allowed(park.l))
+    # Add that a train must be parked at a track corresponding to its departure rank. This enforces that trains will always be parked at a closer distance to the exist than trains that leave later.
+    # Note: this means that all trains with the same departure time will be parked on tracks with that same entry distance. This can be impossible due to the track not being long enough; this is not being checked.
+    park.add_precondition(up.Equals(departure_rank(park.t), entry_distance(park.l)))
+    park.add_effect(parked(park.t), True)
+    problem.add_action(park)
+
+    # Pre-compute connectivity and entry distances from JSON (no UP objects yet)
+    adjacency = _build_adjacency(location_object)
+    exit_ids = _departure_exit_ids(scenario_object)
+    bfs_dist = _bfs_from(adjacency, exit_ids)
+
+    # Find ids of all tracks where parking is allowed
+    parking_ids = {tp["id"] for tp in location_object["trackParts"] if tp.get("parkingAllowed")}
+    # Create sorted dictionary from all different bfs distances to the id's of parking tracks with those distances
+    parking_bfs_values = sorted({bfs_dist[pid] for pid in parking_ids if pid in bfs_dist})
+    # Normalize the distances; all closest parking tracks get 1, those after get 2 etc.
+    bfs_to_entry_dist = {d: i + 1 for i, d in enumerate(parking_bfs_values)}
+
+    inbound_trains = scenario_object.get("in", {}).get("trains", [])
+    train_to_rank = _compute_departure_ranks(inbound_trains)
+
+    # Add track part objects
     id_to_track_part = {}
     for track_part in location_object["trackParts"]:
         obj = problem.add_object(track_part["name"], track_part_type)
         id_to_track_part[track_part["id"]] = obj
+        if track_part.get("parkingAllowed", False):
+            problem.set_initial_value(parking_allowed(obj), True)
+            tp_id = track_part["id"]
+            if tp_id in bfs_dist and bfs_dist[tp_id] in bfs_to_entry_dist:
+                problem.set_initial_value(entry_distance(obj), up.Int(bfs_to_entry_dist[bfs_dist[tp_id]]))
 
-    # Example set initial value for numeric fluents
-    for train in scenario_object["in"]["trains"]:
+    # Set connectivity (each undirected edge -> two directed facts)
+    connected_pairs = set()
+    for track_part in location_object["trackParts"]:
+        src_id = track_part["id"]
+        for nb_id in track_part.get("aSide", []) + track_part.get("bSide", []):
+            if nb_id in id_to_track_part:
+                pair = tuple(sorted([src_id, nb_id]))
+                if pair not in connected_pairs:
+                    connected_pairs.add(pair)
+                    problem.set_initial_value(connected(id_to_track_part[src_id], id_to_track_part[nb_id]), True)
+                    problem.set_initial_value(connected(id_to_track_part[nb_id], id_to_track_part[src_id]), True)
+
+    # Add inbound trains
+    for train in inbound_trains:
         arrival_train = problem.add_object("train" + train["id"], arrival_train_type)
         problem.set_initial_value(arrival(arrival_train), up.Int(int(train["arrival"])))
         problem.set_initial_value(at(arrival_train, id_to_track_part[train["firstParkingTrackPart"]]), True)
+        problem.set_initial_value(departure_rank(arrival_train), up.Int(train_to_rank[train["id"]]))
+        problem.add_goal(parked(arrival_train))
         for trainunit in train["members"]:
             problem.add_object("unit" + trainunit["trainUnit"]["id"], train_unit_type)
-
-
 
     ### Write to files
     if output_file is None:
