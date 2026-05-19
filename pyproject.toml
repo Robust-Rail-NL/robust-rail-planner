@@ -1,0 +1,9 @@
+[project]
+name = "robust-rail-planning"
+version = "0.1.0"
+description = "Robust Rail NL PDDL Planning"
+requires-python = ">=3.9"
+dependencies = [
+    "protobuf<4.0",
+    "unified-planning",
+]
