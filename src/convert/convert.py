@@ -95,6 +95,7 @@ def _compute_departure_ranks(inbound_trains):
 
 
 def train_unit_type_key(train_unit):
+    # Normalized train-unit identity used to match available units to request slots.
     unit_type = train_unit["type"]
     return (
         unit_type.get("displayName"),
@@ -104,6 +105,7 @@ def train_unit_type_key(train_unit):
 
 
 def all_trains(scenario_object):
+    # Matching can use newly arriving trains and trains already standing in the yard.
     trains = []
     trains.extend(scenario_object.get("in", {}).get("trains", []))
     trains.extend(scenario_object.get("inStanding", {}).get("trains", []))
@@ -111,6 +113,7 @@ def all_trains(scenario_object):
 
 
 def all_train_requests(scenario_object):
+    # Outgoing demand comes from both regular departures and outstanding requests.
     requests = []
     requests.extend(scenario_object.get("out", {}).get("trainRequests", []))
     requests.extend(scenario_object.get("outStanding", {}).get("trainRequests", []))
@@ -188,31 +191,40 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     explicit_coupling = coupling_mode == "explicit_coupling"
 
     if explicit_uncoupling:
+        # Units in a multi-unit arrival must first be released from their composition.
         part_of_composition = problem.add_fluent(up.Fluent("part_of_composition", up.BoolType(), unit=train_unit_type, composition=arrival_composition_type), default_initial_value=False)
         composition_needs_uncoupling = problem.add_fluent(up.Fluent("composition_needs_uncoupling", up.BoolType(), composition=arrival_composition_type), default_initial_value=False)
 
         uncouple = up.InstantaneousAction("uncouple", unit=train_unit_type, composition=arrival_composition_type)
+        # Preconditions: the unit belongs to a composition that still needs splitting.
         uncouple.add_precondition(part_of_composition(uncouple.unit, uncouple.composition))
         uncouple.add_precondition(composition_needs_uncoupling(uncouple.composition))
+        # Effects: the unit becomes independently matchable and is removed from that composition.
         uncouple.add_effect(available(uncouple.unit), True)
         uncouple.add_effect(part_of_composition(uncouple.unit, uncouple.composition), False)
         problem.add_action(uncouple)
 
     if explicit_coupling:
+        # Explicit coupling turns a completed match into a coupled departure slot.
         slot_coupled = problem.add_fluent(up.Fluent("slot_coupled", up.BoolType(), slot=request_slot_type), default_initial_value=False)
         coupled_to_request = problem.add_fluent(up.Fluent("coupled_to_request", up.BoolType(), unit=train_unit_type, request=departure_request_type), default_initial_value=False)
 
         couple_to_request = up.InstantaneousAction("couple_to_request", unit=train_unit_type, slot=request_slot_type, request=departure_request_type)
+        # Preconditions: the unit is already matched to a slot that belongs to this request.
         couple_to_request.add_precondition(matched(couple_to_request.unit, couple_to_request.slot))
         couple_to_request.add_precondition(slot_for_request(couple_to_request.slot, couple_to_request.request))
+        # Effects: the slot is explicitly marked as coupled into the departure request.
         couple_to_request.add_effect(slot_coupled(couple_to_request.slot), True)
         couple_to_request.add_effect(coupled_to_request(couple_to_request.unit, couple_to_request.request), True)
         problem.add_action(couple_to_request)
 
+    # Matching assigns exactly one compatible available unit to an open request slot.
     match = up.InstantaneousAction("match", unit=train_unit_type, slot=request_slot_type)
+    # Preconditions: the unit is unused, the slot is empty, and the unit type fits the slot.
     match.add_precondition(available(match.unit))
     match.add_precondition(slot_open(match.slot))
     match.add_precondition(compatible(match.unit, match.slot))
+    # Effects: record the assignment, close the slot, and prevent reusing the unit.
     match.add_effect(matched(match.unit, match.slot), True)
     match.add_effect(slot_filled(match.slot), True)
     match.add_effect(available(match.unit), False)
