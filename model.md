@@ -4,6 +4,8 @@
 | Version | Date  | Summary of Changes |
 |---------|------|---------------|--------------------|
 | v0.1 | 2026-04-28 | Summary of changes |
+| v0.2 | 2026-05-12 | Added `park` action, `parking_allowed` and `parked` fluents |
+| v0.3 | 2026-05-12 | Parking subproblem: `connected` on `move`; `entry_distance` + `departure_rank` on `park` |
 
 ---
 
