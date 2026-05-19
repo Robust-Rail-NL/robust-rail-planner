@@ -1,4 +1,4 @@
-(define (domain scenario_solver_example1-domain)
+(define (domain scenario_solver_no-service-domain)
  (:requirements :strips :typing :negative-preconditions :equality :numeric-fluents)
  (:types trackpart arrivaltrain trainunit)
  (:predicates 

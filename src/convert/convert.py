@@ -215,6 +215,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move.add_precondition(connected(move.l_from, move.l_to))
     # The train can only move to a track if it is free
     move.add_precondition(free(move.l_to))
+    # The train can only move if it is not parked (enforces that parking and moving are mutually exclusive)
+    move.add_precondition(up.Not(parked(move.t)))
 
     move.add_effect(at(move.t, move.l_to), True)
     move.add_effect(at(move.t, move.l_from), False)
@@ -224,14 +226,14 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move.add_effect(free(move.l_from), True)
 
     # Make sure the train is no longer parked
-    move.add_effect(parked(move.t), False)
-    move.add_effect(track_is_parked_at(move.l_from), False)
+    # move.add_effect(parked(move.t), False)
+    # move.add_effect(track_is_parked_at(move.l_from), False)
 
     problem.add_action(move)
 
     depart = up.InstantaneousAction('depart', t=arrival_train_type, l=track_part_type)
     depart.add_precondition(at(depart.t, depart.l))
-    depart.add_precondition(parked(depart.t))
+    # depart.add_precondition(parked(depart.t))
     depart.add_precondition(departure_exit(depart.l))
     depart.add_effect(at(depart.t, depart.l), False)
     depart.add_effect(free(depart.l), True)
@@ -327,7 +329,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             parked_initial=False,
             arrival_time=train.get("arrival"),
         )
-        problem.add_goal(parked(train_obj))
+        # problem.add_goal(parked(train_obj))
 
     # Add trains that are already parked in the yard
     for index, train in enumerate(in_standing_trains):
@@ -344,7 +346,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             train_length,
             _generic_train_name("train_in_standing", index),
             initial_track_id=_train_initial_track_id(train, ["firstParkingTrackPart", "entryTrackPart"]),
-            parked_initial=True,
+            parked_initial=False,
             arrival_time=train.get("arrival", 0),
         )
 
