@@ -6,6 +6,7 @@
 | v0.1 | 2026-04-28 | Summary of changes |
 | v0.2 | 2026-05-12 | Added `park` action, `parking_allowed` and `parked` fluents |
 | v0.3 | 2026-05-12 | Parking subproblem: `connected` on `move`; `entry_distance` + `departure_rank` on `park` |
+| v0.4 | 2026-05-19 | Matching/coupling variants: request slots, `match`, optional `uncouple`, and optional `couple_to_request` |
 
 ---
 
@@ -52,6 +53,14 @@
 | `connected` | `(trackpart, trackpart)` | Bool | Whether two track parts are directly adjacent. Default: false. Set bidirectionally from `aSide`/`bSide` in `location_solver.json` | v0.3 |
 | `entry_distance` | `(trackpart)` | Int | Normalised hop-distance from the yard's departure track (BFS). Rank 1 = closest to exit. Default: 0 (non-parking tracks). | v0.3 |
 | `departure_rank` | `(arrivaltrain)` | Int | Rank of the train's departure time among all inbound trains (1 = first to depart). Ties get the same rank (lenient). | v0.3 |
+| `available` | `(trainunit)` | Bool | Whether a train unit can currently be assigned to a request slot | v0.4 |
+| `slot_open` | `(requestslot)` | Bool | Whether a request slot has not yet been assigned | v0.4 |
+| `slot_filled` | `(requestslot)` | Bool | Whether a request slot has been assigned a compatible unit | v0.4 |
+| `compatible` | `(trainunit, requestslot)` | Bool | Whether a unit can fill a slot based on type, carriage count, and length | v0.4 |
+| `matched` | `(trainunit, requestslot)` | Bool | Records that a unit has been assigned to a slot | v0.4 |
+| `part_of_composition` | `(trainunit, arrivalcomposition)` | Bool | Used when explicit uncoupling is enabled | v0.4 |
+| `composition_needs_uncoupling` | `(arrivalcomposition)` | Bool | Marks a multi-unit incoming composition that must be split before matching | v0.4 |
+| `slot_coupled` | `(requestslot)` | Bool | Used when explicit coupling is enabled; marks the coupled departure slot | v0.4 |
 
 ---
 
@@ -60,12 +69,13 @@
 - **Parameters:** `t - arrivaltrain`, `l_from - trackpart`, `l_to - trackpart`
 - **Preconditions:**
   - `at(t, l_from)`
+  - `not parked(t)`
   - `connected(l_from, l_to)`
 - **Effects:**
   - `at(t, l_to) = true`
   - `at(t, l_from) = false`
 - **Introduced:** v0.1 (connectivity precondition added v0.3)
-- **Notes:** 
+- **Notes:** `not parked(t)` prevents plans where a train is parked and then moved again.
 
 ### `park`
 - **Parameters:** `t - arrivaltrain`, `l - trackpart`
@@ -77,6 +87,21 @@
   - `parked(t) = true`
 - **Introduced:** v0.2 (departure ordering precondition added v0.3)
 - **Notes:** Every inbound train has `parked(t)` as a goal. The `departure_rank = entry_distance` constraint enforces that earlier-departing trains park closer to the yard exit, preventing blocking. Lenient: multiple tracks can share the same `entry_distance`, giving the planner a choice.
+
+### `match`
+- **Parameters:** `unit - trainunit`, `slot - requestslot`
+- **Description:** Assigns an available compatible train unit to an open outgoing request slot.
+- **Introduced:** v0.4
+
+### `uncouple`
+- **Parameters:** `unit - trainunit`, `composition - arrivalcomposition`
+- **Description:** Releases a unit from a multi-unit incoming composition so it can be matched independently.
+- **Introduced:** v0.4
+
+### `couple_to_request`
+- **Parameters:** `unit - trainunit`, `slot - requestslot`, `request - departurerequest`
+- **Description:** Marks a matched unit as explicitly coupled into the departure request that owns the slot.
+- **Introduced:** v0.4
 
 ---
 
@@ -93,6 +118,11 @@
 | `connected(a, b)` | `location_solver.json → trackParts[].aSide / bSide` | Set bidirectionally for each adjacent pair |
 | `entry_distance(track)` | Computed — BFS from `scenario.json → out.trainRequests[].leaveTrackPart`, normalised to 1-based rank | Only set for `parking_allowed` tracks; defaults to 0 |
 | `departure_rank(train)` | Computed — rank of `scenario.json → in.trains[].departure` sorted ascending (ties share a rank) | |
+| `trainunit` objects | `scenario.json -> in.trains / inStanding.trains` | One object per unit available for matching |
+| `available(unit)` | `scenario.json -> in.trains / inStanding.trains` | True for units not locked inside an explicit uncoupling composition |
+| `requestslot` objects | `scenario.json -> out.trainRequests / outStanding.trainRequests` | One slot per requested outgoing train unit |
+| `compatible(unit, slot)` | Computed from unit and request unit type | Set when display name, carriage count, and length match |
+| `part_of_composition(unit, composition)` | `scenario.json -> in.trains / inStanding.trains` | Set for units in multi-unit compositions when explicit uncoupling is enabled |
 
 ---
 
