@@ -19,7 +19,6 @@ for variant_name in convert_variants:
         print(f"No converter found in {variant_dir}, skipping...")
         continue
     path_to_converter = os.path.join(variant_dir, converter_files[0])
-    domain_written = False
 
     for n_trains in os.listdir(scenarios_dir):
         for order_name in os.listdir(os.path.join(scenarios_dir, n_trains)):
@@ -36,24 +35,15 @@ for variant_name in convert_variants:
                     pddl_path = os.path.abspath(os.path.join(pddl_dir, file.replace(".json", ".pddl")))
 
                     print(f"[{variant_name}] Converting {file}...")
-                    if not domain_written:
-                        subprocess.run([sys.executable, path_to_converter,
-                            "-s", solver_path,
-                            "-l", location_file,
-                            "-o", pddl_path,
-                            "-d", domain_path,
-                        ])
-                        domain_written = True
-                    else:
-                        subprocess.run([sys.executable, path_to_converter,
-                            "-s", solver_path,
-                            "-l", location_file,
-                            "-o", pddl_path,
-                        ])
+                    subprocess.run([sys.executable, path_to_converter,
+                        "-s", solver_path,
+                        "-l", location_file,
+                        "-o", pddl_path,
+                        "-d", domain_path,
+                    ])
 
                     print(f"[{variant_name}] Planning {file}...")
                     subprocess.run(["julia", f"--project={project_root}",
                         path_to_planner, pddl_path, domain_path,
                     ])
-
                     
