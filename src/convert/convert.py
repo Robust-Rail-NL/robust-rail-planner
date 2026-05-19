@@ -292,6 +292,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     inbound_trains = scenario_object.get("in", {}).get("trains", [])
     in_standing_trains = scenario_object.get("inStanding", {}).get("trains", [])
     out_standing_trains = scenario_object.get("outStanding", {}).get("trainRequests", [])
+    out_requests = scenario_object.get("out", {}).get("trainRequests", [])
     train_to_rank = _compute_departure_ranks(inbound_trains)
     track_occupancies = {}
 
@@ -335,7 +336,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             train_total_length = _train_total_length(train)
             problem.set_initial_value(train_length(arrival_train), up.Real(train_total_length))
             track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
-            problem.add_goal(parked(arrival_train))
+            #problem.add_goal(parked(arrival_train))
+
 
         for index, train in enumerate(in_standing_trains):
             standing_train = problem.add_object(f"train_in_standing_{index}", arrival_train_type)
@@ -351,6 +353,10 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             track_id = request.get("lastParkingTrackPart")
             if track_id in id_to_track_part:
                 problem.add_goal(track_is_parked_at(id_to_track_part[track_id]))
+
+        # Add outbound train requests: these trains must be assembled (contain all units) and depart.
+        # Add a goal stating that the number of departed trains must be equal to out_requests
+        problem.add_goal(up.Equals(num_of_departed_trains(), up.Int(len(out_requests))))
 
         for track_id, occupied_length_value in track_occupancies.items():
             track_obj = id_to_track_part[track_id]
