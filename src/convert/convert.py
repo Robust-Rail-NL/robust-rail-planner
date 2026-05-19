@@ -215,8 +215,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     depart.add_precondition(departure_exit(depart.l))
     depart.add_effect(at(depart.t, depart.l), False)
     depart.add_effect(free(depart.l), True)
-    depart.add_effect(occupied_length(depart.l), occupied_length(depart.l) - train_length(depart.t))
-    depart.add_effect(parked(depart.t), False)
+    # depart.add_effect(occupied_length(depart.l), occupied_length(depart.l) - train_length(depart.t))
+    # depart.add_effect(parked(depart.t), False)
     depart.add_effect(departed(depart.t), True)
     depart.add_effect(num_of_departed_trains(), num_of_departed_trains() + 1)
     problem.add_action(depart)
@@ -226,7 +226,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     park.add_precondition(parking_allowed(park.l))
     # Add that a train must be parked at a track corresponding to its departure rank. This enforces that trains will always be parked at a closer distance to the exist than trains that leave later.
     # Note: this means that all trains with the same departure time will be parked on tracks with that same entry distance. This can be impossible due to the track not being long enough; this is not being checked.
-    park.add_precondition(up.Equals(departure_rank(park.t), entry_distance(park.l)))
+    # park.add_precondition(up.Equals(departure_rank(park.t), entry_distance(park.l)))
     park.add_precondition(occupied_length(park.l) + train_length(park.t) <= track_capacity(park.l))
     park.add_effect(parked(park.t), True)
     park.add_effect(track_is_parked_at(park.l), True)
@@ -293,7 +293,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     in_standing_trains = scenario_object.get("inStanding", {}).get("trains", [])
     out_standing_trains = scenario_object.get("outStanding", {}).get("trainRequests", [])
     out_requests = scenario_object.get("out", {}).get("trainRequests", [])
-    train_to_rank = _compute_departure_ranks(inbound_trains)
+    # train_to_rank = _compute_departure_ranks(inbound_trains)
     track_occupancies = {}
 
     # Add track part objects
@@ -332,7 +332,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             problem.set_initial_value(arrival(arrival_train), up.Int(int(train["arrival"])))
             initial_track_id = _train_initial_track_id(train, ["entryTrackPart", "firstParkingTrackPart"])
             problem.set_initial_value(at(arrival_train, id_to_track_part[initial_track_id]), True)
-            problem.set_initial_value(departure_rank(arrival_train), up.Int(train_to_rank[train["id"]]))
+            # problem.set_initial_value(departure_rank(arrival_train), up.Int(train_to_rank[train["id"]]))
             train_total_length = _train_total_length(train)
             problem.set_initial_value(train_length(arrival_train), up.Real(train_total_length))
             track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
