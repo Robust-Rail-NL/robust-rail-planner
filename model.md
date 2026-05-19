@@ -7,6 +7,7 @@
 | v0.2 | 2026-05-12 | Added `park` action, `parking_allowed` and `parked` fluents |
 | v0.3 | 2026-05-12 | Parking subproblem: `connected` on `move`; `entry_distance` + `departure_rank` on `park` |
 | v0.4 | 2026-05-19 | Matching/coupling variants: request slots, `match`, optional `uncouple`, and optional `couple_to_request` |
+| v0.5 | 2026-05-19 | Routing additions: `depart`, `departure_exit`, and length/capacity tracking |
 
 ---
 
@@ -26,6 +27,7 @@
 - Matching adds request slots and the `match` action; compatibility uses unit type, carriage count, and length.
 - `--coupling-mode` can switch between free uncoupling, explicit uncoupling, and explicit coupling.
 - Explicit uncoupling adds `uncouple`; explicit coupling adds `couple_to_request`.
+- Routing adds a `depart` action plus track capacity and occupied-length tracking.
 - `run.py` exposes subproblem, coupling-mode, and planner-backend choices.
 
 ---
@@ -51,8 +53,15 @@
 | `parking_allowed` | `(trackpart)` | Bool | Whether a track part permits parking. Default: false. Set from `parkingAllowed` in `location_solver.json` | v0.2 |
 | `parked` | `(arrivaltrain)` | Bool | Whether a train has been parked. Default: false | v0.2 |
 | `connected` | `(trackpart, trackpart)` | Bool | Whether two track parts are directly adjacent. Default: false. Set bidirectionally from `aSide`/`bSide` in `location_solver.json` | v0.3 |
+| `departed` | `(arrivaltrain)` | Bool | Whether a train has left the yard. Default: false | v0.5 |
+| `departure_exit` | `(trackpart)` | Bool | Whether a track part can be used as a yard exit. Default: false | v0.5 |
 | `entry_distance` | `(trackpart)` | Int | Normalised hop-distance from the yard's departure track (BFS). Rank 1 = closest to exit. Default: 0 (non-parking tracks). | v0.3 |
 | `departure_rank` | `(arrivaltrain)` | Int | Rank of the train's departure time among all inbound trains (1 = first to depart). Ties get the same rank (lenient). | v0.3 |
+| `track_is_parked_at` | `(trackpart)` | Bool | Whether a parked train occupies the track. Default: false | v0.5 |
+| `num_of_departed_trains` | `()` | Int | Counter for departed trains. Default: 0 | v0.5 |
+| `track_capacity` | `(trackpart)` | Real | Maximum train length that can fit on a track, set from the track length | v0.5 |
+| `train_length` | `(arrivaltrain)` | Real | Total train length computed from its units | v0.5 |
+| `occupied_length` | `(trackpart)` | Real | Currently occupied length on a track | v0.5 |
 | `available` | `(trainunit)` | Bool | Whether a train unit can currently be assigned to a request slot | v0.4 |
 | `slot_open` | `(requestslot)` | Bool | Whether a request slot has not yet been assigned | v0.4 |
 | `slot_filled` | `(requestslot)` | Bool | Whether a request slot has been assigned a compatible unit | v0.4 |
@@ -71,9 +80,12 @@
   - `at(t, l_from)`
   - `not parked(t)`
   - `connected(l_from, l_to)`
+  - `free(l_to)`
 - **Effects:**
   - `at(t, l_to) = true`
   - `at(t, l_from) = false`
+  - `free(l_to) = false`
+  - `free(l_from) = true`
 - **Introduced:** v0.1 (connectivity precondition added v0.3)
 - **Notes:** `not parked(t)` prevents plans where a train is parked and then moved again.
 
@@ -83,10 +95,27 @@
   - `at(t, l)`
   - `parking_allowed(l)`
   - `departure_rank(t) = entry_distance(l)`
+  - `occupied_length(l) + train_length(t) <= track_capacity(l)`
 - **Effects:**
   - `parked(t) = true`
+  - `track_is_parked_at(l) = true`
+  - `occupied_length(l)` increases by `train_length(t)`
 - **Introduced:** v0.2 (departure ordering precondition added v0.3)
 - **Notes:** Every inbound train has `parked(t)` as a goal. The `departure_rank = entry_distance` constraint enforces that earlier-departing trains park closer to the yard exit, preventing blocking. Lenient: multiple tracks can share the same `entry_distance`, giving the planner a choice.
+
+### `depart`
+- **Parameters:** `t - arrivaltrain`, `l - trackpart`
+- **Preconditions:**
+  - `at(t, l)`
+  - `departure_exit(l)`
+- **Effects:**
+  - `at(t, l) = false`
+  - `free(l) = true`
+  - `parked(t) = false`
+  - `departed(t) = true`
+  - `occupied_length(l)` decreases by `train_length(t)`
+  - `num_of_departed_trains` increases by 1
+- **Introduced:** v0.5
 
 ### `match`
 - **Parameters:** `unit - trainunit`, `slot - requestslot`
@@ -116,8 +145,12 @@
 | `arrival(train)` | `scenario.json → in.trains[].arrival` | Set to integer arrival timestamp |
 | `at(train, track)` | `scenario.json → in.trains[].firstParkingTrackPart` | Set to true for initial parking position |
 | `connected(a, b)` | `location_solver.json → trackParts[].aSide / bSide` | Set bidirectionally for each adjacent pair |
+| `departure_exit(track)` | `scenario.json -> out.trainRequests[].leaveTrackPart` | Marks yard exits used by departure requests |
 | `entry_distance(track)` | Computed — BFS from `scenario.json → out.trainRequests[].leaveTrackPart`, normalised to 1-based rank | Only set for `parking_allowed` tracks; defaults to 0 |
 | `departure_rank(train)` | Computed — rank of `scenario.json → in.trains[].departure` sorted ascending (ties share a rank) | |
+| `track_capacity(track)` | `location_solver.json -> trackParts[].length` | Set to the track length |
+| `train_length(train)` | `scenario.json -> in.trains[].members[].trainUnit.type.length` | Sum of all unit lengths in the arriving train |
+| `occupied_length(track)` | Derived from initial train placements and `park`/`depart` effects | Tracks how much length is currently occupied |
 | `trainunit` objects | `scenario.json -> in.trains / inStanding.trains` | One object per unit available for matching |
 | `available(unit)` | `scenario.json -> in.trains / inStanding.trains` | True for units not locked inside an explicit uncoupling composition |
 | `requestslot` objects | `scenario.json -> out.trainRequests / outStanding.trainRequests` | One slot per requested outgoing train unit |
