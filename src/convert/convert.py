@@ -189,7 +189,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     track_is_parked_at = problem.add_fluent(up.Fluent("track_is_parked_at", up.BoolType(), trackpart=track_part_type),                  default_initial_value=False)
     number_of_trains_on_track = problem.add_fluent(up.Fluent("number_of_trains_on_track", up.IntType(), trackpart=track_part_type),                 default_initial_value=up.Int(0))
     num_of_departed_trains = problem.add_fluent(up.Fluent("num_of_departed_trains", up.IntType()),                                      default_initial_value=up.Int(0))
-    track_capacity = problem.add_fluent(up.Fluent("track_capacity", up.RealType(), trackpart=track_part_type),                          default_initial_value=up.Real(Fraction(0)))
+    track_length = problem.add_fluent(up.Fluent("track_length", up.RealType(), trackpart=track_part_type),                          default_initial_value=up.Real(Fraction(0)))
     train_length = problem.add_fluent(up.Fluent("train_length", up.RealType(), train=arrival_train_type),                               default_initial_value=up.Real(Fraction(0)))
     # occupied_length = problem.add_fluent(up.Fluent("occupied_length", up.RealType(), trackpart=track_part_type),                        default_initial_value=up.Real(Fraction(0)))
     aside_distance = problem.add_fluent(up.Fluent("aside_distance", up.RealType(), train=arrival_train_type),                           default_initial_value=up.Real(Fraction(0)))
@@ -212,7 +212,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_aside_empty.add_precondition(up.Not(parked(move_aside_empty.t)))
     move_aside_empty.add_precondition(aside_distance(move_aside_empty.t) <= astack_distance(move_aside_empty.l_from))
     move_aside_empty.add_precondition(up.Equals(number_of_trains_on_track(move_aside_empty.l_to), 0))
-    move_aside_empty.add_precondition(train_length(move_aside_empty.t) <= track_capacity(move_aside_empty.l_to))
+    move_aside_empty.add_precondition(train_length(move_aside_empty.t) <= track_length(move_aside_empty.l_to))
 
     move_aside_empty.add_effect(number_of_trains_on_track(move_aside_empty.l_from), number_of_trains_on_track(move_aside_empty.l_from) - 1)
     move_aside_empty.add_effect(number_of_trains_on_track(move_aside_empty.l_to), number_of_trains_on_track(move_aside_empty.l_to) + 1)
@@ -230,7 +230,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_aside_occupied.add_precondition(up.Not(parked(move_aside_occupied.t)))
     move_aside_occupied.add_precondition(aside_distance(move_aside_occupied.t) <= astack_distance(move_aside_occupied.l_from))
     move_aside_occupied.add_precondition(number_of_trains_on_track(move_aside_occupied.l_to) > 0)
-    move_aside_occupied.add_precondition(train_length(move_aside_occupied.t) <= track_capacity(move_aside_occupied.l_to) - bstack_distance(move_aside_occupied.l_to))
+    move_aside_occupied.add_precondition(train_length(move_aside_occupied.t) <= track_length(move_aside_occupied.l_to) - bstack_distance(move_aside_occupied.l_to))
 
     move_aside_occupied.add_effect(number_of_trains_on_track(move_aside_occupied.l_from), number_of_trains_on_track(move_aside_occupied.l_from) - 1)
     move_aside_occupied.add_effect(number_of_trains_on_track(move_aside_occupied.l_to), number_of_trains_on_track(move_aside_occupied.l_to) + 1)
@@ -247,7 +247,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_bside_empty.add_precondition(up.Not(parked(move_bside_empty.t)))
     move_bside_empty.add_precondition(aside_distance(move_bside_empty.t) >= bstack_distance(move_bside_empty.l_from) - train_length(move_bside_empty.t))
     move_bside_empty.add_precondition(up.Equals(number_of_trains_on_track(move_bside_empty.l_to), 0))
-    move_bside_empty.add_precondition(train_length(move_bside_empty.t) <= track_capacity(move_bside_empty.l_to))
+    move_bside_empty.add_precondition(train_length(move_bside_empty.t) <= track_length(move_bside_empty.l_to))
     
     move_bside_empty.add_effect(number_of_trains_on_track(move_bside_empty.l_from), number_of_trains_on_track(move_bside_empty.l_from) - 1)
     move_bside_empty.add_effect(number_of_trains_on_track(move_bside_empty.l_to), number_of_trains_on_track(move_bside_empty.l_to) + 1)
@@ -374,11 +374,11 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             tp_id = track_part["id"]
             if tp_id in bfs_dist and bfs_dist[tp_id] in bfs_to_entry_dist:
                 problem.set_initial_value(entry_distance(obj), up.Int(bfs_to_entry_dist[bfs_dist[tp_id]]))
-        problem.set_initial_value(track_capacity(obj), up.Real(Fraction(str(track_part.get("length", 100.0)))))
+        problem.set_initial_value(track_length(obj), up.Real(Fraction(str(track_part.get("length", 100.0)))))
 
         # Use a very large number to indicate effectively infinite capacity for non-parking tracks, so that they can be used for temporary movements
         if not track_part.get("parkingAllowed", False):
-            problem.set_initial_value(track_capacity(obj), up.Real(Fraction(10**9)))
+            problem.set_initial_value(track_length(obj), up.Real(Fraction(10**9)))
 
     # Set connectivity (each undirected edge -> two directed facts)
     connected_pairs = set()
