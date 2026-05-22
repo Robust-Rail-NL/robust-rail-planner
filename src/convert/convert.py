@@ -215,7 +215,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_aside_empty.add_precondition(train_length(move_aside_empty.t) <= track_length(move_aside_empty.l_to))
 
     move_aside_empty.add_effect(number_of_trains_on_track(move_aside_empty.l_from), number_of_trains_on_track(move_aside_empty.l_from) - 1)
-    move_aside_empty.add_effect(number_of_trains_on_track(move_aside_empty.l_to), number_of_trains_on_track(move_aside_empty.l_to) + 1)
+    move_aside_empty.add_effect(number_of_trains_on_track(move_aside_empty.l_to), 1)
     move_aside_empty.add_effect(aside_distance(move_aside_empty.t), 0)
     move_aside_empty.add_effect(astack_distance(move_aside_empty.l_from), astack_distance(move_aside_empty.l_from) + train_length(move_aside_empty.t))
     move_aside_empty.add_effect(astack_distance(move_aside_empty.l_to), 0)
@@ -250,8 +250,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_bside_empty.add_precondition(train_length(move_bside_empty.t) <= track_length(move_bside_empty.l_to))
     
     move_bside_empty.add_effect(number_of_trains_on_track(move_bside_empty.l_from), number_of_trains_on_track(move_bside_empty.l_from) - 1)
-    move_bside_empty.add_effect(number_of_trains_on_track(move_bside_empty.l_to), number_of_trains_on_track(move_bside_empty.l_to) + 1)
-    move_bside_empty.add_effect(aside_distance(move_bside_empty.t), (astack_distance(move_bside_empty.l_to) - train_length(move_bside_empty.t)))
+    move_bside_empty.add_effect(number_of_trains_on_track(move_bside_empty.l_to), 1)
+    move_bside_empty.add_effect(aside_distance(move_bside_empty.t), 0)
     move_bside_empty.add_effect(bstack_distance(move_bside_empty.l_from), bstack_distance(move_bside_empty.l_from) - train_length(move_bside_empty.t))
     move_bside_empty.add_effect(astack_distance(move_bside_empty.l_to), 0)
     move_bside_empty.add_effect(bstack_distance(move_bside_empty.l_to), train_length(move_bside_empty.t))
