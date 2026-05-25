@@ -8,6 +8,7 @@
 | v0.3 | 2026-05-12 | Parking subproblem: `connected` on `move`; `entry_distance` + `departure_rank` on `park` |
 | v0.4 | 2026-05-19 | Matching/coupling variants: request slots, `match`, optional `uncouple`, and optional `couple_to_request` |
 | v0.5 | 2026-05-18 | Added the routing subproblem: `depart` action, `departure_exit` fluent, capacity tracking with `track_capacity`, `train_length`, `occupied_length`, and `track_is_parked_at` |
+| v0.6 | 2026-05-25 | Explicit coupling now requires physical two-unit assembly: same track, valid coupling track, and correct order |
 
 ---
 
@@ -61,9 +62,15 @@
 | `slot_filled` | `(requestslot)` | Bool | Whether a request slot has been assigned a compatible unit | v0.4 |
 | `compatible` | `(trainunit, requestslot)` | Bool | Whether a unit can fill a slot based on type, carriage count, and length | v0.4 |
 | `matched` | `(trainunit, requestslot)` | Bool | Records that a unit has been assigned to a slot | v0.4 |
+| `slot_before` | `(requestslot, requestslot)` | Bool | Orders the two slots of a two-unit outgoing request | v0.6 |
+| `unit_in_train` | `(trainunit, arrivaltrain)` | Bool | Links a unit to the physical train that currently carries it | v0.6 |
+| `unit_before` | `(trainunit, trainunit)` | Bool | Preserves unit order inside an incoming multi-unit train | v0.6 |
+| `coupling_allowed` | `(trackpart)` | Bool | Whether physical coupling may happen on a track. Baseline uses `parkingAllowed` tracks | v0.6 |
 | `part_of_composition` | `(trainunit, arrivalcomposition)` | Bool | Used when explicit uncoupling is enabled | v0.5 |
 | `composition_needs_uncoupling` | `(arrivalcomposition)` | Bool | Marks a multi-unit incoming composition that must be split before matching | v0.5 |
 | `slot_coupled` | `(requestslot)` | Bool | Used when explicit coupling is enabled; marks the coupled departure slot | v0.5 |
+| `physically_coupled` | `(trainunit, trainunit)` | Bool | Records that two ordered units were physically assembled | v0.6 |
+| `request_assembled` | `(departurerequest)` | Bool | Goal for explicit coupling of exactly two-unit requests | v0.6 |
 | `track_capacity` | `(trackpart)` | Real | Maximum length that can be parked on a track. Set from the track length in the location data. Default: 0 | v0.5 |
 | `train_length` | `(arrivaltrain)` | Real | Total length of a train, computed from its units. Default: 0 | v0.5 |
 | `occupied_length` | `(trackpart)` | Real | Current occupied length of a track. Increases when a train parks and decreases when it departs. Default: 0 | v0.5 |
@@ -114,10 +121,26 @@
 - **Description:** Releases a unit from a multi-unit incoming composition so it can be matched independently.
 - **Introduced:** v0.4
 
-### `couple_to_request`
-- **Parameters:** `unit - trainunit`, `slot - requestslot`, `request - departurerequest`
-- **Description:** Marks a matched unit as explicitly coupled into the departure request that owns the slot.
-- **Introduced:** v0.4
+### `couple_two_units`
+- **Parameters:** `unit_a/unit_b - trainunit`, `train_a/train_b - arrivaltrain`, `track - trackpart`, `slot_a/slot_b - requestslot`, `request - departurerequest`
+- **Description:** Physically assembles two matched units for a two-unit outgoing request.
+- **Preconditions:**
+  - both units are already matched to ordered slots of the same request;
+  - each unit belongs to the corresponding physical train;
+  - both trains are currently on the same `coupling_allowed` track;
+  - train order on the track matches the request slot order, using `aside_distance(train_a) < aside_distance(train_b)`.
+- **Effects:**
+  - both slots become `slot_coupled`;
+  - both units become `coupled_to_request`;
+  - `physically_coupled(unit_a, unit_b)` and `request_assembled(request)` become true.
+- **Introduced:** v0.6
+
+### `couple_two_units_same_train`
+- **Parameters:** `unit_a/unit_b - trainunit`, `train - arrivaltrain`, `track - trackpart`, `slot_a/slot_b - requestslot`, `request - departurerequest`
+- **Description:** Handles the case where both requested units are already carried by the same physical incoming train.
+- **Preconditions:** Same matching and valid-track checks as `couple_two_units`, but order is checked with `unit_before(unit_a, unit_b)`.
+- **Effects:** Same as `couple_two_units`.
+- **Introduced:** v0.6
 ### `depart`
 - **Parameters:** `t - arrivaltrain`, `l - trackpart`
 - **Preconditions:**
@@ -153,6 +176,10 @@
 | `available(unit)` | `scenario.json -> in.trains / inStanding.trains` | True for units not locked inside an explicit uncoupling composition |
 | `requestslot` objects | `scenario.json -> out.trainRequests / outStanding.trainRequests` | One slot per requested outgoing train unit |
 | `compatible(unit, slot)` | Computed from unit and request unit type | Set when display name, carriage count, and length match |
+| `slot_before(slot_a, slot_b)` | `scenario.json -> trainRequests[].trainUnits` | Set for the two ordered slots of a two-unit request |
+| `unit_in_train(unit, train)` | `scenario.json -> in.trains / inStanding.trains` | Links every unit to its physical incoming or standing train |
+| `unit_before(unit_a, unit_b)` | `scenario.json -> train.members` | Set from adjacent member order inside a multi-unit train |
+| `coupling_allowed(track)` | `location_solver.json -> trackParts[].parkingAllowed` | Baseline proxy for physically valid coupling locations |
 | `part_of_composition(unit, composition)` | `scenario.json -> in.trains / inStanding.trains` | Set for units in multi-unit compositions when explicit uncoupling is enabled |
 | `track_capacity(track)` | `location_solver.json → trackParts[].length` | Set to the track length |
 | `train_length(train)` | `scenario.json → in.trains[].members[].trainUnit.type.length` | Sum of all unit lengths |
@@ -209,11 +236,11 @@
 ---
 
 ### Gap 7 — Multi-unit train composition not modelled (Subproblem 5)
-**Branch note:** Partially addressed in the coupling/parking branch. The model can require explicit `uncouple` actions for multi-unit incoming compositions and optional `couple_to_request` actions for outgoing request slots. It still does not validate physical location or ordering during coupling.
+**Branch note:** Partially addressed. The model can require explicit `uncouple` actions for multi-unit incoming compositions and explicit two-unit coupling now validates same-track placement, coupling location, and ordering.
 
-**What's missing:** `trainunit` objects are created in the problem file but have no fluents, no `at` or `free` facts, and no actions. Train coupling (combining two units into one consist) and splitting are absent.
-**Impact:** Trains are treated as indivisible atoms. The planner cannot reason about coupling two SLT units into a longer consist, which is required for many NS departure schedules.
-**Fix:** Add `unit_in_train(trainunit, arrivaltrain)` and `unit_at(trainunit, trackpart)` fluents. Add `couple` and `decouple` actions. This is a significant extension; treat as a separate domain variant.
+**What's missing:** Coupling is limited to exactly two units and uses an instantaneous action. True coupling duration, driver/staff resources, and temporal overlap are not modelled.
+**Impact:** The planner can check whether two units can be physically assembled at a valid location, but it cannot yet check whether enough time or staff is available.
+**Fix:** Treat duration and staff as a later temporal/resource-planning variant, following the thesis-style durative action pattern.
 
 ---
 
