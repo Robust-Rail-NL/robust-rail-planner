@@ -6,7 +6,6 @@ scenarios_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "g
 location_file = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "generate", "location.json"))
 convert_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "convert"))
 path_to_planner = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "plan", "planner.jl"))
-project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 
 convert_variants = [d for d in os.listdir(convert_dir) if os.path.isdir(os.path.join(convert_dir, d))]
 
@@ -43,7 +42,5 @@ for variant_name in convert_variants:
                     ])
 
                     print(f"[{variant_name}] Planning {file}...")
-                    subprocess.run(["julia", f"--project={project_root}",
-                        path_to_planner, pddl_path, domain_path,
-                    ])
+                    subprocess.run(["julia", "--project", path_to_planner, domain_path, pddl_path,])
                     

@@ -5,3 +5,4 @@ Summary: Robust Rail NL PDDL Planning
 Requires-Python: >=3.9
 Requires-Dist: protobuf<4.0
 Requires-Dist: unified-planning
+Requires-Dist: questionary

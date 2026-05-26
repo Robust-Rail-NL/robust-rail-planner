@@ -1,8 +1,8 @@
 {
     "location": "KleineBinckhorst",
-    "number_of_trains": 5,
+    "number_of_trains": 1,
     "start_time": 0,
-    "end_time": 2600,
+    "end_time": 520,
     "seed": 420,
     "use_default_material": true,
     "trains_given": false,

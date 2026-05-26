@@ -12,9 +12,10 @@ from questionary import Style
 REPO_ROOT       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCENARIO_INPUTS = os.path.join(REPO_ROOT, "scenario-planning-inputs")
 DATA_DIR        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-CONVERT_SCRIPT  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "convert", "convert.py")
+CONVERT_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "convert", "v1", "convert_v1.py")
 PLANNER_SCRIPT  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "plan", "planner.jl")
 PYTHON          = sys.executable
+
 JULIA           = "julia"
 
 STYLE = Style([
@@ -127,6 +128,7 @@ def run_planner(location, scenario_name, run_num):
     if not os.path.exists(domain_file):
         print(f"  Domain file not found: {os.path.relpath(domain_file, REPO_ROOT)}")
         print("  Run 'Convert to PDDL' first.")
+
         return False
 
     print(f"\n  Planning  {os.path.relpath(problem_file, REPO_ROOT)}")
@@ -135,7 +137,7 @@ def run_planner(location, scenario_name, run_num):
     # Stream Julia output line-by-line with elapsed timestamps so slow searches are visible.
     start = time.monotonic()
     process = subprocess.Popen(
-        [JULIA, PLANNER_SCRIPT, domain_file, problem_file],
+        [JULIA, "--project", PLANNER_SCRIPT, domain_file, problem_file],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
     for line in process.stdout:

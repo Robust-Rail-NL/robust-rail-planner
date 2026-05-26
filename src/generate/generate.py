@@ -4,7 +4,7 @@ import shutil
 import subprocess
 
 # number_trains = [5, 10, 15, 20, 25, 30, 31, 32, 33, 34, 35]
-number_trains = [5]
+number_trains = [1]
 number_instances = 10
 matching = {0: "FIFO", 1: "random", 2: "LIFO"}
 default_seed = 42
