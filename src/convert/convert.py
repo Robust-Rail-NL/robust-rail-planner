@@ -310,6 +310,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(move_bside_occupied)
 
     depart_aside = up.InstantaneousAction('depart_aside', t=arrival_train_type, l=track_part_type)
+    depart_aside.add_precondition(allowed_to_move(depart_aside.t))
     depart_aside.add_precondition(at(depart_aside.t, depart_aside.l))
     depart_aside.add_precondition(departure_exit_a(depart_aside.l))
     depart_aside.add_precondition(aside_distance(depart_aside.t) <= astack_distance(depart_aside.l))
@@ -324,6 +325,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(depart_aside)
 
     depart_bside = up.InstantaneousAction('depart_bside', t=arrival_train_type, l=track_part_type)
+    depart_bside.add_precondition(allowed_to_move(depart_bside.t))
     depart_bside.add_precondition(at(depart_bside.t, depart_bside.l))
     depart_bside.add_precondition(departure_exit_b(depart_bside.l))
     depart_bside.add_precondition(aside_distance(depart_bside.t) >= bstack_distance(depart_bside.l) - train_length(depart_bside.t))
