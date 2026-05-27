@@ -151,6 +151,11 @@ def _train_total_length(train):
     return total_length
 
 
+def _train_unit_length(train_unit):
+    # Physical length of one atomic train unit, used for single-unit shunting units.
+    return Fraction(str(train_unit["type"]["length"]))
+
+
 def _train_initial_track_id(train, preferred_keys):
     # Pick the first available track field for trains whose JSON shape differs by scenario block.
     for key in preferred_keys:
@@ -243,6 +248,9 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     active_su        = problem.add_fluent(up.Fluent("active_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
     contains_su      = problem.add_fluent(up.Fluent("contains_su", up.BoolType(), shunting_unit=shunting_unit_type, unit=train_unit_type), default_initial_value=False)
     at_su            = problem.add_fluent(up.Fluent("at_su", up.BoolType(), shunting_unit=shunting_unit_type, trackpart=track_part_type), default_initial_value=False)
+    su_length        = problem.add_fluent(up.Fluent("su_length", up.RealType(), shunting_unit=shunting_unit_type), default_initial_value=up.Real(Fraction(0)))
+    su_aside_distance = problem.add_fluent(up.Fluent("su_aside_distance", up.RealType(), shunting_unit=shunting_unit_type), default_initial_value=up.Real(Fraction(0)))
+    allowed_to_move_su = problem.add_fluent(up.Fluent("allowed_to_move_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
 
 
     startMove = up.InstantaneousAction('start_move', t=arrival_train_type)
@@ -613,8 +621,11 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         # Initial shunting units mirror each arriving train before any split/couple action.
         shunting_unit = problem.add_object("su_" + _train_object_name(source, index, train), shunting_unit_type)
         problem.set_initial_value(active_su(shunting_unit), True)
+        train_total_length = _train_total_length(train)
+        problem.set_initial_value(su_length(shunting_unit), up.Real(train_total_length))
         if initial_track_id in id_to_track_part:
             problem.set_initial_value(at_su(shunting_unit, id_to_track_part[initial_track_id]), True)
+            problem.set_initial_value(su_aside_distance(shunting_unit), up.Real(track_occupancies.get(initial_track_id, Fraction(0))))
 
         train_members = train["members"]
         composition_obj = None
@@ -632,6 +643,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             # Pre-create an inactive single-unit shunting unit for later split actions.
             single_unit_su = problem.add_object("su_unit" + unit["id"], shunting_unit_type)
             problem.set_initial_value(contains_su(single_unit_su, unit_obj), True)
+            problem.set_initial_value(su_length(single_unit_su), up.Real(_train_unit_length(unit)))
             if composition_obj is None:
                 problem.set_initial_value(available(unit_obj), True)
             else:
