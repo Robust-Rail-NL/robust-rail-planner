@@ -225,6 +225,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     # add a fluent that counts the number of trains that are moving at the same time, to enforce that only one train can move at the same time
     concurrent_movements = problem.add_fluent(up.Fluent("concurrent_movements", up.IntType()), default_initial_value=up.Int(0))
     max_concurrent_movements = 1
+    total_cost = problem.add_fluent(up.Fluent("total_cost", up.IntType()), default_initial_value=up.Int(0))
     
     available      = problem.add_fluent(up.Fluent("available",      up.BoolType(), unit=train_unit_type),                               default_initial_value=False)
     request_open   = problem.add_fluent(up.Fluent("request_open",   up.BoolType(), request=departure_request_type),                     default_initial_value=False)
@@ -271,6 +272,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_aside_empty.add_effect(bstack_distance(move_aside_empty.l_to), train_length(move_aside_empty.t))
     move_aside_empty.add_effect(at(move_aside_empty.t, move_aside_empty.l_to), True)
     move_aside_empty.add_effect(at(move_aside_empty.t, move_aside_empty.l_from), False)
+    move_aside_empty.add_effect(total_cost(), total_cost() + 5)
     problem.add_action(move_aside_empty)
 
     move_aside_occupied = up.InstantaneousAction('move_aside_occupied', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
@@ -289,6 +291,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_aside_occupied.add_effect(bstack_distance(move_aside_occupied.l_to), bstack_distance(move_aside_occupied.l_to) + train_length(move_aside_occupied.t))
     move_aside_occupied.add_effect(at(move_aside_occupied.t, move_aside_occupied.l_to), True)
     move_aside_occupied.add_effect(at(move_aside_occupied.t, move_aside_occupied.l_from), False)
+    move_aside_occupied.add_effect(total_cost(), total_cost() + 5)
     problem.add_action(move_aside_occupied)
 
     move_bside_empty = up.InstantaneousAction('move_bside_empty', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
@@ -308,6 +311,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_bside_empty.add_effect(bstack_distance(move_bside_empty.l_to), train_length(move_bside_empty.t))
     move_bside_empty.add_effect(at(move_bside_empty.t, move_bside_empty.l_to), True)
     move_bside_empty.add_effect(at(move_bside_empty.t, move_bside_empty.l_from), False)
+    move_bside_empty.add_effect(total_cost(), total_cost() + 5)
     problem.add_action(move_bside_empty)
 
     move_bside_occupied = up.InstantaneousAction('move_bside_occupied', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
@@ -326,6 +330,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_bside_occupied.add_effect(astack_distance(move_bside_occupied.l_to), astack_distance(move_bside_occupied.l_to) - train_length(move_bside_occupied.t))
     move_bside_occupied.add_effect(at(move_bside_occupied.t, move_bside_occupied.l_to), True)
     move_bside_occupied.add_effect(at(move_bside_occupied.t, move_bside_occupied.l_from), False)
+    move_bside_occupied.add_effect(total_cost(), total_cost() + 5)
     problem.add_action(move_bside_occupied)
 
     depart_aside = up.InstantaneousAction('depart_aside', t=arrival_train_type, l=track_part_type)
@@ -665,6 +670,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 problem.set_initial_value(slot_before(slot_objects[0], slot_objects[1]), True)
                 if explicit_coupling:
                     problem.add_goal(request_assembled(request_obj))
+
+    problem.add_quality_metric(up.MinimizeExpressionOnFinalState(total_cost()))
 
     ### Write to files
     if output_file is None:
