@@ -272,7 +272,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_aside_empty.add_effect(bstack_distance(move_aside_empty.l_to), train_length(move_aside_empty.t))
     move_aside_empty.add_effect(at(move_aside_empty.t, move_aside_empty.l_to), True)
     move_aside_empty.add_effect(at(move_aside_empty.t, move_aside_empty.l_from), False)
-    move_aside_empty.add_effect(total_cost(), total_cost() + 5)
+    move_aside_empty.add_effect(total_cost(), total_cost() + 300)
     problem.add_action(move_aside_empty)
 
     move_aside_occupied = up.InstantaneousAction('move_aside_occupied', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
@@ -291,7 +291,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_aside_occupied.add_effect(bstack_distance(move_aside_occupied.l_to), bstack_distance(move_aside_occupied.l_to) + train_length(move_aside_occupied.t))
     move_aside_occupied.add_effect(at(move_aside_occupied.t, move_aside_occupied.l_to), True)
     move_aside_occupied.add_effect(at(move_aside_occupied.t, move_aside_occupied.l_from), False)
-    move_aside_occupied.add_effect(total_cost(), total_cost() + 5)
+    move_aside_occupied.add_effect(total_cost(), total_cost() + 300)
     problem.add_action(move_aside_occupied)
 
     move_bside_empty = up.InstantaneousAction('move_bside_empty', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
@@ -311,7 +311,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_bside_empty.add_effect(bstack_distance(move_bside_empty.l_to), train_length(move_bside_empty.t))
     move_bside_empty.add_effect(at(move_bside_empty.t, move_bside_empty.l_to), True)
     move_bside_empty.add_effect(at(move_bside_empty.t, move_bside_empty.l_from), False)
-    move_bside_empty.add_effect(total_cost(), total_cost() + 5)
+    move_bside_empty.add_effect(total_cost(), total_cost() + 300)
     problem.add_action(move_bside_empty)
 
     move_bside_occupied = up.InstantaneousAction('move_bside_occupied', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
@@ -330,7 +330,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_bside_occupied.add_effect(astack_distance(move_bside_occupied.l_to), astack_distance(move_bside_occupied.l_to) - train_length(move_bside_occupied.t))
     move_bside_occupied.add_effect(at(move_bside_occupied.t, move_bside_occupied.l_to), True)
     move_bside_occupied.add_effect(at(move_bside_occupied.t, move_bside_occupied.l_from), False)
-    move_bside_occupied.add_effect(total_cost(), total_cost() + 5)
+    move_bside_occupied.add_effect(total_cost(), total_cost() + 300)
     problem.add_action(move_bside_occupied)
 
     depart_aside = up.InstantaneousAction('depart_aside', t=arrival_train_type, l=track_part_type)
