@@ -408,6 +408,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         # Effects: the unit becomes independently matchable and is removed from that composition.
         uncouple.add_effect(available(uncouple.unit), True)
         uncouple.add_effect(part_of_composition(uncouple.unit, uncouple.composition), False)
+        uncouple.add_effect(total_cost(), total_cost() + 120)
         problem.add_action(uncouple)
 
     if explicit_coupling:
@@ -449,6 +450,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         couple_two_units.add_effect(coupled_to_request(couple_two_units.unit_b, couple_two_units.request), True)
         couple_two_units.add_effect(physically_coupled(couple_two_units.unit_a, couple_two_units.unit_b), True)
         couple_two_units.add_effect(request_assembled(couple_two_units.request), True)
+        couple_two_units.add_effect(total_cost(), total_cost() + 180)
         problem.add_action(couple_two_units)
 
         couple_two_units_same_train = up.InstantaneousAction(
@@ -479,6 +481,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         couple_two_units_same_train.add_effect(coupled_to_request(couple_two_units_same_train.unit_b, couple_two_units_same_train.request), True)
         couple_two_units_same_train.add_effect(physically_coupled(couple_two_units_same_train.unit_a, couple_two_units_same_train.unit_b), True)
         couple_two_units_same_train.add_effect(request_assembled(couple_two_units_same_train.request), True)
+        couple_two_units_same_train.add_effect(total_cost(), total_cost() + 180)
         problem.add_action(couple_two_units_same_train)
 
     # Matching assigns exactly one compatible available unit to an open request slot.

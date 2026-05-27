@@ -10,6 +10,7 @@
 | v0.5 | 2026-05-18 | Added the routing subproblem: `depart` action, `departure_exit` fluent, capacity tracking with `astack_distance`, `bstack_distance`, `train_length`, `track_length`, and `track_is_parked_at` |
 | v0.6 | 2026-05-25 | Explicit coupling now requires physical two-unit assembly: same track, valid coupling track, and correct order |
 | v0.7 | 2026-05-27 | Cost metric: `total_cost` (seconds), move cost = 300s, `(:metric minimize (total_cost))`. Arrival timing: `has_arrived`, `entry_track_of`, `arrive`, and `wait` actions; inbound trains deferred from init |
+| v0.8 | 2026-05-27 | Coupling costs added: `uncouple` = 120s, `couple_two_units` / `couple_two_units_same_train` = 180s (from NS scenario `splitDuration`/`combineDuration`) |
 
 ---
 
@@ -158,17 +159,19 @@
 ### `uncouple`
 - **Parameters:** `unit - trainunit`, `composition - arrivalcomposition`
 - **Description:** Releases a unit from a multi-unit incoming composition so it can be matched independently. Active when `--coupling-mode` is `implicit_explicit_uncoupling` or `explicit_coupling`.
-- **Introduced:** v0.4
+- **Effects:** `available(unit) = true`, `part_of_composition(unit, composition) = false`, `total_cost += 120`
+- **Introduced:** v0.4 / cost added v0.8
 
 ### `couple_two_units`
 - **Parameters:** `unit_a/unit_b - trainunit`, `train_a/train_b - arrivaltrain`, `track - trackpart`, `slot_a/slot_b - requestslot`, `request - departurerequest`
 - **Preconditions:** both units matched to ordered slots of the same request; each unit in its corresponding train; both trains on the same `coupling_allowed` track; `aside_distance(train_a) < aside_distance(train_b)`
-- **Effects:** `slot_coupled`, `coupled_to_request`, `physically_coupled(unit_a, unit_b)`, `request_assembled(request)` all set true
-- **Introduced:** v0.6
+- **Effects:** `slot_coupled`, `coupled_to_request`, `physically_coupled(unit_a, unit_b)`, `request_assembled(request)` all set true; `total_cost += 180`
+- **Introduced:** v0.6 / cost added v0.8
 
 ### `couple_two_units_same_train`
 - Same as `couple_two_units` but both units are in the same incoming train; uses `unit_before(unit_a, unit_b)` for order.
-- **Introduced:** v0.6
+- **Effects:** same as `couple_two_units`; `total_cost += 180`
+- **Introduced:** v0.6 / cost added v0.8
 
 ---
 
@@ -218,7 +221,9 @@
 | `depart_aside` / `depart_bside` | 0 | Goal-completing action |
 | `start_move` / `end_move` | 0 | Administrative bracket |
 | `match` | 0 | Administrative |
-| `uncouple` / `couple_two_units` | 0 | Coupling duration not yet modelled (see Gap 7) |
+| `uncouple` | +120 | From NS `splitDuration` (2 minutes) |
+| `couple_two_units` | +180 | From NS `combineDuration` (3 minutes) |
+| `couple_two_units_same_train` | +180 | From NS `combineDuration` (3 minutes) |
 
 ---
 
@@ -260,10 +265,9 @@
 
 ---
 
-### Gap 7 — Multi-unit coupling duration not modelled
-**What's missing:** Coupling uses an instantaneous action. True coupling duration, driver/staff resources, and temporal overlap are not modelled.
-**Impact:** The planner can couple trains in zero time regardless of scenario constraints.
-**Fix:** Treat duration and staff as a later temporal/resource-planning variant.
+### Gap 7 — Multi-unit coupling duration (partially resolved in v0.8)
+**Status:** Coupling costs are now modelled: `uncouple` = 120s, `couple_two_units` / `couple_two_units_same_train` = 180s (hardcoded from NS scenario data). Driver/staff resources and temporal overlap are still not modelled.
+**Remaining:** Treat staff resources and per-type duration variation as a later temporal/resource-planning variant.
 
 ---
 
