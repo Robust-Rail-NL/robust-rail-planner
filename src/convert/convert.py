@@ -248,6 +248,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     active_su        = problem.add_fluent(up.Fluent("active_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
     contains_su      = problem.add_fluent(up.Fluent("contains_su", up.BoolType(), shunting_unit=shunting_unit_type, unit=train_unit_type), default_initial_value=False)
     at_su            = problem.add_fluent(up.Fluent("at_su", up.BoolType(), shunting_unit=shunting_unit_type, trackpart=track_part_type), default_initial_value=False)
+    single_unit_su   = problem.add_fluent(up.Fluent("single_unit_su", up.BoolType(), shunting_unit=shunting_unit_type, unit=train_unit_type), default_initial_value=False)
+    request_su_for_request = problem.add_fluent(up.Fluent("request_su_for_request", up.BoolType(), shunting_unit=shunting_unit_type, request=departure_request_type), default_initial_value=False)
     su_length        = problem.add_fluent(up.Fluent("su_length", up.RealType(), shunting_unit=shunting_unit_type), default_initial_value=up.Real(Fraction(0)))
     su_aside_distance = problem.add_fluent(up.Fluent("su_aside_distance", up.RealType(), shunting_unit=shunting_unit_type), default_initial_value=up.Real(Fraction(0)))
     allowed_to_move_su = problem.add_fluent(up.Fluent("allowed_to_move_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
@@ -436,6 +438,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         right_su=shunting_unit_type,
         unit_a=train_unit_type,
         unit_b=train_unit_type,
+        composition=arrival_composition_type,
         track=track_part_type,
     )
     # Splitting turns one active two-unit composition into two active single-unit shunting units.
@@ -446,15 +449,23 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     split_two_unit_su.add_precondition(contains_su(split_two_unit_su.parent_su, split_two_unit_su.unit_b))
     split_two_unit_su.add_precondition(contains_su(split_two_unit_su.left_su, split_two_unit_su.unit_a))
     split_two_unit_su.add_precondition(contains_su(split_two_unit_su.right_su, split_two_unit_su.unit_b))
+    split_two_unit_su.add_precondition(single_unit_su(split_two_unit_su.left_su, split_two_unit_su.unit_a))
+    split_two_unit_su.add_precondition(single_unit_su(split_two_unit_su.right_su, split_two_unit_su.unit_b))
+    split_two_unit_su.add_precondition(part_of_composition(split_two_unit_su.unit_a, split_two_unit_su.composition))
+    split_two_unit_su.add_precondition(part_of_composition(split_two_unit_su.unit_b, split_two_unit_su.composition))
+    split_two_unit_su.add_precondition(composition_needs_uncoupling(split_two_unit_su.composition))
     split_two_unit_su.add_precondition(unit_before(split_two_unit_su.unit_a, split_two_unit_su.unit_b))
     split_two_unit_su.add_precondition(at_su(split_two_unit_su.parent_su, split_two_unit_su.track))
     split_two_unit_su.add_effect(active_su(split_two_unit_su.parent_su), False)
     split_two_unit_su.add_effect(active_su(split_two_unit_su.left_su), True)
     split_two_unit_su.add_effect(active_su(split_two_unit_su.right_su), True)
+    split_two_unit_su.add_effect(at_su(split_two_unit_su.parent_su, split_two_unit_su.track), False)
     split_two_unit_su.add_effect(at_su(split_two_unit_su.left_su, split_two_unit_su.track), True)
     split_two_unit_su.add_effect(at_su(split_two_unit_su.right_su, split_two_unit_su.track), True)
     split_two_unit_su.add_effect(available(split_two_unit_su.unit_a), True)
     split_two_unit_su.add_effect(available(split_two_unit_su.unit_b), True)
+    split_two_unit_su.add_effect(part_of_composition(split_two_unit_su.unit_a, split_two_unit_su.composition), False)
+    split_two_unit_su.add_effect(part_of_composition(split_two_unit_su.unit_b, split_two_unit_su.composition), False)
     problem.add_action(split_two_unit_su)
 
     if explicit_coupling:
@@ -527,6 +538,50 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         couple_two_units_same_train.add_effect(physically_coupled(couple_two_units_same_train.unit_a, couple_two_units_same_train.unit_b), True)
         couple_two_units_same_train.add_effect(request_assembled(couple_two_units_same_train.request), True)
         problem.add_action(couple_two_units_same_train)
+
+        couple_two_sus = up.InstantaneousAction(
+            "couple_two_sus",
+            su_a=shunting_unit_type,
+            su_b=shunting_unit_type,
+            su_result=shunting_unit_type,
+            unit_a=train_unit_type,
+            unit_b=train_unit_type,
+            track=track_part_type,
+            slot_a=request_slot_type,
+            slot_b=request_slot_type,
+            request=departure_request_type,
+        )
+        # Coupling consumes two active shunting units and activates the assembled request unit.
+        couple_two_sus.add_precondition(active_su(couple_two_sus.su_a))
+        couple_two_sus.add_precondition(active_su(couple_two_sus.su_b))
+        couple_two_sus.add_precondition(up.Not(active_su(couple_two_sus.su_result)))
+        couple_two_sus.add_precondition(up.Not(up.Equals(couple_two_sus.su_a, couple_two_sus.su_b)))
+        couple_two_sus.add_precondition(contains_su(couple_two_sus.su_a, couple_two_sus.unit_a))
+        couple_two_sus.add_precondition(contains_su(couple_two_sus.su_b, couple_two_sus.unit_b))
+        couple_two_sus.add_precondition(single_unit_su(couple_two_sus.su_a, couple_two_sus.unit_a))
+        couple_two_sus.add_precondition(single_unit_su(couple_two_sus.su_b, couple_two_sus.unit_b))
+        couple_two_sus.add_precondition(request_su_for_request(couple_two_sus.su_result, couple_two_sus.request))
+        couple_two_sus.add_precondition(at_su(couple_two_sus.su_a, couple_two_sus.track))
+        couple_two_sus.add_precondition(at_su(couple_two_sus.su_b, couple_two_sus.track))
+        couple_two_sus.add_precondition(coupling_allowed(couple_two_sus.track))
+        couple_two_sus.add_precondition(matched(couple_two_sus.unit_a, couple_two_sus.slot_a))
+        couple_two_sus.add_precondition(matched(couple_two_sus.unit_b, couple_two_sus.slot_b))
+        couple_two_sus.add_precondition(slot_for_request(couple_two_sus.slot_a, couple_two_sus.request))
+        couple_two_sus.add_precondition(slot_for_request(couple_two_sus.slot_b, couple_two_sus.request))
+        couple_two_sus.add_precondition(slot_before(couple_two_sus.slot_a, couple_two_sus.slot_b))
+        couple_two_sus.add_effect(active_su(couple_two_sus.su_a), False)
+        couple_two_sus.add_effect(active_su(couple_two_sus.su_b), False)
+        couple_two_sus.add_effect(active_su(couple_two_sus.su_result), True)
+        couple_two_sus.add_effect(at_su(couple_two_sus.su_result, couple_two_sus.track), True)
+        couple_two_sus.add_effect(contains_su(couple_two_sus.su_result, couple_two_sus.unit_a), True)
+        couple_two_sus.add_effect(contains_su(couple_two_sus.su_result, couple_two_sus.unit_b), True)
+        couple_two_sus.add_effect(slot_coupled(couple_two_sus.slot_a), True)
+        couple_two_sus.add_effect(slot_coupled(couple_two_sus.slot_b), True)
+        couple_two_sus.add_effect(coupled_to_request(couple_two_sus.unit_a, couple_two_sus.request), True)
+        couple_two_sus.add_effect(coupled_to_request(couple_two_sus.unit_b, couple_two_sus.request), True)
+        couple_two_sus.add_effect(physically_coupled(couple_two_sus.unit_a, couple_two_sus.unit_b), True)
+        couple_two_sus.add_effect(request_assembled(couple_two_sus.request), True)
+        problem.add_action(couple_two_sus)
 
     # Matching assigns exactly one compatible available unit to an open request slot.
     match = up.InstantaneousAction("match", unit=train_unit_type, slot=request_slot_type)
@@ -704,9 +759,10 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             problem.set_initial_value(unit_in_train(unit_obj, physical_train), True)
             problem.set_initial_value(contains_su(shunting_unit, unit_obj), True)
             # Pre-create an inactive single-unit shunting unit for later split actions.
-            single_unit_su = problem.add_object("su_unit" + unit["id"], shunting_unit_type)
-            problem.set_initial_value(contains_su(single_unit_su, unit_obj), True)
-            problem.set_initial_value(su_length(single_unit_su), up.Real(_train_unit_length(unit)))
+            single_unit_su_obj = problem.add_object("su_unit" + unit["id"], shunting_unit_type)
+            problem.set_initial_value(contains_su(single_unit_su_obj, unit_obj), True)
+            problem.set_initial_value(single_unit_su(single_unit_su_obj, unit_obj), True)
+            problem.set_initial_value(su_length(single_unit_su_obj), up.Real(_train_unit_length(unit)))
             if composition_obj is None:
                 problem.set_initial_value(available(unit_obj), True)
             else:
@@ -755,9 +811,11 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 # Slot order is only used by explicit two-unit coupling.
                 problem.set_initial_value(slot_before(slot_objects[0], slot_objects[1]), True)
                 # Request shunting units are inactive until a coupling action assembles them.
-                problem.add_object("su_" + request_name, shunting_unit_type)
+                request_su = problem.add_object("su_" + request_name, shunting_unit_type)
+                problem.set_initial_value(request_su_for_request(request_su, request_obj), True)
                 if explicit_coupling:
                     problem.add_goal(request_assembled(request_obj))
+                    problem.add_goal(active_su(request_su))
 
     ### Write to files
     if output_file is None:
