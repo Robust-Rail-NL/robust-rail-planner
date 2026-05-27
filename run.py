@@ -36,6 +36,23 @@ PLANNER_BACKEND_CHOICES = {
     "SymbolicPlanners.jl A* HAdd": "symbolic",
 }
 
+ACTION_COSTS = {
+    "move_aside_empty": 300,
+    "move_aside_occupied": 300,
+    "move_bside_empty": 300,
+    "move_bside_occupied": 300,
+    "wait": 300,
+    "uncouple": 120,
+    "couple_two_units": 180,
+    "couple_two_units_same_train": 180,
+}
+
+
+def _action_cost(step):
+    name = step.split("(")[0].strip().lower()
+    return ACTION_COSTS.get(name, 0)
+
+
 STYLE = Style([
     ("qmark", "fg:#00aabb bold"),
     ("question", "bold"),
@@ -177,10 +194,14 @@ def run_planner(location, scenario_name, run_num, planner_backend="enhsp"):
     if os.path.exists(plan_file):
         print(f"\n  Plan written to {os.path.relpath(plan_file, REPO_ROOT)}")
         with open(plan_file) as f:
-            steps = f.read().strip().splitlines()
+            steps = [l for l in f.read().strip().splitlines() if l.strip()]
         print(f"  Plan length: {len(steps)} steps")
+        t = 0
         for i, step in enumerate(steps, 1):
-            print(f"    {i:2}. {step}")
+            cost = _action_cost(step)
+            t += cost
+            suffix = f"  [t={t}s]" if cost > 0 else ""
+            print(f"    {i:2}. {step}{suffix}")
     return True
 
 
