@@ -198,6 +198,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     departure_request_type = up.UserType("departurerequest")
     request_slot_type = up.UserType("requestslot")
     arrival_composition_type = up.UserType("arrivalcomposition")
+    shunting_unit_type = up.UserType("shuntingunit")
 
     # free           = problem.add_fluent(up.Fluent("free",           up.BoolType(), trackpart=track_part_type),                          default_initial_value=True)
     arrival        = problem.add_fluent(up.Fluent("arrival",        up.IntType(),  train=arrival_train_type))
@@ -237,7 +238,12 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     unit_in_train = problem.add_fluent(up.Fluent("unit_in_train", up.BoolType(), unit=train_unit_type, train=arrival_train_type), default_initial_value=False)
     unit_before = problem.add_fluent(up.Fluent("unit_before", up.BoolType(), first=train_unit_type, second=train_unit_type), default_initial_value=False)
     coupling_allowed = problem.add_fluent(up.Fluent("coupling_allowed", up.BoolType(), trackpart=track_part_type), default_initial_value=False)
-    
+
+    # Shunting units represent movable train compositions created by split/couple actions.
+    active_su        = problem.add_fluent(up.Fluent("active_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
+    contains_su      = problem.add_fluent(up.Fluent("contains_su", up.BoolType(), shunting_unit=shunting_unit_type, unit=train_unit_type), default_initial_value=False)
+    at_su            = problem.add_fluent(up.Fluent("at_su", up.BoolType(), shunting_unit=shunting_unit_type, trackpart=track_part_type), default_initial_value=False)
+
 
     startMove = up.InstantaneousAction('start_move', t=arrival_train_type)
     startMove.add_precondition(up.Not(allowed_to_move(startMove.t)))
@@ -588,13 +594,14 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     for source, index, train in all_trains_with_source(scenario_object):
         # Matching-only runs still need physical train objects for coupling checks.
+        preferred_track_keys = ["firstParkingTrackPart", "entryTrackPart"] if source == "inStanding" else ["entryTrackPart", "firstParkingTrackPart"]
+        initial_track_id = _train_initial_track_id(train, preferred_track_keys)
         physical_train = train_obj_by_key.get((source, index))
         if physical_train is None:
             # Parking mode creates trains earlier; matching-only mode creates them here.
             physical_train = problem.add_object(_train_object_name(source, index, train), arrival_train_type)
             train_obj_by_key[(source, index)] = physical_train
             problem.set_initial_value(arrival(physical_train), up.Int(int(train.get("arrival", 0))))
-            initial_track_id = _train_initial_track_id(train, ["entryTrackPart", "firstParkingTrackPart"])
             if initial_track_id in id_to_track_part:
                 train_total_length = _train_total_length(train)
                 previous_length_on_track = track_occupancies.get(initial_track_id, Fraction(0))
@@ -602,6 +609,13 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 problem.set_initial_value(train_length(physical_train), up.Real(train_total_length))
                 problem.set_initial_value(aside_distance(physical_train), up.Real(previous_length_on_track))
                 track_occupancies[initial_track_id] = previous_length_on_track + train_total_length
+
+        # Initial shunting units mirror each arriving train before any split/couple action.
+        shunting_unit = problem.add_object("su_" + _train_object_name(source, index, train), shunting_unit_type)
+        problem.set_initial_value(active_su(shunting_unit), True)
+        if initial_track_id in id_to_track_part:
+            problem.set_initial_value(at_su(shunting_unit, id_to_track_part[initial_track_id]), True)
+
         train_members = train["members"]
         composition_obj = None
         if explicit_uncoupling and len(train_members) > 1:
@@ -614,6 +628,10 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             id_to_unit[unit["id"]] = unit_obj
             unit_type_by_id[unit["id"]] = train_unit_type_key(unit)
             problem.set_initial_value(unit_in_train(unit_obj, physical_train), True)
+            problem.set_initial_value(contains_su(shunting_unit, unit_obj), True)
+            # Pre-create an inactive single-unit shunting unit for later split actions.
+            single_unit_su = problem.add_object("su_unit" + unit["id"], shunting_unit_type)
+            problem.set_initial_value(contains_su(single_unit_su, unit_obj), True)
             if composition_obj is None:
                 problem.set_initial_value(available(unit_obj), True)
             else:
