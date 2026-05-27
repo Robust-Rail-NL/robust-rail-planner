@@ -211,6 +211,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     parking_allowed = problem.add_fluent(up.Fluent("parking_allowed", up.BoolType(), trackpart=track_part_type),                         default_initial_value=False)
     parked         = problem.add_fluent(up.Fluent("parked",         up.BoolType(), train=arrival_train_type),                           default_initial_value=False)
     departed       = problem.add_fluent(up.Fluent("departed",       up.BoolType(), train=arrival_train_type),                           default_initial_value=False)
+    locked_train   = problem.add_fluent(up.Fluent("locked_train",   up.BoolType(), train=arrival_train_type),                           default_initial_value=False)
     # connected      = problem.add_fluent(up.Fluent("connected",      up.BoolType(), from_=track_part_type, to=track_part_type),           default_initial_value=False)
     connected_aside = problem.add_fluent(up.Fluent("connected_aside", up.BoolType(), from_=track_part_type, to=track_part_type),           default_initial_value=False)
     connected_bside = problem.add_fluent(up.Fluent("connected_bside", up.BoolType(), from_=track_part_type, to=track_part_type),           default_initial_value=False)
@@ -248,6 +249,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     active_su        = problem.add_fluent(up.Fluent("active_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
     contains_su      = problem.add_fluent(up.Fluent("contains_su", up.BoolType(), shunting_unit=shunting_unit_type, unit=train_unit_type), default_initial_value=False)
     at_su            = problem.add_fluent(up.Fluent("at_su", up.BoolType(), shunting_unit=shunting_unit_type, trackpart=track_part_type), default_initial_value=False)
+    departed_su      = problem.add_fluent(up.Fluent("departed_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
     single_unit_su   = problem.add_fluent(up.Fluent("single_unit_su", up.BoolType(), shunting_unit=shunting_unit_type, unit=train_unit_type), default_initial_value=False)
     request_su_for_request = problem.add_fluent(up.Fluent("request_su_for_request", up.BoolType(), shunting_unit=shunting_unit_type, request=departure_request_type), default_initial_value=False)
     su_length        = problem.add_fluent(up.Fluent("su_length", up.RealType(), shunting_unit=shunting_unit_type), default_initial_value=up.Real(Fraction(0)))
@@ -257,6 +259,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     startMove = up.InstantaneousAction('start_move', t=arrival_train_type)
     startMove.add_precondition(up.Not(allowed_to_move(startMove.t)))
+    startMove.add_precondition(up.Not(locked_train(startMove.t)))
     startMove.add_precondition(concurrent_movements < max_concurrent_movements)
     startMove.add_effect(allowed_to_move(startMove.t), True)
     startMove.add_effect(concurrent_movements, concurrent_movements + 1)
@@ -289,6 +292,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     move_aside_empty = up.InstantaneousAction('move_aside_empty', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
     move_aside_empty.add_precondition(allowed_to_move(move_aside_empty.t))
+    move_aside_empty.add_precondition(up.Not(locked_train(move_aside_empty.t)))
     move_aside_empty.add_precondition(at(move_aside_empty.t, move_aside_empty.l_from))
     move_aside_empty.add_precondition(connected_aside(move_aside_empty.l_from, move_aside_empty.l_to))
     move_aside_empty.add_precondition(up.Not(parked(move_aside_empty.t)))
@@ -327,6 +331,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     move_aside_occupied = up.InstantaneousAction('move_aside_occupied', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
     move_aside_occupied.add_precondition(allowed_to_move(move_aside_occupied.t))
+    move_aside_occupied.add_precondition(up.Not(locked_train(move_aside_occupied.t)))
     move_aside_occupied.add_precondition(at(move_aside_occupied.t, move_aside_occupied.l_from))
     move_aside_occupied.add_precondition(connected_aside(move_aside_occupied.l_from, move_aside_occupied.l_to))
     move_aside_occupied.add_precondition(up.Not(parked(move_aside_occupied.t)))
@@ -363,6 +368,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     move_bside_empty = up.InstantaneousAction('move_bside_empty', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
     move_bside_empty.add_precondition(allowed_to_move(move_bside_empty.t))
+    move_bside_empty.add_precondition(up.Not(locked_train(move_bside_empty.t)))
     move_bside_empty.add_precondition(at(move_bside_empty.t, move_bside_empty.l_from))
     move_bside_empty.add_precondition(connected_bside(move_bside_empty.l_from, move_bside_empty.l_to))
     move_bside_empty.add_precondition(up.Not(parked(move_bside_empty.t)))
@@ -400,6 +406,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     move_bside_occupied = up.InstantaneousAction('move_bside_occupied', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
     move_bside_occupied.add_precondition(allowed_to_move(move_bside_occupied.t))
+    move_bside_occupied.add_precondition(up.Not(locked_train(move_bside_occupied.t)))
     move_bside_occupied.add_precondition(at(move_bside_occupied.t, move_bside_occupied.l_from))
     move_bside_occupied.add_precondition(connected_bside(move_bside_occupied.l_from, move_bside_occupied.l_to))
     move_bside_occupied.add_precondition(up.Not(parked(move_bside_occupied.t)))
@@ -435,6 +442,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(move_bside_occupied_su)
 
     depart_aside = up.InstantaneousAction('depart_aside', t=arrival_train_type, l=track_part_type)
+    depart_aside.add_precondition(up.Not(locked_train(depart_aside.t)))
     depart_aside.add_precondition(at(depart_aside.t, depart_aside.l))
     depart_aside.add_precondition(departure_exit_a(depart_aside.l))
     depart_aside.add_precondition(aside_distance(depart_aside.t) <= astack_distance(depart_aside.l))
@@ -449,6 +457,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(depart_aside)
 
     depart_bside = up.InstantaneousAction('depart_bside', t=arrival_train_type, l=track_part_type)
+    depart_bside.add_precondition(up.Not(locked_train(depart_bside.t)))
     depart_bside.add_precondition(at(depart_bside.t, depart_bside.l))
     depart_bside.add_precondition(departure_exit_b(depart_bside.l))
     depart_bside.add_precondition(aside_distance(depart_bside.t) >= bstack_distance(depart_bside.l) - train_length(depart_bside.t))
@@ -462,7 +471,42 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     depart_bside.add_effect(allowed_to_move(depart_bside.t), False)
     problem.add_action(depart_bside)
 
+    depart_aside_su = up.InstantaneousAction('depart_aside_su', su=shunting_unit_type, l=track_part_type)
+    # Departure for an assembled shunting unit proves it can move as a physical composition.
+    depart_aside_su.add_precondition(active_su(depart_aside_su.su))
+    depart_aside_su.add_precondition(allowed_to_move_su(depart_aside_su.su))
+    depart_aside_su.add_precondition(at_su(depart_aside_su.su, depart_aside_su.l))
+    depart_aside_su.add_precondition(departure_exit_a(depart_aside_su.l))
+    depart_aside_su.add_precondition(su_aside_distance(depart_aside_su.su) <= astack_distance(depart_aside_su.l))
+    depart_aside_su.add_effect(active_su(depart_aside_su.su), False)
+    depart_aside_su.add_effect(at_su(depart_aside_su.su, depart_aside_su.l), False)
+    depart_aside_su.add_effect(departed_su(depart_aside_su.su), True)
+    depart_aside_su.add_effect(number_of_trains_on_track(depart_aside_su.l), number_of_trains_on_track(depart_aside_su.l) - 1)
+    depart_aside_su.add_effect(su_aside_distance(depart_aside_su.su), 0)
+    depart_aside_su.add_effect(astack_distance(depart_aside_su.l), astack_distance(depart_aside_su.l) + su_length(depart_aside_su.su))
+    depart_aside_su.add_effect(concurrent_movements, concurrent_movements - 1)
+    depart_aside_su.add_effect(allowed_to_move_su(depart_aside_su.su), False)
+    problem.add_action(depart_aside_su)
+
+    depart_bside_su = up.InstantaneousAction('depart_bside_su', su=shunting_unit_type, l=track_part_type)
+    # B-side departure removes the assembled shunting unit from the back of the stack.
+    depart_bside_su.add_precondition(active_su(depart_bside_su.su))
+    depart_bside_su.add_precondition(allowed_to_move_su(depart_bside_su.su))
+    depart_bside_su.add_precondition(at_su(depart_bside_su.su, depart_bside_su.l))
+    depart_bside_su.add_precondition(departure_exit_b(depart_bside_su.l))
+    depart_bside_su.add_precondition(su_aside_distance(depart_bside_su.su) >= bstack_distance(depart_bside_su.l) - su_length(depart_bside_su.su))
+    depart_bside_su.add_effect(active_su(depart_bside_su.su), False)
+    depart_bside_su.add_effect(at_su(depart_bside_su.su, depart_bside_su.l), False)
+    depart_bside_su.add_effect(departed_su(depart_bside_su.su), True)
+    depart_bside_su.add_effect(number_of_trains_on_track(depart_bside_su.l), number_of_trains_on_track(depart_bside_su.l) - 1)
+    depart_bside_su.add_effect(su_aside_distance(depart_bside_su.su), 0)
+    depart_bside_su.add_effect(bstack_distance(depart_bside_su.l), bstack_distance(depart_bside_su.l) - su_length(depart_bside_su.su))
+    depart_bside_su.add_effect(concurrent_movements, concurrent_movements - 1)
+    depart_bside_su.add_effect(allowed_to_move_su(depart_bside_su.su), False)
+    problem.add_action(depart_bside_su)
+
     park = up.InstantaneousAction('park', t=arrival_train_type, l=track_part_type)
+    park.add_precondition(up.Not(locked_train(park.t)))
     park.add_precondition(at(park.t, park.l))
     park.add_precondition(parking_allowed(park.l))
     park.add_effect(parked(park.t), True)
@@ -498,6 +542,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     )
     # Splitting turns one active two-unit composition into two active single-unit shunting units.
     split_two_unit_su.add_precondition(active_su(split_two_unit_su.parent_su))
+    split_two_unit_su.add_precondition(allowed_to_move_su(split_two_unit_su.parent_su))
     split_two_unit_su.add_precondition(up.Not(active_su(split_two_unit_su.left_su)))
     split_two_unit_su.add_precondition(up.Not(active_su(split_two_unit_su.right_su)))
     split_two_unit_su.add_precondition(contains_su(split_two_unit_su.parent_su, split_two_unit_su.unit_a))
@@ -512,6 +557,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     split_two_unit_su.add_precondition(unit_before(split_two_unit_su.unit_a, split_two_unit_su.unit_b))
     split_two_unit_su.add_precondition(at_su(split_two_unit_su.parent_su, split_two_unit_su.track))
     split_two_unit_su.add_effect(active_su(split_two_unit_su.parent_su), False)
+    split_two_unit_su.add_effect(allowed_to_move_su(split_two_unit_su.parent_su), False)
+    split_two_unit_su.add_effect(concurrent_movements, concurrent_movements - 1)
     split_two_unit_su.add_effect(active_su(split_two_unit_su.left_su), True)
     split_two_unit_su.add_effect(active_su(split_two_unit_su.right_su), True)
     split_two_unit_su.add_effect(at_su(split_two_unit_su.parent_su, split_two_unit_su.track), False)
@@ -804,6 +851,10 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 problem.set_initial_value(aside_distance(physical_train), up.Real(previous_length_on_track))
                 track_occupancies[initial_track_id] = previous_length_on_track + train_total_length
 
+        # In explicit coupling mode, the shunting unit is the physical mover for this train.
+        if explicit_coupling:
+            problem.set_initial_value(locked_train(physical_train), True)
+
         # Initial shunting units mirror each arriving train before any split/couple action.
         shunting_unit = problem.add_object("su_" + _train_object_name(source, index, train), shunting_unit_type)
         problem.set_initial_value(active_su(shunting_unit), True)
@@ -883,7 +934,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 problem.set_initial_value(request_su_for_request(request_su, request_obj), True)
                 if explicit_coupling:
                     problem.add_goal(request_assembled(request_obj))
-                    problem.add_goal(active_su(request_su))
+                    problem.add_goal(departed_su(request_su))
 
     ### Write to files
     if output_file is None:
