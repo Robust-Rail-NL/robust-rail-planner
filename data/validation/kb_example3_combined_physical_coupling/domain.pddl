@@ -1,11 +1,12 @@
 (define (domain scenario_solver_example3-domain)
  (:requirements :strips :typing :negative-preconditions :equality :numeric-fluents)
- (:types arrivaltrain trackpart trainunit departurerequest requestslot arrivalcomposition)
+ (:types arrivaltrain trackpart trainunit departurerequest requestslot shuntingunit arrivalcomposition)
  (:predicates 
              (at ?unit - arrivaltrain ?trackpart - trackpart)
              (parking_allowed ?trackpart - trackpart)
              (parked ?train - arrivaltrain)
              (departed ?train - arrivaltrain)
+             (locked_train ?train - arrivaltrain)
              (connected_aside ?from_ - trackpart ?to - trackpart)
              (connected_bside ?from_ - trackpart ?to - trackpart)
              (departure_exit_a ?trackpart - trackpart)
@@ -23,6 +24,13 @@
              (unit_in_train ?unit_0 - trainunit ?train - arrivaltrain)
              (unit_before ?first_0 - trainunit ?second_0 - trainunit)
              (coupling_allowed ?trackpart - trackpart)
+             (active_su ?shunting_unit - shuntingunit)
+             (contains_su ?shunting_unit - shuntingunit ?unit_0 - trainunit)
+             (at_su ?shunting_unit - shuntingunit ?trackpart - trackpart)
+             (departed_su ?shunting_unit - shuntingunit)
+             (single_unit_su ?shunting_unit - shuntingunit ?unit_0 - trainunit)
+             (request_su_for_request ?shunting_unit - shuntingunit ?request - departurerequest)
+             (allowed_to_move_su ?shunting_unit - shuntingunit)
              (part_of_composition ?unit_0 - trainunit ?composition - arrivalcomposition)
              (composition_needs_uncoupling ?composition - arrivalcomposition)
              (slot_coupled ?slot - requestslot)
@@ -42,47 +50,85 @@
              (astack_distance ?trackpart - trackpart)
              (bstack_distance ?trackpart - trackpart)
              (concurrent_movements)
+             (su_length ?shunting_unit - shuntingunit)
+             (su_aside_distance ?shunting_unit - shuntingunit)
  )
  (:action start_move
   :parameters ( ?t - arrivaltrain)
-  :precondition (and (not (allowed_to_move ?t)) (< (concurrent_movements) 1))
+  :precondition (and (not (allowed_to_move ?t)) (not (locked_train ?t)) (< (concurrent_movements) 1))
   :effect (and (allowed_to_move ?t) (assign (concurrent_movements) (+ 1 (concurrent_movements)))))
+ (:action start_move_su
+  :parameters ( ?su - shuntingunit)
+  :precondition (and (active_su ?su) (not (allowed_to_move_su ?su)) (< (concurrent_movements) 1))
+  :effect (and (allowed_to_move_su ?su) (assign (concurrent_movements) (+ 1 (concurrent_movements)))))
  (:action end_move
   :parameters ( ?t - arrivaltrain ?l - trackpart)
   :precondition (and (allowed_to_move ?t) (at ?t ?l) (parking_allowed ?l))
   :effect (and (not (allowed_to_move ?t)) (assign (concurrent_movements) (- (concurrent_movements) 1))))
+ (:action end_move_su
+  :parameters ( ?su - shuntingunit ?l - trackpart)
+  :precondition (and (active_su ?su) (allowed_to_move_su ?su) (at_su ?su ?l) (parking_allowed ?l))
+  :effect (and (not (allowed_to_move_su ?su)) (assign (concurrent_movements) (- (concurrent_movements) 1))))
  (:action move_aside_empty
   :parameters ( ?t - arrivaltrain ?l_from - trackpart ?l_to - trackpart)
-  :precondition (and (allowed_to_move ?t) (at ?t ?l_from) (connected_aside ?l_from ?l_to) (not (parked ?t)) (<= (aside_distance ?t) (astack_distance ?l_from)) (= (number_of_trains_on_track ?l_to) 0) (<= (train_length ?t) (track_length ?l_to)))
+  :precondition (and (allowed_to_move ?t) (not (locked_train ?t)) (at ?t ?l_from) (connected_aside ?l_from ?l_to) (not (parked ?t)) (<= (aside_distance ?t) (astack_distance ?l_from)) (= (number_of_trains_on_track ?l_to) 0) (<= (train_length ?t) (track_length ?l_to)))
   :effect (and (assign (number_of_trains_on_track ?l_from) (- (number_of_trains_on_track ?l_from) 1)) (assign (number_of_trains_on_track ?l_to) 1) (assign (aside_distance ?t) 0) (assign (astack_distance ?l_from) (+ (train_length ?t) (astack_distance ?l_from))) (assign (astack_distance ?l_to) 0) (assign (bstack_distance ?l_to) (train_length ?t)) (at ?t ?l_to) (not (at ?t ?l_from))))
+ (:action move_aside_empty_su
+  :parameters ( ?su - shuntingunit ?l_from - trackpart ?l_to - trackpart)
+  :precondition (and (active_su ?su) (allowed_to_move_su ?su) (at_su ?su ?l_from) (connected_aside ?l_from ?l_to) (<= (su_aside_distance ?su) (astack_distance ?l_from)) (= (number_of_trains_on_track ?l_to) 0) (<= (su_length ?su) (track_length ?l_to)))
+  :effect (and (assign (number_of_trains_on_track ?l_from) (- (number_of_trains_on_track ?l_from) 1)) (assign (number_of_trains_on_track ?l_to) 1) (assign (su_aside_distance ?su) 0) (assign (astack_distance ?l_from) (+ (su_length ?su) (astack_distance ?l_from))) (assign (astack_distance ?l_to) 0) (assign (bstack_distance ?l_to) (su_length ?su)) (at_su ?su ?l_to) (not (at_su ?su ?l_from))))
  (:action move_aside_occupied
   :parameters ( ?t - arrivaltrain ?l_from - trackpart ?l_to - trackpart)
-  :precondition (and (allowed_to_move ?t) (at ?t ?l_from) (connected_aside ?l_from ?l_to) (not (parked ?t)) (<= (aside_distance ?t) (astack_distance ?l_from)) (< 0 (number_of_trains_on_track ?l_to)) (<= (train_length ?t) (- (track_length ?l_to) (bstack_distance ?l_to))))
+  :precondition (and (allowed_to_move ?t) (not (locked_train ?t)) (at ?t ?l_from) (connected_aside ?l_from ?l_to) (not (parked ?t)) (<= (aside_distance ?t) (astack_distance ?l_from)) (< 0 (number_of_trains_on_track ?l_to)) (<= (train_length ?t) (- (track_length ?l_to) (bstack_distance ?l_to))))
   :effect (and (assign (number_of_trains_on_track ?l_from) (- (number_of_trains_on_track ?l_from) 1)) (assign (number_of_trains_on_track ?l_to) (+ 1 (number_of_trains_on_track ?l_to))) (assign (aside_distance ?t) (bstack_distance ?l_to)) (assign (astack_distance ?l_from) (+ (train_length ?t) (astack_distance ?l_from))) (assign (bstack_distance ?l_to) (+ (train_length ?t) (bstack_distance ?l_to))) (at ?t ?l_to) (not (at ?t ?l_from))))
+ (:action move_aside_occupied_su
+  :parameters ( ?su - shuntingunit ?l_from - trackpart ?l_to - trackpart)
+  :precondition (and (active_su ?su) (allowed_to_move_su ?su) (at_su ?su ?l_from) (connected_aside ?l_from ?l_to) (<= (su_aside_distance ?su) (astack_distance ?l_from)) (< 0 (number_of_trains_on_track ?l_to)) (<= (su_length ?su) (- (track_length ?l_to) (bstack_distance ?l_to))))
+  :effect (and (assign (number_of_trains_on_track ?l_from) (- (number_of_trains_on_track ?l_from) 1)) (assign (number_of_trains_on_track ?l_to) (+ 1 (number_of_trains_on_track ?l_to))) (assign (su_aside_distance ?su) (bstack_distance ?l_to)) (assign (astack_distance ?l_from) (+ (su_length ?su) (astack_distance ?l_from))) (assign (bstack_distance ?l_to) (+ (su_length ?su) (bstack_distance ?l_to))) (at_su ?su ?l_to) (not (at_su ?su ?l_from))))
  (:action move_bside_empty
   :parameters ( ?t - arrivaltrain ?l_from - trackpart ?l_to - trackpart)
-  :precondition (and (allowed_to_move ?t) (at ?t ?l_from) (connected_bside ?l_from ?l_to) (not (parked ?t)) (<= (- (bstack_distance ?l_from) (train_length ?t)) (aside_distance ?t)) (= (number_of_trains_on_track ?l_to) 0) (<= (train_length ?t) (track_length ?l_to)))
+  :precondition (and (allowed_to_move ?t) (not (locked_train ?t)) (at ?t ?l_from) (connected_bside ?l_from ?l_to) (not (parked ?t)) (<= (- (bstack_distance ?l_from) (train_length ?t)) (aside_distance ?t)) (= (number_of_trains_on_track ?l_to) 0) (<= (train_length ?t) (track_length ?l_to)))
   :effect (and (assign (number_of_trains_on_track ?l_from) (- (number_of_trains_on_track ?l_from) 1)) (assign (number_of_trains_on_track ?l_to) 1) (assign (aside_distance ?t) 0) (assign (bstack_distance ?l_from) (- (bstack_distance ?l_from) (train_length ?t))) (assign (astack_distance ?l_to) 0) (assign (bstack_distance ?l_to) (train_length ?t)) (at ?t ?l_to) (not (at ?t ?l_from))))
+ (:action move_bside_empty_su
+  :parameters ( ?su - shuntingunit ?l_from - trackpart ?l_to - trackpart)
+  :precondition (and (active_su ?su) (allowed_to_move_su ?su) (at_su ?su ?l_from) (connected_bside ?l_from ?l_to) (<= (- (bstack_distance ?l_from) (su_length ?su)) (su_aside_distance ?su)) (= (number_of_trains_on_track ?l_to) 0) (<= (su_length ?su) (track_length ?l_to)))
+  :effect (and (assign (number_of_trains_on_track ?l_from) (- (number_of_trains_on_track ?l_from) 1)) (assign (number_of_trains_on_track ?l_to) 1) (assign (su_aside_distance ?su) 0) (assign (bstack_distance ?l_from) (- (bstack_distance ?l_from) (su_length ?su))) (assign (astack_distance ?l_to) 0) (assign (bstack_distance ?l_to) (su_length ?su)) (at_su ?su ?l_to) (not (at_su ?su ?l_from))))
  (:action move_bside_occupied
   :parameters ( ?t - arrivaltrain ?l_from - trackpart ?l_to - trackpart)
-  :precondition (and (allowed_to_move ?t) (at ?t ?l_from) (connected_bside ?l_from ?l_to) (not (parked ?t)) (<= (- (bstack_distance ?l_from) (train_length ?t)) (aside_distance ?t)) (< 0 (number_of_trains_on_track ?l_to)) (<= (train_length ?t) (astack_distance ?l_to)))
+  :precondition (and (allowed_to_move ?t) (not (locked_train ?t)) (at ?t ?l_from) (connected_bside ?l_from ?l_to) (not (parked ?t)) (<= (- (bstack_distance ?l_from) (train_length ?t)) (aside_distance ?t)) (< 0 (number_of_trains_on_track ?l_to)) (<= (train_length ?t) (astack_distance ?l_to)))
   :effect (and (assign (number_of_trains_on_track ?l_from) (- (number_of_trains_on_track ?l_from) 1)) (assign (number_of_trains_on_track ?l_to) (+ 1 (number_of_trains_on_track ?l_to))) (assign (aside_distance ?t) (- (astack_distance ?l_to) (train_length ?t))) (assign (bstack_distance ?l_from) (- (bstack_distance ?l_from) (train_length ?t))) (assign (astack_distance ?l_to) (- (astack_distance ?l_to) (train_length ?t))) (at ?t ?l_to) (not (at ?t ?l_from))))
+ (:action move_bside_occupied_su
+  :parameters ( ?su - shuntingunit ?l_from - trackpart ?l_to - trackpart)
+  :precondition (and (active_su ?su) (allowed_to_move_su ?su) (at_su ?su ?l_from) (connected_bside ?l_from ?l_to) (<= (- (bstack_distance ?l_from) (su_length ?su)) (su_aside_distance ?su)) (< 0 (number_of_trains_on_track ?l_to)) (<= (su_length ?su) (astack_distance ?l_to)))
+  :effect (and (assign (number_of_trains_on_track ?l_from) (- (number_of_trains_on_track ?l_from) 1)) (assign (number_of_trains_on_track ?l_to) (+ 1 (number_of_trains_on_track ?l_to))) (assign (su_aside_distance ?su) (- (astack_distance ?l_to) (su_length ?su))) (assign (bstack_distance ?l_from) (- (bstack_distance ?l_from) (su_length ?su))) (assign (astack_distance ?l_to) (- (astack_distance ?l_to) (su_length ?su))) (at_su ?su ?l_to) (not (at_su ?su ?l_from))))
  (:action depart_aside
   :parameters ( ?t - arrivaltrain ?l - trackpart)
-  :precondition (and (at ?t ?l) (departure_exit_a ?l) (<= (aside_distance ?t) (astack_distance ?l)))
+  :precondition (and (not (locked_train ?t)) (at ?t ?l) (departure_exit_a ?l) (<= (aside_distance ?t) (astack_distance ?l)))
   :effect (and (not (at ?t ?l)) (departed ?t) (assign (num_of_departed_trains) (+ 1 (num_of_departed_trains))) (assign (number_of_trains_on_track ?l) (- (number_of_trains_on_track ?l) 1)) (assign (aside_distance ?t) 0) (assign (astack_distance ?l) (+ (train_length ?t) (astack_distance ?l))) (assign (concurrent_movements) (- (concurrent_movements) 1)) (not (allowed_to_move ?t))))
  (:action depart_bside
   :parameters ( ?t - arrivaltrain ?l - trackpart)
-  :precondition (and (at ?t ?l) (departure_exit_b ?l) (<= (- (bstack_distance ?l) (train_length ?t)) (aside_distance ?t)))
+  :precondition (and (not (locked_train ?t)) (at ?t ?l) (departure_exit_b ?l) (<= (- (bstack_distance ?l) (train_length ?t)) (aside_distance ?t)))
   :effect (and (not (at ?t ?l)) (departed ?t) (assign (num_of_departed_trains) (+ 1 (num_of_departed_trains))) (assign (number_of_trains_on_track ?l) (- (number_of_trains_on_track ?l) 1)) (assign (aside_distance ?t) 0) (assign (bstack_distance ?l) (- (bstack_distance ?l) (train_length ?t))) (assign (concurrent_movements) (- (concurrent_movements) 1)) (not (allowed_to_move ?t))))
+ (:action depart_aside_su
+  :parameters ( ?su - shuntingunit ?l - trackpart)
+  :precondition (and (active_su ?su) (allowed_to_move_su ?su) (at_su ?su ?l) (departure_exit_a ?l) (<= (su_aside_distance ?su) (astack_distance ?l)))
+  :effect (and (not (active_su ?su)) (not (at_su ?su ?l)) (departed_su ?su) (assign (number_of_trains_on_track ?l) (- (number_of_trains_on_track ?l) 1)) (assign (su_aside_distance ?su) 0) (assign (astack_distance ?l) (+ (su_length ?su) (astack_distance ?l))) (assign (concurrent_movements) (- (concurrent_movements) 1)) (not (allowed_to_move_su ?su))))
+ (:action depart_bside_su
+  :parameters ( ?su - shuntingunit ?l - trackpart)
+  :precondition (and (active_su ?su) (allowed_to_move_su ?su) (at_su ?su ?l) (departure_exit_b ?l) (<= (- (bstack_distance ?l) (su_length ?su)) (su_aside_distance ?su)))
+  :effect (and (not (active_su ?su)) (not (at_su ?su ?l)) (departed_su ?su) (assign (number_of_trains_on_track ?l) (- (number_of_trains_on_track ?l) 1)) (assign (su_aside_distance ?su) 0) (assign (bstack_distance ?l) (- (bstack_distance ?l) (su_length ?su))) (assign (concurrent_movements) (- (concurrent_movements) 1)) (not (allowed_to_move_su ?su))))
  (:action park
   :parameters ( ?t - arrivaltrain ?l - trackpart)
-  :precondition (and (at ?t ?l) (parking_allowed ?l))
+  :precondition (and (not (locked_train ?t)) (at ?t ?l) (parking_allowed ?l))
   :effect (and (parked ?t) (track_is_parked_at ?l)))
  (:action uncouple
   :parameters ( ?unit_0 - trainunit ?composition - arrivalcomposition)
   :precondition (and (part_of_composition ?unit_0 ?composition) (composition_needs_uncoupling ?composition))
   :effect (and (available ?unit_0) (not (part_of_composition ?unit_0 ?composition))))
+ (:action split_two_unit_su
+  :parameters ( ?parent_su - shuntingunit ?left_su - shuntingunit ?right_su - shuntingunit ?unit_a - trainunit ?unit_b - trainunit ?composition - arrivalcomposition ?track - trackpart)
+  :precondition (and (active_su ?parent_su) (allowed_to_move_su ?parent_su) (not (active_su ?left_su)) (not (active_su ?right_su)) (contains_su ?parent_su ?unit_a) (contains_su ?parent_su ?unit_b) (contains_su ?left_su ?unit_a) (contains_su ?right_su ?unit_b) (single_unit_su ?left_su ?unit_a) (single_unit_su ?right_su ?unit_b) (part_of_composition ?unit_a ?composition) (part_of_composition ?unit_b ?composition) (composition_needs_uncoupling ?composition) (unit_before ?unit_a ?unit_b) (at_su ?parent_su ?track))
+  :effect (and (not (active_su ?parent_su)) (not (allowed_to_move_su ?parent_su)) (assign (concurrent_movements) (- (concurrent_movements) 1)) (active_su ?left_su) (active_su ?right_su) (not (at_su ?parent_su ?track)) (at_su ?left_su ?track) (at_su ?right_su ?track) (assign (su_aside_distance ?left_su) (su_aside_distance ?parent_su)) (assign (su_aside_distance ?right_su) (+ (su_length ?left_su) (su_aside_distance ?parent_su))) (assign (number_of_trains_on_track ?track) (+ 1 (number_of_trains_on_track ?track))) (available ?unit_a) (available ?unit_b) (not (part_of_composition ?unit_a ?composition)) (not (part_of_composition ?unit_b ?composition))))
  (:action couple_two_units
   :parameters ( ?unit_a - trainunit ?unit_b - trainunit ?train_a - arrivaltrain ?train_b - arrivaltrain ?track - trackpart ?slot_a - requestslot ?slot_b - requestslot ?request - departurerequest)
   :precondition (and (matched ?unit_a ?slot_a) (matched ?unit_b ?slot_b) (slot_for_request ?slot_a ?request) (slot_for_request ?slot_b ?request) (slot_before ?slot_a ?slot_b) (not (= ?unit_a ?unit_b)) (unit_in_train ?unit_a ?train_a) (unit_in_train ?unit_b ?train_b) (at ?train_a ?track) (at ?train_b ?track) (coupling_allowed ?track) (< (aside_distance ?train_a) (aside_distance ?train_b)))
@@ -91,6 +137,10 @@
   :parameters ( ?unit_a - trainunit ?unit_b - trainunit ?train - arrivaltrain ?track - trackpart ?slot_a - requestslot ?slot_b - requestslot ?request - departurerequest)
   :precondition (and (matched ?unit_a ?slot_a) (matched ?unit_b ?slot_b) (slot_for_request ?slot_a ?request) (slot_for_request ?slot_b ?request) (slot_before ?slot_a ?slot_b) (not (= ?unit_a ?unit_b)) (unit_in_train ?unit_a ?train) (unit_in_train ?unit_b ?train) (at ?train ?track) (coupling_allowed ?track) (unit_before ?unit_a ?unit_b))
   :effect (and (slot_coupled ?slot_a) (slot_coupled ?slot_b) (coupled_to_request ?unit_a ?request) (coupled_to_request ?unit_b ?request) (physically_coupled ?unit_a ?unit_b) (request_assembled ?request)))
+ (:action couple_two_sus
+  :parameters ( ?su_a - shuntingunit ?su_b - shuntingunit ?su_result - shuntingunit ?unit_a - trainunit ?unit_b - trainunit ?track - trackpart ?slot_a - requestslot ?slot_b - requestslot ?request - departurerequest)
+  :precondition (and (active_su ?su_a) (active_su ?su_b) (not (active_su ?su_result)) (not (= ?su_a ?su_b)) (contains_su ?su_a ?unit_a) (contains_su ?su_b ?unit_b) (single_unit_su ?su_a ?unit_a) (single_unit_su ?su_b ?unit_b) (request_su_for_request ?su_result ?request) (at_su ?su_a ?track) (at_su ?su_b ?track) (coupling_allowed ?track) (= (su_aside_distance ?su_b) (+ (su_length ?su_a) (su_aside_distance ?su_a))) (matched ?unit_a ?slot_a) (matched ?unit_b ?slot_b) (slot_for_request ?slot_a ?request) (slot_for_request ?slot_b ?request) (slot_before ?slot_a ?slot_b))
+  :effect (and (not (active_su ?su_a)) (not (active_su ?su_b)) (active_su ?su_result) (not (at_su ?su_a ?track)) (not (at_su ?su_b ?track)) (at_su ?su_result ?track) (assign (su_aside_distance ?su_result) (su_aside_distance ?su_a)) (assign (su_length ?su_result) (+ (su_length ?su_b) (su_length ?su_a))) (assign (number_of_trains_on_track ?track) (- (number_of_trains_on_track ?track) 1)) (contains_su ?su_result ?unit_a) (contains_su ?su_result ?unit_b) (slot_coupled ?slot_a) (slot_coupled ?slot_b) (coupled_to_request ?unit_a ?request) (coupled_to_request ?unit_b ?request) (physically_coupled ?unit_a ?unit_b) (request_assembled ?request)))
  (:action match
   :parameters ( ?unit_0 - trainunit ?slot - requestslot)
   :precondition (and (available ?unit_0) (slot_open ?slot) (compatible ?unit_0 ?slot))
