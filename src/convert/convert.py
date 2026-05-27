@@ -260,6 +260,14 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     startMove.add_effect(concurrent_movements, concurrent_movements + 1)
     problem.add_action(startMove)
 
+    startMoveSu = up.InstantaneousAction('start_move_su', su=shunting_unit_type)
+    startMoveSu.add_precondition(active_su(startMoveSu.su))
+    startMoveSu.add_precondition(up.Not(allowed_to_move_su(startMoveSu.su)))
+    startMoveSu.add_precondition(concurrent_movements < max_concurrent_movements)
+    startMoveSu.add_effect(allowed_to_move_su(startMoveSu.su), True)
+    startMoveSu.add_effect(concurrent_movements, concurrent_movements + 1)
+    problem.add_action(startMoveSu)
+
     endMove = up.InstantaneousAction('end_move', t=arrival_train_type, l=track_part_type)
     endMove.add_precondition(allowed_to_move(endMove.t))
     endMove.add_precondition(at(endMove.t, endMove.l))
@@ -267,6 +275,15 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     endMove.add_effect(allowed_to_move(endMove.t), False)
     endMove.add_effect(concurrent_movements, concurrent_movements - 1)
     problem.add_action(endMove)
+
+    endMoveSu = up.InstantaneousAction('end_move_su', su=shunting_unit_type, l=track_part_type)
+    endMoveSu.add_precondition(active_su(endMoveSu.su))
+    endMoveSu.add_precondition(allowed_to_move_su(endMoveSu.su))
+    endMoveSu.add_precondition(at_su(endMoveSu.su, endMoveSu.l))
+    endMoveSu.add_precondition(parking_allowed(endMoveSu.l))
+    endMoveSu.add_effect(allowed_to_move_su(endMoveSu.su), False)
+    endMoveSu.add_effect(concurrent_movements, concurrent_movements - 1)
+    problem.add_action(endMoveSu)
 
     move_aside_empty = up.InstantaneousAction('move_aside_empty', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
     move_aside_empty.add_precondition(allowed_to_move(move_aside_empty.t))
