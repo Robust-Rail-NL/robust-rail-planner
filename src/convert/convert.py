@@ -401,10 +401,13 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         part_of_composition = problem.add_fluent(up.Fluent("part_of_composition", up.BoolType(), unit=train_unit_type, composition=arrival_composition_type), default_initial_value=False)
         composition_needs_uncoupling = problem.add_fluent(up.Fluent("composition_needs_uncoupling", up.BoolType(), composition=arrival_composition_type), default_initial_value=False)
 
-        uncouple = up.InstantaneousAction("uncouple", unit=train_unit_type, composition=arrival_composition_type)
-        # Preconditions: the unit belongs to a composition that still needs splitting.
+        uncouple = up.InstantaneousAction("uncouple", unit=train_unit_type, composition=arrival_composition_type, train=arrival_train_type)
+        # Preconditions: the unit belongs to a composition that still needs splitting,
+        # and the train must be physically present in the yard.
         uncouple.add_precondition(part_of_composition(uncouple.unit, uncouple.composition))
         uncouple.add_precondition(composition_needs_uncoupling(uncouple.composition))
+        uncouple.add_precondition(unit_in_train(uncouple.unit, uncouple.train))
+        uncouple.add_precondition(has_arrived(uncouple.train))
         # Effects: the unit becomes independently matchable and is removed from that composition.
         uncouple.add_effect(available(uncouple.unit), True)
         uncouple.add_effect(part_of_composition(uncouple.unit, uncouple.composition), False)
@@ -485,11 +488,14 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         problem.add_action(couple_two_units_same_train)
 
     # Matching assigns exactly one compatible available unit to an open request slot.
-    match = up.InstantaneousAction("match", unit=train_unit_type, slot=request_slot_type)
-    # Preconditions: the unit is unused, the slot is empty, and the unit type fits the slot.
+    match = up.InstantaneousAction("match", unit=train_unit_type, slot=request_slot_type, train=arrival_train_type)
+    # Preconditions: the unit is unused, the slot is empty, the unit type fits the slot,
+    # and the unit's train must be physically present in the yard.
     match.add_precondition(available(match.unit))
     match.add_precondition(slot_open(match.slot))
     match.add_precondition(compatible(match.unit, match.slot))
+    match.add_precondition(unit_in_train(match.unit, match.train))
+    match.add_precondition(has_arrived(match.train))
     # Effects: record the assignment, close the slot, and prevent reusing the unit.
     match.add_effect(matched(match.unit, match.slot), True)
     match.add_effect(slot_filled(match.slot), True)
