@@ -3,12 +3,13 @@
 ## Version History
 | Version | Date | Summary of Changes |
 |---------|------|--------------------|
-| v0.1 | 2026-04-28 | Summary of changes |
+| v0.1 | 2026-04-28 | Initial model |
 | v0.2 | 2026-05-12 | Added `park` action, `parking_allowed` and `parked` fluents |
 | v0.3 | 2026-05-12 | Parking subproblem: `connected` on `move`; `entry_distance` + `departure_rank` on `park` |
 | v0.4 | 2026-05-19 | Matching/coupling variants: request slots, `match`, optional `uncouple`, and optional `couple_to_request` |
-| v0.5 | 2026-05-18 | Added the routing subproblem: `depart` action, `departure_exit` fluent, capacity tracking with `track_capacity`, `train_length`, `occupied_length`, and `track_is_parked_at` |
+| v0.5 | 2026-05-18 | Added the routing subproblem: `depart` action, `departure_exit` fluent, capacity tracking with `astack_distance`, `bstack_distance`, `train_length`, `track_length`, and `track_is_parked_at` |
 | v0.6 | 2026-05-25 | Explicit coupling now requires physical two-unit assembly: same track, valid coupling track, and correct order |
+| v0.7 | 2026-05-27 | Cost metric: `total_cost` (seconds), move cost = 300s, `(:metric minimize (total_cost))`. Arrival timing: `has_arrived`, `entry_track_of`, `arrive`, and `wait` actions; inbound trains deferred from init |
 
 ---
 
@@ -18,7 +19,7 @@
 - [ ] Subproblem 1 — Parking
 - [ ] Subproblem 2 — Routing
 - [ ] Subproblem 3 — Service Scheduling
-- [ ] Subproblem 4 — Matching / Arrivals / Departures
+- [x] Subproblem 4 — Matching / Arrivals / Departures (partial: matching + arrival timing)
 - [ ] Subproblem 5 — Combining & Splitting
 
 ---
@@ -27,7 +28,7 @@
 - `convert.py` can emit `parking`, `matching`, or `combined` variants with `--subproblem`.
 - Matching adds request slots and the `match` action; compatibility uses unit type, carriage count, and length.
 - `--coupling-mode` can switch between free uncoupling, explicit uncoupling, and explicit coupling.
-- Explicit uncoupling adds `uncouple`; explicit coupling adds `couple_to_request`.
+- Explicit uncoupling adds `uncouple`; explicit coupling adds `couple_two_units` / `couple_two_units_same_train`.
 - `run.py` exposes subproblem, coupling-mode, and planner-backend choices.
 
 ---
@@ -37,125 +38,137 @@
 |------|-------------|------------|
 | `trackpart` | A piece of track on the shunting yard | v0.1 |
 | `trainunit` | An individual train unit (atomic) | v0.1 |
-| `arrivaltrain` | An arriving train | v0.1 |
-| `departurerequest` | An outgoing train request used by matching | coupling/parking branch |
-| `requestslot` | One required unit position inside an outgoing request | coupling/parking branch |
-| `arrivalcomposition` | A multi-unit incoming composition that may need uncoupling | coupling/parking branch |
+| `arrivaltrain` | An arriving or standing train composition | v0.1 |
+| `departurerequest` | An outgoing train request used by matching | v0.4 |
+| `requestslot` | One required unit position inside an outgoing request | v0.4 |
+| `arrivalcomposition` | A multi-unit incoming composition that may need uncoupling | v0.4 |
 
 ---
 
 ## Fluents
 | Fluent | Signature | Type | Description | Introduced |
 |--------|-----------|------|-------------|------------|
-| `free` | `(trackpart)` | Bool | Whether a track is unoccupied. Default: true | v0.1 |
-| `arrival` | `(arrivaltrain)` | Int | Arrival timestamp of a train | v0.1 |
-| `at` | `(arrivaltrain, trackpart)` | Bool | Whether a train is at a given track. Default: false | v0.1 |
-| `parking_allowed` | `(trackpart)` | Bool | Whether a track part permits parking. Default: false. Set from `parkingAllowed` in `location_solver.json` | v0.2 |
-| `parked` | `(arrivaltrain)` | Bool | Whether a train has been parked. Default: false | v0.2 |
-| `departed` | `(arrivaltrain)` | Bool | Whether a train has left the yard after parking. Default: false | v0.4 |
-| `connected` | `(trackpart, trackpart)` | Bool | Whether two track parts are directly adjacent. Default: false. Set bidirectionally from `aSide`/`bSide` in `location_solver.json` | v0.3 |
-| `departure_exit` | `(trackpart)` | Bool | Whether a track part is a yard exit where a train may depart. Default: false | v0.4 |
-| `entry_distance` | `(trackpart)` | Int | Normalised hop-distance from the yard's departure track (BFS). Rank 1 = closest to exit. Default: 0 (non-parking tracks). | v0.3 |
-| `departure_rank` | `(arrivaltrain)` | Int | Rank of the train's departure time among all inbound trains (1 = first to depart). Ties get the same rank (lenient). | v0.3 |
-| `available` | `(trainunit)` | Bool | Whether a train unit can currently be assigned to a request slot | v0.4 |
-| `slot_open` | `(requestslot)` | Bool | Whether a request slot has not yet been assigned | v0.4 |
-| `slot_filled` | `(requestslot)` | Bool | Whether a request slot has been assigned a compatible unit | v0.4 |
-| `compatible` | `(trainunit, requestslot)` | Bool | Whether a unit can fill a slot based on type, carriage count, and length | v0.4 |
+| `arrival` | `(arrivaltrain)` | Int | Scheduled arrival time in seconds. Used by `arrive` action. | v0.1 |
+| `at` | `(arrivaltrain, trackpart)` | Bool | Whether a train is currently at a given track. Default: false | v0.1 |
+| `parking_allowed` | `(trackpart)` | Bool | Whether a track permits parking. Set from `parkingAllowed` in location JSON. Default: false | v0.2 |
+| `parked` | `(arrivaltrain)` | Bool | Whether a train has been successfully parked. Default: false | v0.2 |
+| `departed` | `(arrivaltrain)` | Bool | Whether a train has left the yard. Default: false | v0.4 |
+| `connected_aside` | `(trackpart, trackpart)` | Bool | Directed connection via a-side. Set from `aSide` in location JSON. Default: false | v0.3 |
+| `connected_bside` | `(trackpart, trackpart)` | Bool | Directed connection via b-side. Set from `bSide` in location JSON. Default: false | v0.3 |
+| `departure_exit_a` | `(trackpart)` | Bool | Track is a yard exit reachable via a-side. Default: false | v0.5 |
+| `departure_exit_b` | `(trackpart)` | Bool | Track is a yard exit reachable via b-side. Default: false | v0.5 |
+| `entry_distance` | `(trackpart)` | Int | Normalised BFS hop-distance from yard exit. Rank 1 = closest. Default: 0 (non-parking tracks). | v0.3 |
+| `departure_rank` | `(arrivaltrain)` | Int | Rank of departure time among inbound trains (1 = first to depart). Ties share rank (lenient). | v0.3 |
+| `train_length` | `(arrivaltrain)` | Real | Total physical length in metres, summed from unit types. Default: 0 | v0.5 |
+| `track_length` | `(trackpart)` | Real | Maximum capacity in metres. Non-parking tracks use 10⁹ (effectively infinite). | v0.5 |
+| `aside_distance` | `(arrivaltrain)` | Real | Distance of the train's a-side from the track's a-side origin. Default: 0 | v0.5 |
+| `astack_distance` | `(trackpart)` | Real | Free space measured from the a-side; increases as trains leave from that end. Default: 0 | v0.5 |
+| `bstack_distance` | `(trackpart)` | Real | Occupied space measured from the b-side; increases as trains arrive from outside. Default: 0 | v0.5 |
+| `number_of_trains_on_track` | `(trackpart)` | Int | Count of trains currently on the track. Default: 0 | v0.5 |
+| `track_is_parked_at` | `(trackpart)` | Bool | Whether at least one parked train occupies this track. Default: false | v0.5 |
+| `num_of_departed_trains` | `()` | Int | Running count of trains that have departed. Default: 0 | v0.5 |
+| `allowed_to_move` | `(arrivaltrain)` | Bool | Movement permission token; set by `start_move`, cleared by `end_move` / `depart`. Default: false | v0.5 |
+| `concurrent_movements` | `()` | Int | Number of trains currently holding a movement token. Default: 0 | v0.5 |
+| `total_cost` | `()` | Int | Accumulated plan time in seconds. Minimised as the plan metric. Default: 0 | v0.7 |
+| `has_arrived` | `(arrivaltrain)` | Bool | Whether a train is physically present in the yard. True from init for standing trains; set by `arrive` for inbound trains. Default: false | v0.7 |
+| `entry_track_of` | `(arrivaltrain, trackpart)` | Bool | Designates the entry track for an inbound train. Used by `arrive` to enforce correct placement. Default: false | v0.7 |
+| `available` | `(trainunit)` | Bool | Whether a unit can be assigned to a request slot | v0.4 |
+| `slot_open` | `(requestslot)` | Bool | Whether a request slot is unfilled | v0.4 |
+| `slot_filled` | `(requestslot)` | Bool | Whether a request slot has been assigned a unit | v0.4 |
+| `compatible` | `(trainunit, requestslot)` | Bool | Whether a unit matches a slot by type, carriage count, and length | v0.4 |
 | `matched` | `(trainunit, requestslot)` | Bool | Records that a unit has been assigned to a slot | v0.4 |
+| `request_open` | `(departurerequest)` | Bool | Whether a departure request is still unfulfilled | v0.4 |
+| `slot_for_request` | `(requestslot, departurerequest)` | Bool | Links a slot to its parent request | v0.4 |
 | `slot_before` | `(requestslot, requestslot)` | Bool | Orders the two slots of a two-unit outgoing request | v0.6 |
-| `unit_in_train` | `(trainunit, arrivaltrain)` | Bool | Links a unit to the physical train that currently carries it | v0.6 |
+| `unit_in_train` | `(trainunit, arrivaltrain)` | Bool | Links a unit to the physical train it arrived in | v0.6 |
 | `unit_before` | `(trainunit, trainunit)` | Bool | Preserves unit order inside an incoming multi-unit train | v0.6 |
-| `coupling_allowed` | `(trackpart)` | Bool | Whether physical coupling may happen on a track. Baseline uses `parkingAllowed` tracks | v0.6 |
-| `part_of_composition` | `(trainunit, arrivalcomposition)` | Bool | Used when explicit uncoupling is enabled | v0.5 |
-| `composition_needs_uncoupling` | `(arrivalcomposition)` | Bool | Marks a multi-unit incoming composition that must be split before matching | v0.5 |
-| `slot_coupled` | `(requestslot)` | Bool | Used when explicit coupling is enabled; marks the coupled departure slot | v0.5 |
-| `physically_coupled` | `(trainunit, trainunit)` | Bool | Records that two ordered units were physically assembled | v0.6 |
-| `request_assembled` | `(departurerequest)` | Bool | Goal for explicit coupling of exactly two-unit requests | v0.6 |
-| `track_capacity` | `(trackpart)` | Real | Maximum length that can be parked on a track. Set from the track length in the location data. Default: 0 | v0.5 |
-| `train_length` | `(arrivaltrain)` | Real | Total length of a train, computed from its units. Default: 0 | v0.5 |
-| `occupied_length` | `(trackpart)` | Real | Current occupied length of a track. Increases when a train parks and decreases when it departs. Default: 0 | v0.5 |
-| `track_is_parked_at` | `(trackpart)` | Bool | Whether a parked train currently occupies the track. Default: false | v0.5 |
-| `num_of_departed_trains` | `()` | Int | Counter for how many trains have departed. Default: 0 | v0.5 |
+| `coupling_allowed` | `(trackpart)` | Bool | Whether physical coupling may happen on a track. Baseline: same as `parking_allowed`. | v0.6 |
+| `part_of_composition` | `(trainunit, arrivalcomposition)` | Bool | Used when explicit uncoupling is enabled | v0.4 |
+| `composition_needs_uncoupling` | `(arrivalcomposition)` | Bool | Marks a multi-unit composition that must be split before matching | v0.4 |
+| `slot_coupled` | `(requestslot)` | Bool | Used when explicit coupling is enabled | v0.6 |
+| `physically_coupled` | `(trainunit, trainunit)` | Bool | Records that two units were physically assembled | v0.6 |
+| `request_assembled` | `(departurerequest)` | Bool | Goal fluent for explicit two-unit coupling | v0.6 |
 
 ---
 
 ## Actions
-### `move`
-- **Parameters:** `t - arrivaltrain`, `l_from - trackpart`, `l_to - trackpart`
+
+### `wait`
+- **Parameters:** none
+- **Effects:** `total_cost := total_cost + 300`
+- **Introduced:** v0.7
+- **Notes:** Advances the clock by one 5-minute step without moving anything. Used by the planner only when it must idle waiting for an inbound train to arrive. The `total_cost` minimisation objective ensures it is never called unnecessarily.
+
+### `arrive`
+- **Parameters:** `t - arrivaltrain`, `l - trackpart`
 - **Preconditions:**
-  - `at(t, l_from)`
-  - `not parked(t)`
-  - `connected(l_from, l_to)`
-  - `free(l_to)`
+  - `not has_arrived(t)`
+  - `entry_track_of(t, l)`
+  - `total_cost >= arrival(t)`
 - **Effects:**
-  - `at(t, l_to) = true`
-  - `at(t, l_from) = false`
-  - `free(l_to) = false`
-  - `free(l_from) = true`
-  - `parked(t) = false`
-  - `track_is_parked_at(l_from) = false`
-- **Introduced:** v0.1 (connectivity precondition added v0.3)
-- **Notes:** `not parked(t)` prevents plans where a train is parked and then moved again.
+  - `has_arrived(t) = true`
+  - `at(t, l) = true`
+  - `aside_distance(t) = bstack_distance(l)` (train placed at the current b-side end)
+  - `bstack_distance(l) += train_length(t)`
+  - `number_of_trains_on_track(l) += 1`
+- **Introduced:** v0.7
+- **Notes:** Inbound trains (`in.trains` with `arrival > 0`) are absent from the initial state. The planner calls `arrive` once `total_cost` has reached the train's scheduled arrival time, using `wait` actions to advance the clock if no other work is available. Standing trains (`inStanding`) and trains with `arrival = 0` are pre-placed in the initial state with `has_arrived = true`.
+
+### `start_move` / `end_move`
+- **Parameters:** `t - arrivaltrain` (+ `l - trackpart` for `end_move`)
+- **Purpose:** Bracket every movement sequence; enforce the `max_concurrent_movements = 1` limit.
+- **`start_move` preconditions:** `not allowed_to_move(t)`, `concurrent_movements < 1`, `has_arrived(t)`
+- **`start_move` effects:** `allowed_to_move(t) = true`, `concurrent_movements += 1`
+- **`end_move` preconditions:** `allowed_to_move(t)`, `at(t, l)`, `parking_allowed(l)`
+- **`end_move` effects:** `allowed_to_move(t) = false`, `concurrent_movements -= 1`
+- **Introduced:** v0.5
+
+### `move_aside_empty` / `move_aside_occupied`
+- **Parameters:** `t - arrivaltrain`, `l_from - trackpart`, `l_to - trackpart`
+- **Preconditions (both):** `allowed_to_move(t)`, `at(t, l_from)`, `connected_aside(l_from, l_to)`, `not parked(t)`, `aside_distance(t) <= astack_distance(l_from)`, `train_length(t) <= track_length(l_to)`
+- **`_empty` additionally:** `number_of_trains_on_track(l_to) == 0`
+- **`_occupied` additionally:** `number_of_trains_on_track(l_to) > 0`, `train_length(t) <= track_length(l_to) - bstack_distance(l_to)`
+- **Effects:** update `at`, `number_of_trains_on_track`, `aside_distance`, `astack_distance`, `bstack_distance` on both tracks; `total_cost += 300`
+- **Introduced:** v0.5
+
+### `move_bside_empty` / `move_bside_occupied`
+- Same structure as aside variants but use `connected_bside` and check the b-side stack.
+- **Introduced:** v0.5
 
 ### `park`
 - **Parameters:** `t - arrivaltrain`, `l - trackpart`
-- **Preconditions:**
-  - `at(t, l)`
-  - `parking_allowed(l)`
-  - `departure_rank(t) = entry_distance(l)`
-  - `occupied_length(l) + train_length(t) <= track_capacity(l)`
-- **Effects:**
-  - `parked(t) = true`
-  - `track_is_parked_at(l) = true`
-  - `occupied_length(l) = occupied_length(l) + train_length(t)`
-- **Introduced:** v0.2 (departure ordering precondition added v0.3)
-- **Notes:** Every inbound train has `parked(t)` as a goal. The `departure_rank = entry_distance` constraint enforces that earlier-departing trains park closer to the yard exit, preventing blocking. Lenient: multiple tracks can share the same `entry_distance`, giving the planner a choice.
+- **Preconditions:** `at(t, l)`, `parking_allowed(l)`
+- **Effects:** `parked(t) = true`, `track_is_parked_at(l) = true`
+- **Introduced:** v0.2
+- **Notes:** Cost: 0. Parking is a goal-completing action and is not penalised.
+
+### `depart_aside` / `depart_bside`
+- **Parameters:** `t - arrivaltrain`, `l - trackpart`
+- **Preconditions:** `allowed_to_move(t)`, `at(t, l)`, `departure_exit_a/b(l)`, position check on correct side
+- **Effects:** `at(t, l) = false`, `departed(t) = true`, `num_of_departed_trains += 1`, position fluents updated, `concurrent_movements -= 1`, `allowed_to_move(t) = false`
+- **Introduced:** v0.5
+- **Notes:** Cost: 0.
 
 ### `match`
 - **Parameters:** `unit - trainunit`, `slot - requestslot`
-- **Description:** Assigns an available compatible train unit to an open outgoing request slot.
+- **Preconditions:** `available(unit)`, `slot_open(slot)`, `compatible(unit, slot)`
+- **Effects:** `matched(unit, slot) = true`, `slot_filled(slot) = true`, `available(unit) = false`, `slot_open(slot) = false`
 - **Introduced:** v0.4
 
 ### `uncouple`
 - **Parameters:** `unit - trainunit`, `composition - arrivalcomposition`
-- **Description:** Releases a unit from a multi-unit incoming composition so it can be matched independently.
+- **Description:** Releases a unit from a multi-unit incoming composition so it can be matched independently. Active when `--coupling-mode` is `implicit_explicit_uncoupling` or `explicit_coupling`.
 - **Introduced:** v0.4
 
 ### `couple_two_units`
 - **Parameters:** `unit_a/unit_b - trainunit`, `train_a/train_b - arrivaltrain`, `track - trackpart`, `slot_a/slot_b - requestslot`, `request - departurerequest`
-- **Description:** Physically assembles two matched units for a two-unit outgoing request.
-- **Preconditions:**
-  - both units are already matched to ordered slots of the same request;
-  - each unit belongs to the corresponding physical train;
-  - both trains are currently on the same `coupling_allowed` track;
-  - train order on the track matches the request slot order, using `aside_distance(train_a) < aside_distance(train_b)`.
-- **Effects:**
-  - both slots become `slot_coupled`;
-  - both units become `coupled_to_request`;
-  - `physically_coupled(unit_a, unit_b)` and `request_assembled(request)` become true.
+- **Preconditions:** both units matched to ordered slots of the same request; each unit in its corresponding train; both trains on the same `coupling_allowed` track; `aside_distance(train_a) < aside_distance(train_b)`
+- **Effects:** `slot_coupled`, `coupled_to_request`, `physically_coupled(unit_a, unit_b)`, `request_assembled(request)` all set true
 - **Introduced:** v0.6
 
 ### `couple_two_units_same_train`
-- **Parameters:** `unit_a/unit_b - trainunit`, `train - arrivaltrain`, `track - trackpart`, `slot_a/slot_b - requestslot`, `request - departurerequest`
-- **Description:** Handles the case where both requested units are already carried by the same physical incoming train.
-- **Preconditions:** Same matching and valid-track checks as `couple_two_units`, but order is checked with `unit_before(unit_a, unit_b)`.
-- **Effects:** Same as `couple_two_units`.
+- Same as `couple_two_units` but both units are in the same incoming train; uses `unit_before(unit_a, unit_b)` for order.
 - **Introduced:** v0.6
-### `depart`
-- **Parameters:** `t - arrivaltrain`, `l - trackpart`
-- **Preconditions:**
-  - `at(t, l)`
-  - `parked(t)`
-  - `departure_exit(l)`
-- **Effects:**
-  - `at(t, l) = false`
-  - `parked(t) = false`
-  - `departed(t) = true`
-  - `free(l) = true`
-  - `occupied_length(l)` decreases by `train_length(t)`
-  - `num_of_departed_trains` increases by 1
-- **Introduced:** v0.4
-- **Notes:** Routing is still handled by `move`; `depart` only removes a parked train once it reaches an exit track. The final goal is now `departed(t)`.
 
 ---
 
@@ -164,101 +177,108 @@
 
 | Entity | Source | What is set |
 |--------|--------|-------------|
-| `trackpart` objects | `location.json → trackParts` | One object per track part, named by `name` field |
-| `arrivaltrain` objects | `scenario.json → in.trains` | One object per arriving train, named `train{id}` |
-| `trainunit` objects | `scenario.json → in.trains[].members` | One object per unit, named `unit{id}` — no state set |
-| `arrival(train)` | `scenario.json → in.trains[].arrival` | Set to integer arrival timestamp |
-| `at(train, track)` | `scenario.json → in.trains[].firstParkingTrackPart` | Set to true for initial parking position |
-| `connected(a, b)` | `location_solver.json → trackParts[].aSide / bSide` | Set bidirectionally for each adjacent pair |
-| `entry_distance(track)` | Computed — BFS from `scenario.json → out.trainRequests[].leaveTrackPart`, normalised to 1-based rank | Only set for `parking_allowed` tracks; defaults to 0 |
-| `departure_rank(train)` | Computed — rank of `scenario.json → in.trains[].departure` sorted ascending (ties share a rank) | |
-| `trainunit` objects | `scenario.json -> in.trains / inStanding.trains` | One object per unit available for matching |
-| `available(unit)` | `scenario.json -> in.trains / inStanding.trains` | True for units not locked inside an explicit uncoupling composition |
-| `requestslot` objects | `scenario.json -> out.trainRequests / outStanding.trainRequests` | One slot per requested outgoing train unit |
+| `trackpart` objects | `location_solver.json → trackParts` | One object per track part, named by `name` field |
+| `arrivaltrain` objects | `scenario_solver.json → in.trains` | One object per arriving train, named `train{id}` |
+| `arrivaltrain` objects | `scenario_solver.json → inStanding.trains` | One object per standing train, named `train_in_standing_{index}` |
+| `trainunit` objects | `scenario_solver.json → in.trains[].members` | One object per unit, named `unit{id}` |
+| `arrival(train)` | `scenario_solver.json → in.trains[].arrival` | Set to integer arrival time in seconds |
+| `train_length(train)` | `scenario_solver.json → in.trains[].members[].trainUnit.type.length` | Sum of all unit lengths |
+| `at(train, track)` | `scenario_solver.json → in.trains[].entryTrackPart` | **Only set for `arrival = 0` trains.** Inbound trains with `arrival > 0` are absent from init. |
+| `has_arrived(train)` | Set to `true` for standing trains and `arrival = 0` inbound trains. Absent (false) for inbound trains with `arrival > 0`. | v0.7 |
+| `entry_track_of(train, track)` | `scenario_solver.json → in.trains[].entryTrackPart` | Set only for inbound trains with `arrival > 0`; designates which track the `arrive` action must place them on. | v0.7 |
+| `connected_aside(a, b)` | `location_solver.json → trackParts[].aSide` | Set for each a-side neighbour pair |
+| `connected_bside(a, b)` | `location_solver.json → trackParts[].bSide` | Set for each b-side neighbour pair |
+| `departure_exit_a/b(track)` | `scenario_solver.json → out.trainRequests[].leaveTrackPart` | Set for tracks that are yard exits; a/b determined by which side has neighbours |
+| `entry_distance(track)` | Computed — BFS from departure exits, normalised to 1-based rank | Only set for `parking_allowed` tracks; defaults to 0 |
+| `track_length(track)` | `location_solver.json → trackParts[].length` | Parking tracks: actual length. Non-parking tracks: 10⁹ (infinite). |
+| `astack_distance(track)` | Derived from initial train placements | Starts at 0; increases as trains leave from the a-side end |
+| `bstack_distance(track)` | Derived from initial train placements | Sum of lengths of all trains initially on the track |
+| `number_of_trains_on_track(track)` | Derived from initial train placements | Count of trains initially on each track |
+| `aside_distance(train)` | Derived from initial placement order | Position of train's a-side from track origin |
+| `parking_allowed(track)` | `location_solver.json → trackParts[].parkingAllowed` | |
+| `coupling_allowed(track)` | Same as `parkingAllowed` (baseline proxy) | |
+| `available(unit)` | `scenario_solver.json → in.trains / inStanding.trains` | True for units not locked inside an explicit-uncoupling composition |
 | `compatible(unit, slot)` | Computed from unit and request unit type | Set when display name, carriage count, and length match |
-| `slot_before(slot_a, slot_b)` | `scenario.json -> trainRequests[].trainUnits` | Set for the two ordered slots of a two-unit request |
-| `unit_in_train(unit, train)` | `scenario.json -> in.trains / inStanding.trains` | Links every unit to its physical incoming or standing train |
-| `unit_before(unit_a, unit_b)` | `scenario.json -> train.members` | Set from adjacent member order inside a multi-unit train |
-| `coupling_allowed(track)` | `location_solver.json -> trackParts[].parkingAllowed` | Baseline proxy for physically valid coupling locations |
-| `part_of_composition(unit, composition)` | `scenario.json -> in.trains / inStanding.trains` | Set for units in multi-unit compositions when explicit uncoupling is enabled |
-| `track_capacity(track)` | `location_solver.json → trackParts[].length` | Set to the track length |
-| `train_length(train)` | `scenario.json → in.trains[].members[].trainUnit.type.length` | Sum of all unit lengths |
-| `occupied_length(track)` | Derived from initial inbound train placements | Accumulates the total length already occupying each track |
-| `track_is_parked_at(track)` | Action effects | Initially false; set true when a train parks |
-| `num_of_departed_trains()` | Constant counter | Starts at 0 and is incremented by `depart` |
+| `total_cost` | — | Initialised to 0 |
+
+---
+
+## Costs
+> Plan metric: `(:metric minimize (total_cost))` — total elapsed time in seconds
+
+| Action | Cost (seconds) | Rationale |
+|--------|---------------|-----------|
+| `move_aside_empty` | +300 | 5 minutes per movement (thesis estimate) |
+| `move_aside_occupied` | +300 | |
+| `move_bside_empty` | +300 | |
+| `move_bside_occupied` | +300 | |
+| `wait` | +300 | Idle time costs the same as active time |
+| `arrive` | 0 | Mandatory; timing already enforced by `total_cost >= arrival(t)` precondition |
+| `park` | 0 | Goal-completing action |
+| `depart_aside` / `depart_bside` | 0 | Goal-completing action |
+| `start_move` / `end_move` | 0 | Administrative bracket |
+| `match` | 0 | Administrative |
+| `uncouple` / `couple_two_units` | 0 | Coupling duration not yet modelled (see Gap 7) |
 
 ---
 
 ## Known Gaps / TODOs
 
 ### Gap 1 — `free` fluent is declared but never maintained
-**What's missing:** `free(trackpart)` is initialised to `true` for every track part in the problem file, but no action reads or writes it. `move` neither checks `free(l_to)` as a precondition nor toggles `free` on source/destination as an effect.
-**Impact:** The fluent is dead weight. More importantly, nothing currently prevents two trains from occupying the same track part simultaneously.
-**Fix:** Either (a) remove `free` and replace with a proper capacity check (see Gap 2), or (b) add `free(l_to)` precondition to `move` and toggle effects `free(l_from) = true`, `free(l_to) = false`. Option (b) is only correct for single-train-per-track models.
+**What's missing:** `free(trackpart)` is referenced in documentation but not present in the current implementation. Capacity is instead tracked via `astack_distance`, `bstack_distance`, and `number_of_trains_on_track`.
+**Impact:** No impact — capacity is correctly enforced by the stack-distance model.
+**Fix:** Remove any remaining references to `free` from documentation.
 
 ---
 
-### Gap 2 — No track capacity enforcement
-**What's missing:** There is no `train_length`, `track_length`, or `aside_distance` fluent. The `move` action has no precondition that checks whether the destination track has enough remaining space.
-**Impact:** Multiple trains can be moved to the same track until its physical capacity is exceeded, producing plans that are infeasible in the real yard. This is the most critical correctness gap.
-**Fix:** Add numeric fluents `train_length(arrivaltrain)` and `track_length(trackpart)`. In `move`, add precondition `track_length(l_to) >= train_length(t)` and effects that decrease `track_length(l_to)` and restore `track_length(l_from)`. (Mirrors the `aside_distance` approach from the thesis baseline.)
+### Gap 2 — Track capacity enforcement (resolved)
+**Status:** Resolved via `astack_distance` / `bstack_distance` / `track_length`. Move actions check available space before allowing a train onto a track.
 
 ---
 
-### Gap 3 — `arrival` fluent is set but never used
-**What's missing:** `arrival(train)` is initialised from the scenario JSON but no action has a precondition that reads it. Trains can be moved before they physically arrive at the yard.
-**Impact:** Plans may be logically valid in PDDL but temporally infeasible: a train is moved before its arrival time.
-**Fix:** Either (a) add a temporal precondition `>= arrival(t)` to `move` if switching to a temporal planner (e.g. TFD), or (b) remove the fluent and encode arrival order through the initial `at` state (trains not yet arrived simply have no `at` fact until their arrival event is triggered). For a classical instantaneous-action model, option (b) is simplest.
+### ~~Gap 3~~ — Arrival timing (resolved in v0.7)
+**Status:** Resolved. Inbound trains are absent from the initial state. The `arrive(t, l)` action has precondition `total_cost >= arrival(t)`, enforcing exact arrival timing. The `wait` action advances the clock when no other work is available. Standing trains are initialised with `has_arrived = true` and placed directly.
 
 ---
 
 ### Gap 4 — No service subproblem (Subproblem 3)
 **What's missing:** No `service_allowed(trackpart)`, `serviced(arrivaltrain)`, or `needs_service(arrivaltrain)` fluents. No `service` action. The goal only requires `parked`, with no dependency on servicing first.
 **Impact:** Trains that require cleaning, washing, or inspection are not routed to service tracks. The planner can park them directly without any service detour.
-**Fix:** Add `service_allowed` and `serviced` fluents and a `service` action with precondition `at(t, l) ∧ service_allowed(l)` and effect `serviced(t) = true`. Add `serviced(t)` as a precondition of `park` (or add it to the goal).
+**Fix:** Add `service_allowed` and `serviced` fluents and a `service` action with precondition `at(t, l) ∧ service_allowed(l)` and effect `serviced(t) = true`. Add `serviced(t)` as a precondition of `park`.
 
 ---
 
-### Gap 5 — No matching subproblem (Subproblem 4)
-**Branch note:** Partially addressed in the coupling/parking branch. Matching now creates request-slot objects and uses `compatible(unit, slot)`, `matched(unit, slot)`, and `match(unit, slot)`.
-
-**What's missing:** No train-type predicates (`train_type_SLT`, `train_type_VIRM`, etc.) and no outbound train-request objects. There is no mechanism to ensure that a parked `arrivaltrain` is of the correct type to satisfy an outbound departure request.
-**Impact:** The planner can assign any train to any parking slot regardless of type. In a real scenario, an SLT unit cannot substitute for a VIRM unit on a scheduled service.
-**Fix:** Add one boolean fluent per train type (e.g. `is_type_SLT(arrivaltrain)`). Introduce outbound request objects with a required type, and link them to parked trains via a `matched` fluent and a `match` action (or type precondition in `park`).
+### Gap 5 — Matching subproblem (partial)
+**Status:** Partially resolved. Request slots, `match`, `compatible`, and coupling actions are implemented. Train-type predicates in parking (enforcing that a parked train satisfies a specific outbound request type) are not yet linked.
 
 ---
 
-### Gap 6 — `park` uses strict equality on departure rank
-**What's missing:** The precondition `departure_rank(t) = entry_distance(l)` requires an exact match. A train with rank 1 cannot park at a track with `entry_distance = 2` even when no rank-2 trains exist (e.g. only one train in the scenario, or all other trains have already parked closer).
-**Impact:** The planner may fail to find a solution in small or asymmetric scenarios where the "correct" rank level has no available track but a deeper level is free.
-**Fix:** Relax to `departure_rank(t) <= entry_distance(l)` — a train may park *further* from the exit than its rank strictly requires, as long as no earlier-departing train is trapped behind it. This requires also checking that no lower-rank train is blocked (more complex; a simpler proxy is the `<=` relaxation).
+### Gap 6 — `park` uses no departure ordering
+**What's missing:** The current `park` action only checks `at(t, l)` and `parking_allowed(l)`. The `departure_rank = entry_distance` ordering constraint from earlier versions has been removed.
+**Impact:** The planner may park trains in configurations where an earlier-departing train is blocked by a later-departing one.
+**Fix:** Re-add `departure_rank(t) <= entry_distance(l)` precondition to `park` and restore the `departure_rank` fluent initialisation in `convert.py`.
 
 ---
 
-### Gap 7 — Multi-unit train composition not modelled (Subproblem 5)
-**Branch note:** Partially addressed. The model can require explicit `uncouple` actions for multi-unit incoming compositions and explicit two-unit coupling now validates same-track placement, coupling location, and ordering.
-
-**What's missing:** Coupling is limited to exactly two units and uses an instantaneous action. True coupling duration, driver/staff resources, and temporal overlap are not modelled.
-**Impact:** The planner can check whether two units can be physically assembled at a valid location, but it cannot yet check whether enough time or staff is available.
-**Fix:** Treat duration and staff as a later temporal/resource-planning variant, following the thesis-style durative action pattern.
+### Gap 7 — Multi-unit coupling duration not modelled
+**What's missing:** Coupling uses an instantaneous action. True coupling duration, driver/staff resources, and temporal overlap are not modelled.
+**Impact:** The planner can couple trains in zero time regardless of scenario constraints.
+**Fix:** Treat duration and staff as a later temporal/resource-planning variant.
 
 ---
 
-### Gap 8 — No concurrent movement limit
-**What's missing:** No `concurrent_movements` or `max_concurrent_movements` fluents. For a classical (instantaneous-action) planner, all moves are sequential by construction; but for temporal planners like TFD, multiple `move` actions may overlap, exceeding the number of available drivers or physical path capacity.
-**Impact:** Plans generated by a temporal planner may be physically infeasible (too many trains moving at once on shared infrastructure).
-**Fix:** Add integer fluents `concurrent_movements` (initialised to 0) and `max_concurrent_movements` (initialised from config). In a temporal `move`, increment on start and decrement on end; add precondition `concurrent_movements < max_concurrent_movements`. (This is the driver-free concurrency model described in the thesis.)
+### Gap 8 — Concurrency limit is classical only
+**What's missing:** `max_concurrent_movements = 1` enforces sequential movement in classical planning. For a temporal planner (TFD), durative actions would be needed to properly limit concurrent movements.
+**Impact:** No impact for classical planning. A switch to temporal planning would require refactoring move actions to durative-actions.
 
 ---
 
-### Gap 9 — No plan-cost metric
-**What's missing:** No `total-cost` numeric function and no `:metric minimize (total-cost)` goal qualifier. The planner optimises for nothing; all valid plans are equally acceptable.
-**Impact:** Plans may be unnecessarily long. Runtime comparisons across domain variants are not meaningful without a shared cost metric.
-**Fix:** Add `(total-cost)` function (initialised to 0). Increment it in each action's effect (e.g. +1 per `move`). Add `(:metric minimize (total-cost))` to the problem.
+### ~~Gap 9~~ — No plan-cost metric (resolved in v0.7)
+**Status:** Resolved. `total_cost` fluent added (seconds). Each move and each `wait` adds 300 seconds. `(:metric minimize (total_cost))` is emitted in the problem file.
 
 ---
 
-### Gap 10 — Entry and exit tracks not distinguished
-**What's missing:** There is no `entry_track(trackpart)` or `exit_track(trackpart)` predicate. The model does not know which track parts are the yard's physical entry/exit gates.
-**Impact:** Trains can be moved freely across the entire yard graph with no notion of where they enter or leave. Arrival and departure events cannot be modelled explicitly.
-**Fix:** Add boolean fluents `entry_track` and `exit_track`. Populate from `entryTrackPart` / `leaveTrackPart` in the scenario JSON (already parsed in `convert.py` for BFS purposes but not exposed as PDDL facts).
+### Gap 10 — Entry tracks not exposed as PDDL facts
+**What's missing:** `entry_track_of(train, track)` now exists for inbound trains (v0.7), but there is no generic `is_entry_track(trackpart)` predicate marking which tracks are yard entry points for arbitrary queries or future routing checks.
+**Impact:** Low — `entry_track_of` is sufficient for the `arrive` action. A generic entry-track predicate would help if routing subproblem needs to distinguish entry tracks from others.
+**Fix:** Add `is_entry_track(trackpart)` populated from `entryTrackPart` fields in the scenario JSON if needed.
