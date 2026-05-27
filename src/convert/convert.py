@@ -877,6 +877,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             unit_type_by_id[unit["id"]] = train_unit_type_key(unit)
             problem.set_initial_value(unit_in_train(unit_obj, physical_train), True)
             problem.set_initial_value(contains_su(shunting_unit, unit_obj), True)
+            if len(train_members) == 1:
+                problem.set_initial_value(single_unit_su(shunting_unit, unit_obj), True)
             # Pre-create an inactive single-unit shunting unit for later split actions.
             single_unit_su_obj = problem.add_object("su_unit" + unit["id"], shunting_unit_type)
             problem.set_initial_value(contains_su(single_unit_su_obj, unit_obj), True)
