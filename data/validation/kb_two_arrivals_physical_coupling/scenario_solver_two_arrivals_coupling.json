@@ -1,0 +1,100 @@
+{
+    "in": {
+        "trains": [
+            {
+                "entryTrackPart": "52",
+                "arrival": "300",
+                "departure": "300",
+                "id": "2000",
+                "members": [
+                    {
+                        "trainUnit": {
+                            "id": "2401",
+                            "type": {
+                                "displayName": "SLT-A",
+                                "carriages": 4,
+                                "length": 69.36,
+                                "combineDuration": "180",
+                                "splitDuration": "120",
+                                "backNormTime": "120",
+                                "backAdditionTime": "16",
+                                "reversalDuration": "0"
+                            }
+                        },
+                        "tasks": []
+                    }
+                ],
+                "firstParkingTrackPart": "52"
+            },
+            {
+                "entryTrackPart": "52",
+                "arrival": "600",
+                "departure": "600",
+                "id": "3000",
+                "members": [
+                    {
+                        "trainUnit": {
+                            "id": "2501",
+                            "type": {
+                                "displayName": "SLT-B",
+                                "carriages": 4,
+                                "length": 69.36,
+                                "combineDuration": "180",
+                                "splitDuration": "120",
+                                "backNormTime": "120",
+                                "backAdditionTime": "16",
+                                "reversalDuration": "0"
+                            }
+                        },
+                        "tasks": []
+                    }
+                ],
+                "firstParkingTrackPart": "52"
+            }
+        ]
+    },
+    "out": {
+        "trainRequests": [
+            {
+                "leaveTrackPart": "42",
+                "arrival": "3600",
+                "departure": "3600",
+                "displayName": "9001",
+                "trainUnits": [
+                    {
+                        "type": {
+                            "displayName": "SLT-A",
+                            "carriages": 4,
+                            "length": 69.36,
+                            "combineDuration": "180",
+                            "splitDuration": "120",
+                            "backNormTime": "120",
+                            "backAdditionTime": "16",
+                            "reversalDuration": "0"
+                        },
+                        "id": ""
+                    },
+                    {
+                        "type": {
+                            "displayName": "SLT-B",
+                            "carriages": 4,
+                            "length": 69.36,
+                            "combineDuration": "180",
+                            "splitDuration": "120",
+                            "backNormTime": "120",
+                            "backAdditionTime": "16",
+                            "reversalDuration": "0"
+                        },
+                        "id": ""
+                    }
+                ],
+                "lastParkingTrackPart": "15",
+                "standingIndex": 0.0
+            }
+        ]
+    },
+    "endTime": "7200",
+    "startTime": "0",
+    "inStanding": {},
+    "outStanding": {}
+}
