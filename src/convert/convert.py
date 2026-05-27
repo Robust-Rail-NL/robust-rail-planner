@@ -607,7 +607,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
                 track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
 
-        if not include_matching:
+        if include_parking:
             for request in out_standing_trains:
                 track_id = request.get("lastParkingTrackPart")
                 if track_id in id_to_track_part:
@@ -615,7 +615,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
         # Add outbound train requests: these trains must be assembled (contain all units) and depart.
         # Add a goal stating that the number of departed trains must be equal to out_requests
-        if not include_matching:
+        if include_parking:
             problem.add_goal(up.Equals(num_of_departed_trains(), up.Int(len(out_requests))))
 
         for track_id, occupied_length_value in track_occupancies.items():
