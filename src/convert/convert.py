@@ -226,6 +226,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     concurrent_movements = problem.add_fluent(up.Fluent("concurrent_movements", up.IntType()), default_initial_value=up.Int(0))
     max_concurrent_movements = 1
     total_cost = problem.add_fluent(up.Fluent("total_cost", up.IntType()), default_initial_value=up.Int(0))
+    has_arrived = problem.add_fluent(up.Fluent("has_arrived", up.BoolType(), train=arrival_train_type), default_initial_value=False)
+    entry_track_of = problem.add_fluent(up.Fluent("entry_track_of", up.BoolType(), train=arrival_train_type, trackpart=track_part_type), default_initial_value=False)
     
     available      = problem.add_fluent(up.Fluent("available",      up.BoolType(), unit=train_unit_type),                               default_initial_value=False)
     request_open   = problem.add_fluent(up.Fluent("request_open",   up.BoolType(), request=departure_request_type),                     default_initial_value=False)
@@ -243,6 +245,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     startMove = up.InstantaneousAction('start_move', t=arrival_train_type)
     startMove.add_precondition(up.Not(allowed_to_move(startMove.t)))
     startMove.add_precondition(concurrent_movements < max_concurrent_movements)
+    startMove.add_precondition(has_arrived(startMove.t))
     startMove.add_effect(allowed_to_move(startMove.t), True)
     startMove.add_effect(concurrent_movements, concurrent_movements + 1)
     problem.add_action(startMove)
@@ -369,6 +372,26 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     park.add_effect(parked(park.t), True)
     park.add_effect(track_is_parked_at(park.l), True)
     problem.add_action(park)
+
+    # Advance the clock by one 5-minute step without moving any train.
+    # The planner uses this only when it must wait for a train to arrive.
+    # total_cost minimisation ensures wait is never used unnecessarily.
+    wait = up.InstantaneousAction('wait')
+    wait.add_effect(total_cost(), total_cost() + 300)
+    problem.add_action(wait)
+
+    # Generic arrive action: places an inbound train at its designated entry track
+    # once the clock has reached the train's scheduled arrival time.
+    arrive = up.InstantaneousAction('arrive', t=arrival_train_type, l=track_part_type)
+    arrive.add_precondition(up.Not(has_arrived(arrive.t)))
+    arrive.add_precondition(entry_track_of(arrive.t, arrive.l))
+    arrive.add_precondition(total_cost() >= arrival(arrive.t))
+    arrive.add_effect(has_arrived(arrive.t), True)
+    arrive.add_effect(at(arrive.t, arrive.l), True)
+    arrive.add_effect(aside_distance(arrive.t), bstack_distance(arrive.l))
+    arrive.add_effect(bstack_distance(arrive.l), bstack_distance(arrive.l) + train_length(arrive.t))
+    arrive.add_effect(number_of_trains_on_track(arrive.l), number_of_trains_on_track(arrive.l) + 1)
+    problem.add_action(arrive)
 
     explicit_uncoupling = coupling_mode in ["implicit_explicit_uncoupling", "explicit_coupling"]
     explicit_coupling = coupling_mode == "explicit_coupling"
@@ -543,22 +566,27 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     unit_type_by_id = {}
 
     if include_parking:
-        # Add inbound trains
+        # Add inbound trains — trains with arrival > 0 are not placed initially;
         for index, train in enumerate(inbound_trains):
             arrival_train = problem.add_object(_train_object_name("in", index, train), arrival_train_type)
             train_obj_by_key[("in", index)] = arrival_train
             arrival_train_objs.append(arrival_train)
-            problem.set_initial_value(arrival(arrival_train), up.Int(int(train["arrival"])))
-            initial_track_id = _train_initial_track_id(train, ["entryTrackPart", "firstParkingTrackPart"])
-            problem.set_initial_value(at(arrival_train, id_to_track_part[initial_track_id]), True)
-            # problem.set_initial_value(departure_rank(arrival_train), up.Int(train_to_rank[train["id"]]))
+            arrival_time = int(train["arrival"])
+            problem.set_initial_value(arrival(arrival_train), up.Int(arrival_time))
             train_total_length = _train_total_length(train)
             problem.set_initial_value(train_length(arrival_train), up.Real(train_total_length))
-            previous_length_on_track = track_occupancies.get(initial_track_id, Fraction(0))
-            problem.set_initial_value(aside_distance(arrival_train), up.Real(previous_length_on_track))
-            track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
-            track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
-            #problem.add_goal(parked(arrival_train))
+            initial_track_id = _train_initial_track_id(train, ["entryTrackPart", "firstParkingTrackPart"])
+            if arrival_time == 0:
+                # Already present at yard start — place immediately like a standing train
+                problem.set_initial_value(has_arrived(arrival_train), True)
+                problem.set_initial_value(at(arrival_train, id_to_track_part[initial_track_id]), True)
+                previous_length_on_track = track_occupancies.get(initial_track_id, Fraction(0))
+                problem.set_initial_value(aside_distance(arrival_train), up.Real(previous_length_on_track))
+                track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
+                track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
+            else:
+                # Mark which track this train must arrive at
+                problem.set_initial_value(entry_track_of(arrival_train, id_to_track_part[initial_track_id]), True)
 
         for index, train in enumerate(in_standing_trains):
             standing_train = problem.add_object(_train_object_name("inStanding", index, train), arrival_train_type)
@@ -566,6 +594,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             arrival_train_objs.append(standing_train)
             initial_track_id = _train_initial_track_id(train, ["firstParkingTrackPart", "entryTrackPart"])
             problem.set_initial_value(arrival(standing_train), up.Int(int(train.get("arrival", 0))))
+            problem.set_initial_value(has_arrived(standing_train), True)
             if initial_track_id is not None:
                 problem.set_initial_value(at(standing_train, id_to_track_part[initial_track_id]), True)
                 train_total_length = _train_total_length(train)
