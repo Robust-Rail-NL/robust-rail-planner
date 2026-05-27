@@ -426,8 +426,36 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         uncouple.add_precondition(composition_needs_uncoupling(uncouple.composition))
         # Effects: the unit becomes independently matchable and is removed from that composition.
         uncouple.add_effect(available(uncouple.unit), True)
-        uncouple.add_effect(part_of_composition(uncouple.unit, uncouple.composition), False)
-        problem.add_action(uncouple)
+    uncouple.add_effect(part_of_composition(uncouple.unit, uncouple.composition), False)
+    problem.add_action(uncouple)
+
+    split_two_unit_su = up.InstantaneousAction(
+        "split_two_unit_su",
+        parent_su=shunting_unit_type,
+        left_su=shunting_unit_type,
+        right_su=shunting_unit_type,
+        unit_a=train_unit_type,
+        unit_b=train_unit_type,
+        track=track_part_type,
+    )
+    # Splitting turns one active two-unit composition into two active single-unit shunting units.
+    split_two_unit_su.add_precondition(active_su(split_two_unit_su.parent_su))
+    split_two_unit_su.add_precondition(up.Not(active_su(split_two_unit_su.left_su)))
+    split_two_unit_su.add_precondition(up.Not(active_su(split_two_unit_su.right_su)))
+    split_two_unit_su.add_precondition(contains_su(split_two_unit_su.parent_su, split_two_unit_su.unit_a))
+    split_two_unit_su.add_precondition(contains_su(split_two_unit_su.parent_su, split_two_unit_su.unit_b))
+    split_two_unit_su.add_precondition(contains_su(split_two_unit_su.left_su, split_two_unit_su.unit_a))
+    split_two_unit_su.add_precondition(contains_su(split_two_unit_su.right_su, split_two_unit_su.unit_b))
+    split_two_unit_su.add_precondition(unit_before(split_two_unit_su.unit_a, split_two_unit_su.unit_b))
+    split_two_unit_su.add_precondition(at_su(split_two_unit_su.parent_su, split_two_unit_su.track))
+    split_two_unit_su.add_effect(active_su(split_two_unit_su.parent_su), False)
+    split_two_unit_su.add_effect(active_su(split_two_unit_su.left_su), True)
+    split_two_unit_su.add_effect(active_su(split_two_unit_su.right_su), True)
+    split_two_unit_su.add_effect(at_su(split_two_unit_su.left_su, split_two_unit_su.track), True)
+    split_two_unit_su.add_effect(at_su(split_two_unit_su.right_su, split_two_unit_su.track), True)
+    split_two_unit_su.add_effect(available(split_two_unit_su.unit_a), True)
+    split_two_unit_su.add_effect(available(split_two_unit_su.unit_b), True)
+    problem.add_action(split_two_unit_su)
 
     if explicit_coupling:
         # Explicit coupling goals track both slot completion and physical assembly.
@@ -726,6 +754,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             if len(slot_objects) == 2:
                 # Slot order is only used by explicit two-unit coupling.
                 problem.set_initial_value(slot_before(slot_objects[0], slot_objects[1]), True)
+                # Request shunting units are inactive until a coupling action assembles them.
+                problem.add_object("su_" + request_name, shunting_unit_type)
                 if explicit_coupling:
                     problem.add_goal(request_assembled(request_obj))
 
