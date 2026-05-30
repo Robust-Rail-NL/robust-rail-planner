@@ -45,6 +45,13 @@ STYLE = Style([
     ("separator", "fg:#555555"),
 ])
 
+VALIDATOR_SCRIPT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "src",
+    "plan",
+    "validate_plan.py"
+)
+
 
 # ---------------------------------------------------------------------------
 # Discovery helpers
@@ -211,7 +218,7 @@ def main():
 
     action = questionary.select(
         "Action:",
-        choices=["Convert to PDDL", "Run planner", "Convert then plan"],
+        choices=["Convert to PDDL", "Run planner", "Convert then plan", "Validate plan"],
         style=STYLE,
     ).ask()
     if action is None:
@@ -273,6 +280,43 @@ def main():
             return
         run_num = int(chosen[3:])
         run_planner(location, scenario_name, run_num, planner_backend=planner_backend)
+
+    elif action == "Validate plan":
+        existing = discover_runs(location, scenario_name)
+        if not existing:
+            print(f"  No existing runs found for {scenario_name}.")
+            print("  Run 'Convert to PDDL' first.")
+            print()
+            return
+
+        choices = [f"run{n}" for n in existing]
+        chosen = questionary.select("Run:", choices=choices, style=STYLE).ask()
+        if chosen is None:
+            return
+
+        run_num = int(chosen[3:])
+        problem_path, domain_path, plan_path = run_paths(location, scenario_name, run_num)
+
+        print(f"  Validating {os.path.relpath(plan_path, REPO_ROOT)}")
+        print(f"  Domain     {os.path.relpath(domain_path, REPO_ROOT)}")
+        print(f"  Problem    {os.path.relpath(problem_path, REPO_ROOT)}")
+
+        print()
+
+        result = subprocess.run(
+            [
+                PYTHON,
+                VALIDATOR_SCRIPT,
+                domain_path,
+                problem_path,
+                plan_path,
+            ]
+        )
+
+        if result.returncode != 0:
+            print("\nPlan validation FAILED.")
+        else:
+            print("\nPlan validation SUCCEEDED.")
 
     print()
 
