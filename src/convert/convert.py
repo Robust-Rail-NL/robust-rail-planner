@@ -167,16 +167,22 @@ def _train_object_name(source, index, train):
 
 def _build_service_track_ids(location_object):
     # Service tracks are defined in facilities[].relatedTrackParts for facilities that have taskTypes.
-    # Only includes facilities of type Reinigingsperron (cleaning platform) — the primary service facility.
-    # Monteur and Wasmachine facilities are excluded as they represent different resource types.
-    # In: location object containing a "facilities" section
-    # Out: set of track part IDs (as strings) that are service tracks
-    service_ids = set()
+    # Returns a dict mapping track_id (str) -> {"type": facility_type_str, "capacity": int}
+    # Covers all facility types: Reinigingsperron, Wasmachine, Monteur (Inspectieput).
+    # In: location object containing a "facilities" section where each facility has:
+    # - "type": string name of the facility type
+    # - "relatedTrackParts": list of track part IDs where this facility operates
+    # - "simultaneousUsageCount": how many trains can be serviced at once on this facility
+    # Out: dict mapping track part ID (str) -> facility info dict
+    service_tracks = {}
     for facility in location_object.get("facilities", []):
-        if facility.get("taskTypes") and facility.get("type") == "Reinigingsperron":
+        if facility.get("taskTypes"):
             for tp_id in facility.get("relatedTrackParts", []):
-                service_ids.add(str(tp_id))
-    return service_ids
+                service_tracks[str(tp_id)] = {
+                    "type": facility["type"],
+                    "capacity": facility.get("simultaneousUsageCount", 1),
+                }
+    return service_tracks
 
 
 def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None, coupling_mode="implicit_free_uncoupling", subproblem="combined"):
@@ -253,6 +259,17 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     coupling_allowed = problem.add_fluent(up.Fluent("coupling_allowed", up.BoolType(), trackpart=track_part_type), default_initial_value=False)
     service_allowed = problem.add_fluent(up.Fluent("service_allowed", up.BoolType(), trackpart=track_part_type), default_initial_value=False)
     serviced = problem.add_fluent(up.Fluent("serviced", up.BoolType(), train=arrival_train_type), default_initial_value=False)
+
+    # --- Service capacity and type matching (van den Broek et al.) ---
+    # facility_type links a track to the type of service it provides (Reinigingsperron, Wasmachine, Monteur)
+    facility_type_type = up.UserType("facilitytype")
+    facility_type = problem.add_fluent(up.Fluent("facility_type", up.BoolType(), trackpart=track_part_type, ftype=facility_type_type), default_initial_value=False)
+    # requires_facility links a train to the type of service it needs
+    requires_facility = problem.add_fluent(up.Fluent("requires_facility", up.BoolType(), train=arrival_train_type, ftype=facility_type_type), default_initial_value=False)
+    # tracks the number of trains currently being serviced on a track
+    trains_being_serviced = problem.add_fluent(up.Fluent("trains_being_serviced", up.IntType(), trackpart=track_part_type), default_initial_value=up.Int(0))
+    # maximum simultaneous service capacity per track, read from facilities[].simultaneousUsageCount
+    max_simultaneous_service = problem.add_fluent(up.Fluent("max_simultaneous_service", up.IntType(), trackpart=track_part_type), default_initial_value=up.Int(0))
 
     startMove = up.InstantaneousAction('start_move', t=arrival_train_type)
     startMove.add_precondition(up.Not(allowed_to_move(startMove.t)))
@@ -380,10 +397,17 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     park.add_effect(track_is_parked_at(park.l), True)
     problem.add_action(park)
 
-    service = up.InstantaneousAction('service', t=arrival_train_type, l=track_part_type)
+    # Service action: train must be at a service_allowed track of the correct type,
+    # the track must have capacity, and the train must require that facility type.
+    # Tracks trains_being_serviced for capacity enforcement (van den Broek et al.).
+    service = up.InstantaneousAction('service', t=arrival_train_type, l=track_part_type, f=facility_type_type)
     service.add_precondition(at(service.t, service.l))
     service.add_precondition(service_allowed(service.l))
+    service.add_precondition(facility_type(service.l, service.f))
+    service.add_precondition(requires_facility(service.t, service.f))
+    service.add_precondition(trains_being_serviced(service.l) < max_simultaneous_service(service.l))
     service.add_effect(serviced(service.t), True)
+    service.add_effect(trains_being_serviced(service.l), trains_being_serviced(service.l) + 1)
     problem.add_action(service)
 
     explicit_uncoupling = coupling_mode in ["implicit_explicit_uncoupling", "explicit_coupling"]
@@ -494,8 +518,15 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     exit_ids = exit_ids_a.union(exit_ids_b)
     bfs_dist = _bfs_from(adjacency, exit_ids)
 
-    # Build service track IDs from facilities section (Lonyuk thesis §5.2.5)
+    # Build service track IDs from facilities section
     service_track_ids = _build_service_track_ids(location_object)
+
+    # Create one PDDL object per unique facility type found in the location
+    unique_facility_types = {info["type"] for info in service_track_ids.values()}
+    id_to_facility_type = {}
+    for ftype_str in unique_facility_types:
+        ftype_obj = problem.add_object(ftype_str.lower(), facility_type_type)
+        id_to_facility_type[ftype_str] = ftype_obj
 
     # Find ids of all tracks where parking is allowed
     parking_ids = {tp["id"] for tp in location_object["trackParts"] if tp.get("parkingAllowed")}
@@ -529,9 +560,12 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             tp_id = track_part["id"]
             if tp_id in bfs_dist and bfs_dist[tp_id] in bfs_to_entry_dist:
                 problem.set_initial_value(entry_distance(obj), up.Int(bfs_to_entry_dist[bfs_dist[tp_id]]))
-        # Service tracks come from facilities[].relatedTrackParts (Lonyuk thesis §5.2.5)
+        # Service tracks come from facilities[].relatedTrackParts
         if str(track_part["id"]) in service_track_ids:
+            info = service_track_ids[str(track_part["id"])]
             problem.set_initial_value(service_allowed(obj), True)
+            problem.set_initial_value(facility_type(obj, id_to_facility_type[info["type"]]), True)
+            problem.set_initial_value(max_simultaneous_service(obj), up.Int(info["capacity"]))
         problem.set_initial_value(track_length(obj), up.Real(Fraction(str(track_part.get("length", 100.0)))))
 
         # Use a very large number to indicate effectively infinite capacity for non-parking tracks, so that they can be used for temporary movements
@@ -585,6 +619,12 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 problem.set_initial_value(serviced(arrival_train), True)
             if include_service:
                 problem.add_goal(serviced(arrival_train))
+            # Set which facility type this train requires, based on members[].tasks[].type.other
+            for member in train.get("members", []):
+                for task in member.get("tasks", []):
+                    task_type_str = task.get("type", {}).get("other")
+                    if task_type_str and task_type_str in id_to_facility_type:
+                        problem.set_initial_value(requires_facility(arrival_train, id_to_facility_type[task_type_str]), True)
             previous_length_on_track = track_occupancies.get(initial_track_id, Fraction(0))
             problem.set_initial_value(aside_distance(arrival_train), up.Real(previous_length_on_track))
             track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length

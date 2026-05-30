@@ -1,6 +1,6 @@
 (define (domain scenario_solver_example1-domain)
  (:requirements :strips :typing :negative-preconditions :equality :numeric-fluents)
- (:types arrivaltrain trackpart trainunit departurerequest requestslot)
+ (:types arrivaltrain trackpart trainunit departurerequest requestslot facilitytype)
  (:predicates 
              (at ?unit - arrivaltrain ?trackpart - trackpart)
              (parking_allowed ?trackpart - trackpart)
@@ -25,6 +25,8 @@
              (coupling_allowed ?trackpart - trackpart)
              (service_allowed ?trackpart - trackpart)
              (serviced ?train - arrivaltrain)
+             (facility_type ?trackpart - trackpart ?ftype - facilitytype)
+             (requires_facility ?train - arrivaltrain ?ftype - facilitytype)
  )
  (:functions 
              (arrival ?train - arrivaltrain)
@@ -38,6 +40,8 @@
              (astack_distance ?trackpart - trackpart)
              (bstack_distance ?trackpart - trackpart)
              (concurrent_movements)
+             (trains_being_serviced ?trackpart - trackpart)
+             (max_simultaneous_service ?trackpart - trackpart)
  )
  (:action start_move
   :parameters ( ?t - arrivaltrain)
@@ -76,9 +80,9 @@
   :precondition (and (at ?t ?l) (parking_allowed ?l))
   :effect (and (parked ?t) (track_is_parked_at ?l)))
  (:action service
-  :parameters ( ?t - arrivaltrain ?l - trackpart)
-  :precondition (and (at ?t ?l) (service_allowed ?l))
-  :effect (and (serviced ?t)))
+  :parameters ( ?t - arrivaltrain ?l - trackpart ?f - facilitytype)
+  :precondition (and (at ?t ?l) (service_allowed ?l) (facility_type ?l ?f) (requires_facility ?t ?f) (< (trains_being_serviced ?l) (max_simultaneous_service ?l)))
+  :effect (and (serviced ?t) (assign (trains_being_serviced ?l) (+ 1 (trains_being_serviced ?l)))))
  (:action match
   :parameters ( ?unit_0 - trainunit ?slot - requestslot)
   :precondition (and (available ?unit_0) (slot_open ?slot) (compatible ?unit_0 ?slot))
