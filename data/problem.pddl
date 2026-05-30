@@ -4,6 +4,8 @@
    train2000 train3000 train_in_standing_0 train_in_standing_1 - arrivaltrain
    o_51b o_52 o_53 o_54 o_55 o_56 o_57 o_58 o_59 o_60 o_61 o_62 o_63 o_64 o_104a o_906a o_952_974 o_953_973 o_954_957 o_954_975 o_958_959 o_958_978 o_959_960 o_960_961 o_961_963 o_964_965 o_967_968 o_969_979 o_971_972 o_972_973 o_976_977 o_977_978 o_967_kruis1 o_968_kruis1 o_971_kruis1 o_972_kruis1 o_952_kruis2 o_953_kruis2 o_973_kruis2 o_974_kruis2 o_425_sein436 o_906b sein70 sein436 stootblok63 stootblok64 stootblok104a stootblok906b kruis2 kruis1 wissel425 wissel952 wissel953 wissel954 wissel957 wissel958 wissel959 wissel960 wissel961 wissel963 wissel964 wissel965 wissel972 wissel973 wissel976 wissel977 wissel978 wissel979 engels966_967 engels968_969 engels970_971 engels974_975 - trackpart
    unit2401 unit2601 unit2802 unit2801 - trainunit
+   request4000 request2001 request3001 - departurerequest
+   request4000_slot0 request4000_slot1 request2001_slot0 request3001_slot0 - requestslot
  )
  (:init
               (= (track_length o_51b) 1000000000.0)
@@ -321,6 +323,22 @@
               (available unit2802)
               (unit_in_train unit2801 train_in_standing_1)
               (available unit2801)
+              (request_open request4000)
+              (slot_open request4000_slot0)
+              (slot_for_request request4000_slot0 request4000)
+              (compatible unit2801 request4000_slot0)
+              (slot_open request4000_slot1)
+              (slot_for_request request4000_slot1 request4000)
+              (compatible unit2802 request4000_slot1)
+              (slot_before request4000_slot0 request4000_slot1)
+              (request_open request2001)
+              (slot_open request2001_slot0)
+              (slot_for_request request2001_slot0 request2001)
+              (compatible unit2401 request2001_slot0)
+              (request_open request3001)
+              (slot_open request3001_slot0)
+              (slot_for_request request3001_slot0 request3001)
+              (compatible unit2601 request3001_slot0)
               (= (entry_distance o_51b) 0)
               (= (entry_distance o_63) 0)
               (= (entry_distance o_64) 0)
@@ -597,9 +615,10 @@
  (:goal (and 
            (serviced train2000)
            (serviced train3000)
-           (track_is_parked_at o_62)
-           (track_is_parked_at o_61)
-           (= (num_of_departed_trains) 1)
+           (slot_filled request4000_slot0)
+           (slot_filled request4000_slot1)
+           (slot_filled request2001_slot0)
+           (slot_filled request3001_slot0)
         )
  )
 )

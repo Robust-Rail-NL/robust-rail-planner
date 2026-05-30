@@ -65,11 +65,11 @@
   :effect (and (assign (number_of_trains_on_track ?l_from) (- (number_of_trains_on_track ?l_from) 1)) (assign (number_of_trains_on_track ?l_to) (+ 1 (number_of_trains_on_track ?l_to))) (assign (aside_distance ?t) (- (astack_distance ?l_to) (train_length ?t))) (assign (bstack_distance ?l_from) (- (bstack_distance ?l_from) (train_length ?t))) (assign (astack_distance ?l_to) (- (astack_distance ?l_to) (train_length ?t))) (at ?t ?l_to) (not (at ?t ?l_from))))
  (:action depart_aside
   :parameters ( ?t - arrivaltrain ?l - trackpart)
-  :precondition (and (at ?t ?l) (departure_exit_a ?l) (<= (aside_distance ?t) (astack_distance ?l)))
+  :precondition (and (at ?t ?l) (departure_exit_a ?l) (<= (aside_distance ?t) (astack_distance ?l)) (serviced ?t))
   :effect (and (not (at ?t ?l)) (departed ?t) (assign (num_of_departed_trains) (+ 1 (num_of_departed_trains))) (assign (number_of_trains_on_track ?l) (- (number_of_trains_on_track ?l) 1)) (assign (aside_distance ?t) 0) (assign (astack_distance ?l) (+ (train_length ?t) (astack_distance ?l))) (assign (concurrent_movements) (- (concurrent_movements) 1)) (not (allowed_to_move ?t))))
  (:action depart_bside
   :parameters ( ?t - arrivaltrain ?l - trackpart)
-  :precondition (and (at ?t ?l) (departure_exit_b ?l) (<= (- (bstack_distance ?l) (train_length ?t)) (aside_distance ?t)))
+  :precondition (and (at ?t ?l) (departure_exit_b ?l) (<= (- (bstack_distance ?l) (train_length ?t)) (aside_distance ?t)) (serviced ?t))
   :effect (and (not (at ?t ?l)) (departed ?t) (assign (num_of_departed_trains) (+ 1 (num_of_departed_trains))) (assign (number_of_trains_on_track ?l) (- (number_of_trains_on_track ?l) 1)) (assign (aside_distance ?t) 0) (assign (bstack_distance ?l) (- (bstack_distance ?l) (train_length ?t))) (assign (concurrent_movements) (- (concurrent_movements) 1)) (not (allowed_to_move ?t))))
  (:action park
   :parameters ( ?t - arrivaltrain ?l - trackpart)
