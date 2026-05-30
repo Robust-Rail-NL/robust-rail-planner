@@ -15,8 +15,7 @@ parser.add_argument("-l", "--location-file", help="Specifies the name of the loc
 parser.add_argument("-o", "--output-file", help="Specifies the name of the output pddl instance file. Defaults to {scenario_file}.pddl. Will be stored in /data/", required=False, default=None)
 parser.add_argument("-d", "--domain-file", help="Specifies the name of the output pddl domain file. If none, the domain is not written. Will be stored in /data/", required=False, default=None)
 parser.add_argument("--coupling-mode", choices=["implicit_free_uncoupling", "implicit_explicit_uncoupling", "explicit_coupling"], default="implicit_free_uncoupling", required=False, help="Controls the matching/coupling modelling ladder.")
-parser.add_argument("--subproblem", choices=["matching", "parking", "combined"], default="combined", required=False, help="Selects which subproblem goals to emit.")
-
+parser.add_argument("--subproblem", choices=["matching", "parking", "service", "combined"], default="combined", required=False, help="Selects which subproblem goals to emit.")
 
 ### Add logging to the arguments
 parser.add_argument("--log-level", default="ERROR", required=False, help="Configure the logging level (e.g., INFO, WARNING, ERROR) default=ERROR.")
@@ -189,6 +188,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     scenario_object = json.load(open(scenario_file))
     include_parking = subproblem in ["parking", "combined"]
     include_matching = subproblem in ["matching", "combined"]
+    include_service = subproblem in ["service", "combined"]
 
     # In unified planning the domain information is included in the problem class
     problem = up.Problem(scenario_name)
@@ -237,7 +237,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     unit_in_train = problem.add_fluent(up.Fluent("unit_in_train", up.BoolType(), unit=train_unit_type, train=arrival_train_type), default_initial_value=False)
     unit_before = problem.add_fluent(up.Fluent("unit_before", up.BoolType(), first=train_unit_type, second=train_unit_type), default_initial_value=False)
     coupling_allowed = problem.add_fluent(up.Fluent("coupling_allowed", up.BoolType(), trackpart=track_part_type), default_initial_value=False)
-    
+    service_allowed = problem.add_fluent(up.Fluent("service_allowed", up.BoolType(), trackpart=track_part_type), default_initial_value=False)
+    serviced = problem.add_fluent(up.Fluent("serviced", up.BoolType(), train=arrival_train_type), default_initial_value=False)
 
     startMove = up.InstantaneousAction('start_move', t=arrival_train_type)
     startMove.add_precondition(up.Not(allowed_to_move(startMove.t)))
@@ -362,6 +363,12 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     park.add_effect(parked(park.t), True)
     park.add_effect(track_is_parked_at(park.l), True)
     problem.add_action(park)
+
+    service = up.InstantaneousAction('service', t=arrival_train_type, l=track_part_type)
+    service.add_precondition(at(service.t, service.l))
+    service.add_precondition(service_allowed(service.l))
+    service.add_effect(serviced(service.t), True)
+    problem.add_action(service)
 
     explicit_uncoupling = coupling_mode in ["implicit_explicit_uncoupling", "explicit_coupling"]
     explicit_coupling = coupling_mode == "explicit_coupling"
@@ -503,6 +510,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             tp_id = track_part["id"]
             if tp_id in bfs_dist and bfs_dist[tp_id] in bfs_to_entry_dist:
                 problem.set_initial_value(entry_distance(obj), up.Int(bfs_to_entry_dist[bfs_dist[tp_id]]))
+        if track_part.get("serviceAllowed", False):
+            problem.set_initial_value(service_allowed(obj), True)
         problem.set_initial_value(track_length(obj), up.Real(Fraction(str(track_part.get("length", 100.0)))))
 
         # Use a very large number to indicate effectively infinite capacity for non-parking tracks, so that they can be used for temporary movements
@@ -547,6 +556,11 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             # problem.set_initial_value(departure_rank(arrival_train), up.Int(train_to_rank[train["id"]]))
             train_total_length = _train_total_length(train)
             problem.set_initial_value(train_length(arrival_train), up.Real(train_total_length))
+            needs_service = len(train.get("serviceTasks", [])) > 0
+            if not needs_service:
+                problem.set_initial_value(serviced(arrival_train), True)
+            if include_service:
+                problem.add_goal(serviced(arrival_train))
             previous_length_on_track = track_occupancies.get(initial_track_id, Fraction(0))
             problem.set_initial_value(aside_distance(arrival_train), up.Real(previous_length_on_track))
             track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
