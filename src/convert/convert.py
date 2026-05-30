@@ -165,6 +165,20 @@ def _train_object_name(source, index, train):
     return "train" + train["id"]
 
 
+def _build_service_track_ids(location_object):
+    # Service tracks are defined in facilities[].relatedTrackParts for facilities that have taskTypes.
+    # Only includes facilities of type Reinigingsperron (cleaning platform) — the primary service facility.
+    # Monteur and Wasmachine facilities are excluded as they represent different resource types.
+    # In: location object containing a "facilities" section
+    # Out: set of track part IDs (as strings) that are service tracks
+    service_ids = set()
+    for facility in location_object.get("facilities", []):
+        if facility.get("taskTypes") and facility.get("type") == "Reinigingsperron":
+            for tp_id in facility.get("relatedTrackParts", []):
+                service_ids.add(str(tp_id))
+    return service_ids
+
+
 def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None, coupling_mode="implicit_free_uncoupling", subproblem="combined"):
     # Path defaults to ../../scenario-planning-inputs/Location_KleineBinckhorst/
     if path_to_folder is None:
@@ -186,7 +200,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     location_object = json.load(open(location_file))
     scenario_object = json.load(open(scenario_file))
-    include_parking = subproblem in ["parking", "combined"]
+    include_parking = subproblem in ["parking", "service", "combined"]
     include_matching = subproblem in ["matching", "combined"]
     include_service = subproblem in ["service", "combined"]
 
@@ -478,6 +492,9 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     exit_ids = exit_ids_a.union(exit_ids_b)
     bfs_dist = _bfs_from(adjacency, exit_ids)
 
+    # Build service track IDs from facilities section (Lonyuk thesis §5.2.5)
+    service_track_ids = _build_service_track_ids(location_object)
+
     # Find ids of all tracks where parking is allowed
     parking_ids = {tp["id"] for tp in location_object["trackParts"] if tp.get("parkingAllowed")}
     # Create sorted dictionary from all different bfs distances to the id's of parking tracks with those distances
@@ -510,7 +527,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             tp_id = track_part["id"]
             if tp_id in bfs_dist and bfs_dist[tp_id] in bfs_to_entry_dist:
                 problem.set_initial_value(entry_distance(obj), up.Int(bfs_to_entry_dist[bfs_dist[tp_id]]))
-        if track_part.get("serviceAllowed", False):
+        # Service tracks come from facilities[].relatedTrackParts (Lonyuk thesis §5.2.5)
+        if str(track_part["id"]) in service_track_ids:
             problem.set_initial_value(service_allowed(obj), True)
         problem.set_initial_value(track_length(obj), up.Real(Fraction(str(track_part.get("length", 100.0)))))
 
@@ -556,7 +574,11 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             # problem.set_initial_value(departure_rank(arrival_train), up.Int(train_to_rank[train["id"]]))
             train_total_length = _train_total_length(train)
             problem.set_initial_value(train_length(arrival_train), up.Real(train_total_length))
-            needs_service = len(train.get("serviceTasks", [])) > 0
+            # Service tasks are nested under members[].tasks in the scenario JSON (Lonyuk thesis §5.2.5)
+            needs_service = any(
+                task for member in train.get("members", [])
+                for task in member.get("tasks", [])
+            )
             if not needs_service:
                 problem.set_initial_value(serviced(arrival_train), True)
             if include_service:
