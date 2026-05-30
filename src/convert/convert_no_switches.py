@@ -151,6 +151,146 @@ def _train_initial_track_id(train, preferred_keys):
     return None
 
 
+def _track_part_neighbors(track_part):
+    # Return the unique neighboring track-part ids from both sides in input order.
+    neighbors = []
+    seen = set()
+    for side_key in ("aSide", "bSide"):
+        for nb_id in track_part.get(side_key, []):
+            if nb_id not in seen:
+                seen.add(nb_id)
+                neighbors.append(nb_id)
+    return neighbors
+
+
+def _is_switch_like_track_part(track_part):
+    # Remove zero-length, non-parkable connector nodes and reconnect their neighbors directly.
+    if track_part.get("parkingAllowed", False):
+        return False
+    try:
+        length = Fraction(str(track_part.get("length", 0)))
+    except Exception:
+        length = Fraction(0)
+    return length == 0 and len(_track_part_neighbors(track_part)) >= 2
+
+
+def _track_part_side_for_neighbor(track_part, neighbor_id):
+    # Report which side of a track-part points to a given neighbor.
+    if neighbor_id in track_part.get("aSide", []):
+        return "a"
+    if neighbor_id in track_part.get("bSide", []):
+        return "b"
+    return None
+
+
+def _switch_like_components(location_object, switch_like_track_ids):
+    # Return connected components of the switch-like subgraph.
+    adjacency = _build_adjacency(location_object)
+    seen = set()
+    components = []
+
+    for track_id in switch_like_track_ids:
+        if track_id in seen:
+            continue
+
+        component = set()
+        queue = deque([track_id])
+        seen.add(track_id)
+
+        while queue:
+            current = queue.popleft()
+            component.add(current)
+            for neighbor_id in adjacency.get(current, []):
+                if neighbor_id in switch_like_track_ids and neighbor_id not in seen:
+                    seen.add(neighbor_id)
+                    queue.append(neighbor_id)
+
+        components.append(component)
+
+    return components
+
+
+def _reconnect_switch_like_components(location_object, switch_like_track_ids, id_to_track_part, problem, connected_pairs, connected_aside, connected_bside):
+    # Collapse each connected switch-chain into direct connections between its boundary tracks.
+    components = _switch_like_components(location_object, switch_like_track_ids)
+    original_lookup = {tp["id"]: tp for tp in location_object["trackParts"]}
+
+    for component in components:
+        boundary_ports = []
+
+        for switch_id in component:
+            switch_part = original_lookup[switch_id]
+            for neighbor_id in _track_part_neighbors(switch_part):
+                if neighbor_id in component or neighbor_id not in id_to_track_part:
+                    continue
+
+                side = _track_part_side_for_neighbor(switch_part, neighbor_id)
+                if side is None:
+                    continue
+
+                boundary_ports.append((neighbor_id, side, switch_id))
+
+        if len(boundary_ports) < 2:
+            continue
+
+        if len(boundary_ports) > 2:
+            logging.warning(
+                "Switch-like component with %d boundary ports; connecting all boundary tracks pairwise.",
+                len(boundary_ports),
+            )
+
+        for left_index, (left_id, left_side, _) in enumerate(boundary_ports):
+            for right_id, right_side, _ in boundary_ports[left_index + 1:]:
+                if left_id == right_id:
+                    continue
+
+                pair = tuple(sorted([left_id, right_id]))
+                if pair in connected_pairs:
+                    continue
+
+                if left_side == "a":
+                    problem.set_initial_value(connected_aside(id_to_track_part[left_id], id_to_track_part[right_id]), True)
+                else:
+                    problem.set_initial_value(connected_bside(id_to_track_part[left_id], id_to_track_part[right_id]), True)
+
+                if right_side == "a":
+                    problem.set_initial_value(connected_aside(id_to_track_part[right_id], id_to_track_part[left_id]), True)
+                else:
+                    problem.set_initial_value(connected_bside(id_to_track_part[right_id], id_to_track_part[left_id]), True)
+
+                connected_pairs.add(pair)
+
+
+def get_all_aside_neighbors_that_are_not_switch_like(track_part, switch_like_track_ids, location_object):
+    # Use recursion to get all aside neighbors of track part then call the function again until we reach a track part that is not switch-like, return the set of all non-switch-like aside neighbors
+    neighbors = set()
+    for nb_id in track_part.get("aSide", []):
+        if nb_id in switch_like_track_ids:
+            nb_part = track_part
+            for tp in location_object["trackParts"]:
+                if tp["id"] == nb_id:
+                    nb_part = tp
+                    break
+            neighbors.update(get_all_aside_neighbors_that_are_not_switch_like(nb_part, switch_like_track_ids, location_object))
+        else:
+            neighbors.add(nb_id)
+    return neighbors
+
+def get_all_bside_neighbors_that_are_not_switch_like(track_part, switch_like_track_ids, location_object):
+    # Use recursion to get all bside neighbors of track part then call the function again until we reach a track part that is not switch-like, return the set of all non-switch-like bside neighbors
+    neighbors = set()
+    for nb_id in track_part.get("bSide", []):
+        if nb_id in switch_like_track_ids:
+            nb_part = track_part
+            for tp in location_object["trackParts"]:
+                if tp["id"] == nb_id:
+                    nb_part = tp
+                    break
+            neighbors.update(get_all_bside_neighbors_that_are_not_switch_like(nb_part, switch_like_track_ids, location_object))
+        else:
+            neighbors.add(nb_id)
+    return neighbors
+
 def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None, coupling_mode="implicit_free_uncoupling", subproblem="combined"):
     # Path defaults to ../../scenario-planning-inputs/Location_KleineBinckhorst/
     if path_to_folder is None:
@@ -197,7 +337,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     departure_exit_b = problem.add_fluent(up.Fluent("departure_exit_b", up.BoolType(), trackpart=track_part_type),                          default_initial_value=False)
     entry_distance = problem.add_fluent(up.Fluent("entry_distance", up.IntType(),  trackpart=track_part_type),                          default_initial_value=up.Int(0))
     departure_rank = problem.add_fluent(up.Fluent("departure_rank", up.IntType(),  train=arrival_train_type),                           default_initial_value=up.Int(0))
-    track_is_parked_at = problem.add_fluent(up.Fluent("track_is_parked_at", up.BoolType(), trackpart=track_part_type),                  default_initial_value=False)
+    number_of_parked_trains = problem.add_fluent(up.Fluent("number_of_parked_trains", up.IntType(), trackpart=track_part_type),                 default_initial_value=up.Int(0))
     number_of_trains_on_track = problem.add_fluent(up.Fluent("number_of_trains_on_track", up.IntType(), trackpart=track_part_type),                 default_initial_value=up.Int(0))
     num_of_departed_trains = problem.add_fluent(up.Fluent("num_of_departed_trains", up.IntType()),                                      default_initial_value=up.Int(0))
     track_length = problem.add_fluent(up.Fluent("track_length", up.RealType(), trackpart=track_part_type),                          default_initial_value=up.Real(Fraction(0)))
@@ -222,6 +362,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     startMove = up.InstantaneousAction('start_move', t=arrival_train_type)
     startMove.add_precondition(up.Not(allowed_to_move(startMove.t)))
+    startMove.add_precondition(up.Not(departed(startMove.t)))
+    startMove.add_precondition(up.Not(parked(startMove.t)))
     startMove.add_precondition(concurrent_movements < max_concurrent_movements)
     startMove.add_effect(allowed_to_move(startMove.t), True)
     startMove.add_effect(concurrent_movements, concurrent_movements + 1)
@@ -239,7 +381,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_aside_empty.add_precondition(allowed_to_move(move_aside_empty.t))
     move_aside_empty.add_precondition(at(move_aside_empty.t, move_aside_empty.l_from))
     move_aside_empty.add_precondition(connected_aside(move_aside_empty.l_from, move_aside_empty.l_to))
-    move_aside_empty.add_precondition(up.Not(parked(move_aside_empty.t)))
     move_aside_empty.add_precondition(aside_distance(move_aside_empty.t) <= astack_distance(move_aside_empty.l_from))
     move_aside_empty.add_precondition(up.Equals(number_of_trains_on_track(move_aside_empty.l_to), 0))
     move_aside_empty.add_precondition(train_length(move_aside_empty.t) <= track_length(move_aside_empty.l_to))
@@ -258,7 +399,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_aside_occupied.add_precondition(allowed_to_move(move_aside_occupied.t))
     move_aside_occupied.add_precondition(at(move_aside_occupied.t, move_aside_occupied.l_from))
     move_aside_occupied.add_precondition(connected_aside(move_aside_occupied.l_from, move_aside_occupied.l_to))
-    move_aside_occupied.add_precondition(up.Not(parked(move_aside_occupied.t)))
     move_aside_occupied.add_precondition(aside_distance(move_aside_occupied.t) <= astack_distance(move_aside_occupied.l_from))
     move_aside_occupied.add_precondition(number_of_trains_on_track(move_aside_occupied.l_to) > 0)
     move_aside_occupied.add_precondition(train_length(move_aside_occupied.t) <= track_length(move_aside_occupied.l_to) - bstack_distance(move_aside_occupied.l_to))
@@ -276,7 +416,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_bside_empty.add_precondition(allowed_to_move(move_bside_empty.t))
     move_bside_empty.add_precondition(at(move_bside_empty.t, move_bside_empty.l_from))
     move_bside_empty.add_precondition(connected_bside(move_bside_empty.l_from, move_bside_empty.l_to))
-    move_bside_empty.add_precondition(up.Not(parked(move_bside_empty.t)))
     move_bside_empty.add_precondition(aside_distance(move_bside_empty.t) >= bstack_distance(move_bside_empty.l_from) - train_length(move_bside_empty.t))
     move_bside_empty.add_precondition(up.Equals(number_of_trains_on_track(move_bside_empty.l_to), 0))
     move_bside_empty.add_precondition(train_length(move_bside_empty.t) <= track_length(move_bside_empty.l_to))
@@ -295,7 +434,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_bside_occupied.add_precondition(allowed_to_move(move_bside_occupied.t))
     move_bside_occupied.add_precondition(at(move_bside_occupied.t, move_bside_occupied.l_from))
     move_bside_occupied.add_precondition(connected_bside(move_bside_occupied.l_from, move_bside_occupied.l_to))
-    move_bside_occupied.add_precondition(up.Not(parked(move_bside_occupied.t)))
     move_bside_occupied.add_precondition(aside_distance(move_bside_occupied.t) >= bstack_distance(move_bside_occupied.l_from) - train_length(move_bside_occupied.t))
     move_bside_occupied.add_precondition(number_of_trains_on_track(move_bside_occupied.l_to) > 0)
     move_bside_occupied.add_precondition(train_length(move_bside_occupied.t) <= astack_distance(move_bside_occupied.l_to))
@@ -340,10 +478,13 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(depart_bside)
 
     park = up.InstantaneousAction('park', t=arrival_train_type, l=track_part_type)
+    park.add_precondition(allowed_to_move(park.t))
     park.add_precondition(at(park.t, park.l))
     park.add_precondition(parking_allowed(park.l))
     park.add_effect(parked(park.t), True)
-    park.add_effect(track_is_parked_at(park.l), True)
+    park.add_effect(number_of_parked_trains(park.l), number_of_parked_trains(park.l) + 1)
+    park.add_effect(allowed_to_move(park.t), False)
+    park.add_effect(concurrent_movements, concurrent_movements - 1)
     problem.add_action(park)
 
     explicit_uncoupling = coupling_mode in ["implicit_explicit_uncoupling", "explicit_coupling"]
@@ -391,14 +532,28 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(match)
     
 
+    switch_like_track_ids = {
+        track_part["id"]
+        for track_part in location_object["trackParts"]
+        if _is_switch_like_track_part(track_part)
+    }
+
+    simplified_track_parts = [
+        track_part
+        for track_part in location_object["trackParts"]
+        if track_part["id"] not in switch_like_track_ids
+    ]
+    simplified_location_object = dict(location_object)
+    simplified_location_object["trackParts"] = simplified_track_parts
+
     # Pre-compute connectivity and entry distances from JSON (no UP objects yet)
-    adjacency = _build_adjacency(location_object)
-    exit_ids_a, exit_ids_b = _departure_exit_ids(scenario_object, location_object)
+    adjacency = _build_adjacency(simplified_location_object)
+    exit_ids_a, exit_ids_b = _departure_exit_ids(scenario_object, simplified_location_object)
     exit_ids = exit_ids_a.union(exit_ids_b)
     bfs_dist = _bfs_from(adjacency, exit_ids)
 
     # Find ids of all tracks where parking is allowed
-    parking_ids = {tp["id"] for tp in location_object["trackParts"] if tp.get("parkingAllowed")}
+    parking_ids = {tp["id"] for tp in simplified_track_parts if tp.get("parkingAllowed")}
     # Create sorted dictionary from all different bfs distances to the id's of parking tracks with those distances
     parking_bfs_values = sorted({bfs_dist[pid] for pid in parking_ids if pid in bfs_dist})
     # Normalize the distances; all closest parking tracks get 1, those after get 2 etc.
@@ -415,7 +570,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     # Add track part objects
     id_to_track_part = {}
-    for track_part in location_object["trackParts"]:
+    for track_part in simplified_track_parts:
         obj = problem.add_object(track_part["name"], track_part_type)
         id_to_track_part[track_part["id"]] = obj
         if track_part["id"] in exit_ids_a:
@@ -435,22 +590,20 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     # Set connectivity (each undirected edge -> two directed facts)
     connected_pairs = set()
-    for track_part in location_object["trackParts"]:
+    for track_part in simplified_track_parts:
         src_id = track_part["id"]
-        for nb_id in track_part.get("aSide", []):
+        all_aside_neighbors = get_all_aside_neighbors_that_are_not_switch_like(track_part, switch_like_track_ids, location_object)
+        for nb_id in all_aside_neighbors:
             if nb_id in id_to_track_part:
                 pair = tuple(sorted([src_id, nb_id]))
-                # problem.set_initial_value(connected(id_to_track_part[src_id], id_to_track_part[nb_id]), True)
-                # problem.set_initial_value(connected(id_to_track_part[nb_id], id_to_track_part[src_id]), True)
                 problem.set_initial_value(connected_aside(id_to_track_part[src_id], id_to_track_part[nb_id]), True)
                 if pair not in connected_pairs:
                     connected_pairs.add(pair)
 
-        for nb_id in track_part.get("bSide", []):
+        all_bside_neighbors = get_all_bside_neighbors_that_are_not_switch_like(track_part, switch_like_track_ids, location_object)
+        for nb_id in all_bside_neighbors:
             if nb_id in id_to_track_part:
                 pair = tuple(sorted([src_id, nb_id]))
-                # problem.set_initial_value(connected(id_to_track_part[src_id], id_to_track_part[nb_id]), True)
-                # problem.set_initial_value(connected(id_to_track_part[nb_id], id_to_track_part[src_id]), True)
                 problem.set_initial_value(connected_bside(id_to_track_part[src_id], id_to_track_part[nb_id]), True)
                 if pair not in connected_pairs:
                     connected_pairs.add(pair)
@@ -492,10 +645,15 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
 
         if not include_matching:
+            # Each outstanding request contributes one required parked train on its target track.
+            required_parked_per_track = {}
             for request in out_standing_trains:
                 track_id = request.get("lastParkingTrackPart")
                 if track_id in id_to_track_part:
-                    problem.add_goal(track_is_parked_at(id_to_track_part[track_id]))
+                    required_parked_per_track[track_id] = required_parked_per_track.get(track_id, 0) + 1
+
+            for track_id, required_count in required_parked_per_track.items():
+                problem.add_goal(up.Equals(number_of_parked_trains(id_to_track_part[track_id]), up.Int(required_count)))
 
         # Add outbound train requests: these trains must be assembled (contain all units) and depart.
         # Add a goal stating that the number of departed trains must be equal to out_requests
