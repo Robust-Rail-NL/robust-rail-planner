@@ -4,6 +4,7 @@ Discover locations and scenarios, then convert to PDDL and/or run the planner.
 """
 import os
 import sys
+import ast
 import subprocess
 import time
 import questionary
@@ -81,6 +82,26 @@ def discover_convert_scripts():
     )
 
 
+def discover_convert_script_arguments(convert_script):
+    """Return the long argparse flags declared by a converter script."""
+    try:
+        with open(convert_script, encoding="utf-8") as handle:
+            tree = ast.parse(handle.read(), filename=convert_script)
+    except OSError:
+        return set()
+
+    arguments = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Attribute) or node.func.attr != "add_argument":
+            continue
+        for arg in node.args:
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and arg.value.startswith("--"):
+                arguments.add(arg.value)
+    return arguments
+
+
 def discover_runs(location, scenario_name):
     """Return existing run numbers for a given location + scenario, sorted ascending."""
     d = _run_dir(location, scenario_name)
@@ -128,26 +149,27 @@ def run_convert(location, scenario_file, run_num, convert_script, subproblem="pa
     location_dir = os.path.join(SCENARIO_INPUTS, location)
     scenario_name = scenario_file.replace(".json", "")
     problem_file, domain_file, _ = run_paths(location, scenario_name, run_num)
+    convert_args = discover_convert_script_arguments(convert_script)
+    needs_subproblem = "--subproblem" in convert_args
+    needs_coupling_mode = "--coupling-mode" in convert_args
 
     os.makedirs(os.path.dirname(problem_file), exist_ok=True)
 
     print(f"\n  Converting  {scenario_file}")
-    print(f"  Subproblem ->  {subproblem}")
-    if subproblem in ("matching", "combined"):
+    if needs_subproblem:
+        print(f"  Subproblem ->  {subproblem}")
+    if needs_coupling_mode and subproblem in ("matching", "combined"):
         print(f"  Coupling   ->  {coupling_mode}")
     print(f"  Problem    ->  {os.path.relpath(problem_file, REPO_ROOT)}")
     print(f"  Domain     ->  {os.path.relpath(domain_file, REPO_ROOT)}")
 
-    result = subprocess.run(
-        [PYTHON, convert_script,
-         "-p", location_dir,
-         "-s", scenario_file,
-         "-o", problem_file,
-         "-d", domain_file,
-         "--subproblem", subproblem,
-         "--coupling-mode", coupling_mode],
-        capture_output=True, text=True,
-    )
+    command = [PYTHON, convert_script, "-p", location_dir, "-s", scenario_file, "-o", problem_file, "-d", domain_file]
+    if needs_subproblem:
+        command.extend(["--subproblem", subproblem])
+    if needs_coupling_mode and subproblem in ("matching", "combined"):
+        command.extend(["--coupling-mode", coupling_mode])
+
+    result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"  [convert ERROR]\n{result.stderr}")
         return False
@@ -267,17 +289,21 @@ def main():
         if convert_script is None:
             return
 
-        selected_subproblem = questionary.select(
-            "Subproblem model:",
-            choices=list(SUBPROBLEM_CHOICES.keys()),
-            style=STYLE,
-        ).ask()
-        if selected_subproblem is None:
-            return
-        subproblem = SUBPROBLEM_CHOICES[selected_subproblem]
-
+        convert_args = discover_convert_script_arguments(convert_script)
+        subproblem = "parking"
         coupling_mode = "implicit_free_uncoupling"
-        if subproblem in ("matching", "combined"):
+
+        if "--subproblem" in convert_args:
+            selected_subproblem = questionary.select(
+                "Subproblem model:",
+                choices=list(SUBPROBLEM_CHOICES.keys()),
+                style=STYLE,
+            ).ask()
+            if selected_subproblem is None:
+                return
+            subproblem = SUBPROBLEM_CHOICES[selected_subproblem]
+
+        if "--coupling-mode" in convert_args and subproblem in ("matching", "combined"):
             selected_coupling_mode = questionary.select(
                 "Coupling mode:",
                 choices=list(COUPLING_MODE_CHOICES.keys()),
