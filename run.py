@@ -4,27 +4,54 @@ Discover locations and scenarios, then convert to PDDL and/or run the planner.
 """
 import os
 import sys
+import ast
 import subprocess
 import time
 import questionary
 from questionary import Style
 
-REPO_ROOT       = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SCENARIO_INPUTS = os.path.join(REPO_ROOT, "scenario-planning-inputs")
-DATA_DIR        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-CONVERT_SCRIPT  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "convert", "convert.py")
-PLANNER_SCRIPT  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "plan", "planner.jl")
-PYTHON          = sys.executable
-JULIA           = "julia"
+if not os.path.isdir(SCENARIO_INPUTS):
+    SCENARIO_INPUTS = os.path.join(os.path.dirname(REPO_ROOT), "Robust-Rail-NL", "scenario-planning-inputs")
+DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
+CONVERT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "convert")
+PLANNER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "plan", "planner.jl")
+PYTHON = sys.executable
+JULIA = "julia"
+
+SUBPROBLEM_CHOICES = {
+    "Parking only": "parking",
+    "Coupling / matching only": "matching",
+    "Parking + coupling / matching": "combined",
+}
+
+COUPLING_MODE_CHOICES = {
+    "Implicit coupling, free uncoupling": "implicit_free_uncoupling",
+    "Implicit coupling, explicit uncoupling": "implicit_explicit_uncoupling",
+    "Explicit coupling and explicit uncoupling": "explicit_coupling",
+}
+
+PLANNER_BACKEND_CHOICES = {
+    "ENHSP via Julia": "enhsp",
+    "SymbolicPlanners.jl A* HAdd": "symbolic",
+}
 
 STYLE = Style([
-    ("qmark",     "fg:#00aabb bold"),
-    ("question",  "bold"),
-    ("answer",    "fg:#00aabb bold"),
-    ("pointer",   "fg:#00aabb bold"),
-    ("selected",  "fg:#00aabb"),
+    ("qmark", "fg:#00aabb bold"),
+    ("question", "bold"),
+    ("answer", "fg:#00aabb bold"),
+    ("pointer", "fg:#00aabb bold"),
+    ("selected", "fg:#00aabb"),
     ("separator", "fg:#555555"),
 ])
+
+VALIDATOR_SCRIPT = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "src",
+    "plan",
+    "validate_plan.py"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +73,33 @@ def discover_scenarios(location):
         f for f in os.listdir(scenario_dir)
         if f.startswith("scenario_solver_") and f.endswith(".json")
     )
+
+
+def discover_convert_scripts():
+    return sorted(
+        f for f in os.listdir(CONVERT_DIR)
+        if f.endswith(".py") and f.startswith("convert")
+    )
+
+
+def discover_convert_script_arguments(convert_script):
+    """Return the long argparse flags declared by a converter script."""
+    try:
+        with open(convert_script, encoding="utf-8") as handle:
+            tree = ast.parse(handle.read(), filename=convert_script)
+    except OSError:
+        return set()
+
+    arguments = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Attribute) or node.func.attr != "add_argument":
+            continue
+        for arg in node.args:
+            if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and arg.value.startswith("--"):
+                arguments.add(arg.value)
+    return arguments
 
 
 def discover_runs(location, scenario_name):
@@ -91,25 +145,31 @@ def run_paths(location, scenario_name, run_num):
 # Pipeline steps
 # ---------------------------------------------------------------------------
 
-def run_convert(location, scenario_file, run_num):
-    location_dir  = os.path.join(SCENARIO_INPUTS, location)
+def run_convert(location, scenario_file, run_num, convert_script, subproblem="parking", coupling_mode="implicit_free_uncoupling"):
+    location_dir = os.path.join(SCENARIO_INPUTS, location)
     scenario_name = scenario_file.replace(".json", "")
     problem_file, domain_file, _ = run_paths(location, scenario_name, run_num)
+    convert_args = discover_convert_script_arguments(convert_script)
+    needs_subproblem = "--subproblem" in convert_args
+    needs_coupling_mode = "--coupling-mode" in convert_args
 
     os.makedirs(os.path.dirname(problem_file), exist_ok=True)
 
     print(f"\n  Converting  {scenario_file}")
-    print(f"  Problem  →  {os.path.relpath(problem_file, REPO_ROOT)}")
-    print(f"  Domain   →  {os.path.relpath(domain_file,  REPO_ROOT)}")
+    if needs_subproblem:
+        print(f"  Subproblem ->  {subproblem}")
+    if needs_coupling_mode and subproblem in ("matching", "combined"):
+        print(f"  Coupling   ->  {coupling_mode}")
+    print(f"  Problem    ->  {os.path.relpath(problem_file, REPO_ROOT)}")
+    print(f"  Domain     ->  {os.path.relpath(domain_file, REPO_ROOT)}")
 
-    result = subprocess.run(
-        [PYTHON, CONVERT_SCRIPT,
-         "-p", location_dir,
-         "-s", scenario_file,
-         "-o", problem_file,
-         "-d", domain_file],
-        capture_output=True, text=True,
-    )
+    command = [PYTHON, convert_script, "-p", location_dir, "-s", scenario_file, "-o", problem_file, "-d", domain_file]
+    if needs_subproblem:
+        command.extend(["--subproblem", subproblem])
+    if needs_coupling_mode and subproblem in ("matching", "combined"):
+        command.extend(["--coupling-mode", coupling_mode])
+
+    result = subprocess.run(command, capture_output=True, text=True)
     if result.returncode != 0:
         print(f"  [convert ERROR]\n{result.stderr}")
         return False
@@ -117,7 +177,23 @@ def run_convert(location, scenario_file, run_num):
     return True
 
 
-def run_planner(location, scenario_name, run_num):
+def choose_convert_script():
+    scripts = discover_convert_scripts()
+    if not scripts:
+        print(f"No converter scripts found in {os.path.relpath(CONVERT_DIR, REPO_ROOT)}")
+        return None
+
+    chosen = questionary.select(
+        "Convert script:",
+        choices=scripts,
+        style=STYLE,
+    ).ask()
+    if chosen is None:
+        return None
+    return os.path.join(CONVERT_DIR, chosen)
+
+
+def run_planner(location, scenario_name, run_num, planner_backend="enhsp"):
     problem_file, domain_file, plan_file = run_paths(location, scenario_name, run_num)
 
     if not os.path.exists(problem_file):
@@ -130,12 +206,13 @@ def run_planner(location, scenario_name, run_num):
         return False
 
     print(f"\n  Planning  {os.path.relpath(problem_file, REPO_ROOT)}")
-    print(f"  Domain    {os.path.relpath(domain_file,   REPO_ROOT)}\n")
+    print(f"  Domain    {os.path.relpath(domain_file, REPO_ROOT)}\n")
+    print(f"  Planner   {planner_backend}\n")
 
     # Stream Julia output line-by-line with elapsed timestamps so slow searches are visible.
     start = time.monotonic()
     process = subprocess.Popen(
-        [JULIA, PLANNER_SCRIPT, domain_file, problem_file],
+        [JULIA, "--project=" + os.path.dirname(os.path.abspath(__file__)), PLANNER_SCRIPT, domain_file, problem_file, planner_backend],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
     )
     for line in process.stdout:
@@ -148,7 +225,7 @@ def run_planner(location, scenario_name, run_num):
         print("  [planner ERROR]")
         return False
 
-    # planner.jl writes to problem_file.replace(".pddl", ".plan") — that is already plan_file
+    # planner.jl writes to problem_file.replace(".pddl", ".plan"); that is already plan_file.
     if os.path.exists(plan_file):
         print(f"\n  Plan written to {os.path.relpath(plan_file, REPO_ROOT)}")
         with open(plan_file) as f:
@@ -186,7 +263,7 @@ def main():
 
     action = questionary.select(
         "Action:",
-        choices=["Convert to PDDL", "Run planner", "Convert then plan"],
+        choices=["Convert to PDDL", "Run planner", "Convert then plan", "Validate plan"],
         style=STYLE,
     ).ask()
     if action is None:
@@ -195,14 +272,54 @@ def main():
     scenario_name = scenario.replace(".json", "")
     print()
 
+    planner_backend = "enhsp"
+    convert_script = None
+    if action in ("Run planner", "Convert then plan"):
+        selected_planner_backend = questionary.select(
+            "Planner backend:",
+            choices=list(PLANNER_BACKEND_CHOICES.keys()),
+            style=STYLE,
+        ).ask()
+        if selected_planner_backend is None:
+            return
+        planner_backend = PLANNER_BACKEND_CHOICES[selected_planner_backend]
+
     if action in ("Convert to PDDL", "Convert then plan"):
+        convert_script = choose_convert_script()
+        if convert_script is None:
+            return
+
+        convert_args = discover_convert_script_arguments(convert_script)
+        subproblem = "parking"
+        coupling_mode = "implicit_free_uncoupling"
+
+        if "--subproblem" in convert_args:
+            selected_subproblem = questionary.select(
+                "Subproblem model:",
+                choices=list(SUBPROBLEM_CHOICES.keys()),
+                style=STYLE,
+            ).ask()
+            if selected_subproblem is None:
+                return
+            subproblem = SUBPROBLEM_CHOICES[selected_subproblem]
+
+        if "--coupling-mode" in convert_args and subproblem in ("matching", "combined"):
+            selected_coupling_mode = questionary.select(
+                "Coupling mode:",
+                choices=list(COUPLING_MODE_CHOICES.keys()),
+                style=STYLE,
+            ).ask()
+            if selected_coupling_mode is None:
+                return
+            coupling_mode = COUPLING_MODE_CHOICES[selected_coupling_mode]
+
         run_num = next_run_number(location, scenario_name)
-        ok = run_convert(location, scenario, run_num)
+        ok = run_convert(location, scenario, run_num, convert_script, subproblem=subproblem, coupling_mode=coupling_mode)
         if not ok and action == "Convert then plan":
             print()
             return
         if action == "Convert then plan":
-            run_planner(location, scenario_name, run_num)
+            run_planner(location, scenario_name, run_num, planner_backend=planner_backend)
 
     elif action == "Run planner":
         existing = discover_runs(location, scenario_name)
@@ -216,7 +333,44 @@ def main():
         if chosen is None:
             return
         run_num = int(chosen[3:])
-        run_planner(location, scenario_name, run_num)
+        run_planner(location, scenario_name, run_num, planner_backend=planner_backend)
+
+    elif action == "Validate plan":
+        existing = discover_runs(location, scenario_name)
+        if not existing:
+            print(f"  No existing runs found for {scenario_name}.")
+            print("  Run 'Convert to PDDL' first.")
+            print()
+            return
+
+        choices = [f"run{n}" for n in existing]
+        chosen = questionary.select("Run:", choices=choices, style=STYLE).ask()
+        if chosen is None:
+            return
+
+        run_num = int(chosen[3:])
+        problem_path, domain_path, plan_path = run_paths(location, scenario_name, run_num)
+
+        print(f"  Validating {os.path.relpath(plan_path, REPO_ROOT)}")
+        print(f"  Domain     {os.path.relpath(domain_path, REPO_ROOT)}")
+        print(f"  Problem    {os.path.relpath(problem_path, REPO_ROOT)}")
+
+        print()
+
+        result = subprocess.run(
+            [
+                PYTHON,
+                VALIDATOR_SCRIPT,
+                domain_path,
+                problem_path,
+                plan_path,
+            ]
+        )
+
+        if result.returncode != 0:
+            print("\nPlan validation FAILED.")
+        else:
+            print("\nPlan validation SUCCEEDED.")
 
     print()
 

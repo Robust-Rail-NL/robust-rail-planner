@@ -14,8 +14,6 @@ parser.add_argument("-s", "--scenario-file", help="Specifies the name of the sce
 parser.add_argument("-l", "--location-file", help="Specifies the name of the location file. Defaults to location_solver.json. Can be either a filename (relative to the --path above) or a full path.", required=False, default="location_solver.json")
 parser.add_argument("-o", "--output-file", help="Specifies the name of the output pddl instance file. Defaults to {scenario_file}.pddl. Will be stored in /data/", required=False, default=None)
 parser.add_argument("-d", "--domain-file", help="Specifies the name of the output pddl domain file. If none, the domain is not written. Will be stored in /data/", required=False, default=None)
-parser.add_argument("--coupling-mode", choices=["implicit_free_uncoupling", "implicit_explicit_uncoupling", "explicit_coupling"], default="implicit_free_uncoupling", required=False, help="Controls the matching/coupling modelling ladder.")
-parser.add_argument("--subproblem", choices=["matching", "parking", "combined"], default="combined", required=False, help="Selects which subproblem goals to emit.")
 
 
 ### Add logging to the arguments
@@ -85,26 +83,6 @@ def _departure_exit_ids(scenario_object, location_object):
     return ids_aside, ids_bside
 
 
-def _compute_departure_ranks(inbound_trains):
-    # Assigns rank 1 to the earliest-departing train, 2 to the next, etc.
-    # Trains with equal departure times share a rank (lenient parking: either can use the same entry_distance level).
-    # In: inbound_trains, a list of elements each containing:
-    # - "arrival", the arrival time of the train
-    # - "departure", the departure time of the train
-    # Out: ranks, a dictionary mapping train ID -> rank (int), where rank indicates as the rank of when the train must leave the yard compared to other trains
-    sorted_trains = sorted(inbound_trains, key=lambda t: int(t.get("departure", t["arrival"])))
-    ranks = {}
-    rank = 1
-    prev_dep = None
-    for train in sorted_trains:
-        dep = int(train.get("departure", train["arrival"]))
-        if dep != prev_dep and prev_dep is not None:
-            rank += 1
-        prev_dep = dep
-        ranks[train["id"]] = rank
-    return ranks
-
-
 def train_unit_type_key(train_unit):
     # Normalized train-unit identity used to match available units to request slots.
     unit_type = train_unit["type"]
@@ -151,35 +129,147 @@ def _train_initial_track_id(train, preferred_keys):
     return None
 
 
-def determine_initial_direction(train, location_object, initial_track_id):
-    # Determines the initial direction of the train based on whether its initial track has no connection on its aSide (facing aside) or bSide (facing bside).
-    # If it is parked on a turnable track sawMovementAllowed = True the direction does not matter so we default to bside.
-    print("hello")
-    if initial_track_id is None:
-        print("Initial track ID is None")
-        return None
-
-    track_parts = location_object.get("trackParts", [])
-    print(initial_track_id)
-    for tp in track_parts:
-        if tp["id"] == initial_track_id:
-            print("found")
-            if tp.get("sawMovementAllowed", False):
-                print("Track is turnable, defaulting to bside")
-                return False  # Default to bside if on a turnable track
-            print(tp.get("aSide"), tp.get("bSide"))
-            has_aside_connection = bool(tp.get("aSide"))
-            has_bside_connection = bool(tp.get("bSide"))
-            print(has_aside_connection, has_bside_connection)
-            if has_aside_connection and not has_bside_connection:
-                return True  # Facing aside
-            elif not has_aside_connection and has_bside_connection:
-                return False  # Facing bside
-            else:
-                return False  # Default to bside if both or neither connections are present
+def _track_part_neighbors(track_part):
+    # Return the unique neighboring track-part ids from both sides in input order.
+    neighbors = []
+    seen = set()
+    for side_key in ("aSide", "bSide"):
+        for nb_id in track_part.get(side_key, []):
+            if nb_id not in seen:
+                seen.add(nb_id)
+                neighbors.append(nb_id)
+    return neighbors
 
 
-def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None, coupling_mode="implicit_free_uncoupling", subproblem="combined"):
+def _is_switch_like_track_part(track_part):
+    # Remove zero-length, non-parkable connector nodes and reconnect their neighbors directly.
+    if track_part.get("parkingAllowed", False):
+        return False
+    try:
+        length = Fraction(str(track_part.get("length", 0)))
+    except Exception:
+        length = Fraction(0)
+    return length == 0 and len(_track_part_neighbors(track_part)) >= 2
+
+
+def _track_part_side_for_neighbor(track_part, neighbor_id):
+    # Report which side of a track-part points to a given neighbor.
+    if neighbor_id in track_part.get("aSide", []):
+        return "a"
+    if neighbor_id in track_part.get("bSide", []):
+        return "b"
+    return None
+
+
+def _switch_like_components(location_object, switch_like_track_ids):
+    # Return connected components of the switch-like subgraph.
+    adjacency = _build_adjacency(location_object)
+    seen = set()
+    components = []
+
+    for track_id in switch_like_track_ids:
+        if track_id in seen:
+            continue
+
+        component = set()
+        queue = deque([track_id])
+        seen.add(track_id)
+
+        while queue:
+            current = queue.popleft()
+            component.add(current)
+            for neighbor_id in adjacency.get(current, []):
+                if neighbor_id in switch_like_track_ids and neighbor_id not in seen:
+                    seen.add(neighbor_id)
+                    queue.append(neighbor_id)
+
+        components.append(component)
+
+    return components
+
+
+def _reconnect_switch_like_components(location_object, switch_like_track_ids, id_to_track_part, problem, connected_pairs, connected_aside, connected_bside):
+    # Collapse each connected switch-chain into direct connections between its boundary tracks.
+    components = _switch_like_components(location_object, switch_like_track_ids)
+    original_lookup = {tp["id"]: tp for tp in location_object["trackParts"]}
+
+    for component in components:
+        boundary_ports = []
+
+        for switch_id in component:
+            switch_part = original_lookup[switch_id]
+            for neighbor_id in _track_part_neighbors(switch_part):
+                if neighbor_id in component or neighbor_id not in id_to_track_part:
+                    continue
+
+                side = _track_part_side_for_neighbor(switch_part, neighbor_id)
+                if side is None:
+                    continue
+
+                boundary_ports.append((neighbor_id, side, switch_id))
+
+        if len(boundary_ports) < 2:
+            continue
+
+        if len(boundary_ports) > 2:
+            logging.warning(
+                "Switch-like component with %d boundary ports; connecting all boundary tracks pairwise.",
+                len(boundary_ports),
+            )
+
+        for left_index, (left_id, left_side, _) in enumerate(boundary_ports):
+            for right_id, right_side, _ in boundary_ports[left_index + 1:]:
+                if left_id == right_id:
+                    continue
+
+                pair = tuple(sorted([left_id, right_id]))
+                if pair in connected_pairs:
+                    continue
+
+                if left_side == "a":
+                    problem.set_initial_value(connected_aside(id_to_track_part[left_id], id_to_track_part[right_id]), True)
+                else:
+                    problem.set_initial_value(connected_bside(id_to_track_part[left_id], id_to_track_part[right_id]), True)
+
+                if right_side == "a":
+                    problem.set_initial_value(connected_aside(id_to_track_part[right_id], id_to_track_part[left_id]), True)
+                else:
+                    problem.set_initial_value(connected_bside(id_to_track_part[right_id], id_to_track_part[left_id]), True)
+
+                connected_pairs.add(pair)
+
+
+def get_all_aside_neighbors_that_are_not_switch_like(track_part, switch_like_track_ids, location_object):
+    # Use recursion to get all aside neighbors of track part then call the function again until we reach a track part that is not switch-like, return the set of all non-switch-like aside neighbors
+    neighbors = set()
+    for nb_id in track_part.get("aSide", []):
+        if nb_id in switch_like_track_ids:
+            nb_part = track_part
+            for tp in location_object["trackParts"]:
+                if tp["id"] == nb_id:
+                    nb_part = tp
+                    break
+            neighbors.update(get_all_aside_neighbors_that_are_not_switch_like(nb_part, switch_like_track_ids, location_object))
+        else:
+            neighbors.add(nb_id)
+    return neighbors
+
+def get_all_bside_neighbors_that_are_not_switch_like(track_part, switch_like_track_ids, location_object):
+    # Use recursion to get all bside neighbors of track part then call the function again until we reach a track part that is not switch-like, return the set of all non-switch-like bside neighbors
+    neighbors = set()
+    for nb_id in track_part.get("bSide", []):
+        if nb_id in switch_like_track_ids:
+            nb_part = track_part
+            for tp in location_object["trackParts"]:
+                if tp["id"] == nb_id:
+                    nb_part = tp
+                    break
+            neighbors.update(get_all_bside_neighbors_that_are_not_switch_like(nb_part, switch_like_track_ids, location_object))
+        else:
+            neighbors.add(nb_id)
+    return neighbors
+
+def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None):
     # Path defaults to ../../scenario-planning-inputs/Location_KleineBinckhorst/
     if path_to_folder is None:
         path_to_folder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "scenario-planning-inputs", "Location_KleineBinckhorst")
@@ -200,38 +290,28 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     location_object = json.load(open(location_file))
     scenario_object = json.load(open(scenario_file))
-    include_parking = subproblem in ["parking", "combined"]
-    include_matching = subproblem in ["matching", "combined"]
 
     # In unified planning the domain information is included in the problem class
     problem = up.Problem(scenario_name)
     track_part_type = up.UserType("trackpart")
     train_unit_type = up.UserType("trainunit")
     arrival_train_type = up.UserType("arrivaltrain")
-    departure_request_type = up.UserType("departurerequest")
-    request_slot_type = up.UserType("requestslot")
-    arrival_composition_type = up.UserType("arrivalcomposition")
 
-    # free           = problem.add_fluent(up.Fluent("free",           up.BoolType(), trackpart=track_part_type),                          default_initial_value=True)
     arrival        = problem.add_fluent(up.Fluent("arrival",        up.IntType(),  train=arrival_train_type))
     at             = problem.add_fluent(up.Fluent("at",             up.BoolType(), unit=arrival_train_type, trackpart=track_part_type),  default_initial_value=False)
     parking_allowed = problem.add_fluent(up.Fluent("parking_allowed", up.BoolType(), trackpart=track_part_type),                         default_initial_value=False)
-    turning_allowed = problem.add_fluent(up.Fluent("turning_allowed", up.BoolType(), trackpart=track_part_type),                         default_initial_value=False)
     parked         = problem.add_fluent(up.Fluent("parked",         up.BoolType(), train=arrival_train_type),                           default_initial_value=False)
     departed       = problem.add_fluent(up.Fluent("departed",       up.BoolType(), train=arrival_train_type),                           default_initial_value=False)
-    # connected      = problem.add_fluent(up.Fluent("connected",      up.BoolType(), from_=track_part_type, to=track_part_type),           default_initial_value=False)
     connected_aside = problem.add_fluent(up.Fluent("connected_aside", up.BoolType(), from_=track_part_type, to=track_part_type),           default_initial_value=False)
     connected_bside = problem.add_fluent(up.Fluent("connected_bside", up.BoolType(), from_=track_part_type, to=track_part_type),           default_initial_value=False)
     departure_exit_a = problem.add_fluent(up.Fluent("departure_exit_a", up.BoolType(), trackpart=track_part_type),                          default_initial_value=False)
     departure_exit_b = problem.add_fluent(up.Fluent("departure_exit_b", up.BoolType(), trackpart=track_part_type),                          default_initial_value=False)
     entry_distance = problem.add_fluent(up.Fluent("entry_distance", up.IntType(),  trackpart=track_part_type),                          default_initial_value=up.Int(0))
-    departure_rank = problem.add_fluent(up.Fluent("departure_rank", up.IntType(),  train=arrival_train_type),                           default_initial_value=up.Int(0))
     number_of_parked_trains = problem.add_fluent(up.Fluent("number_of_parked_trains", up.IntType(), trackpart=track_part_type),                 default_initial_value=up.Int(0))
     number_of_trains_on_track = problem.add_fluent(up.Fluent("number_of_trains_on_track", up.IntType(), trackpart=track_part_type),                 default_initial_value=up.Int(0))
     num_of_departed_trains = problem.add_fluent(up.Fluent("num_of_departed_trains", up.IntType()),                                      default_initial_value=up.Int(0))
     track_length = problem.add_fluent(up.Fluent("track_length", up.RealType(), trackpart=track_part_type),                          default_initial_value=up.Real(Fraction(0)))
     train_length = problem.add_fluent(up.Fluent("train_length", up.RealType(), train=arrival_train_type),                               default_initial_value=up.Real(Fraction(0)))
-    # occupied_length = problem.add_fluent(up.Fluent("occupied_length", up.RealType(), trackpart=track_part_type),                        default_initial_value=up.Real(Fraction(0)))
     aside_distance = problem.add_fluent(up.Fluent("aside_distance", up.RealType(), train=arrival_train_type),                           default_initial_value=up.Real(Fraction(0)))
     astack_distance = problem.add_fluent(up.Fluent("astack_distance", up.RealType(), trackpart=track_part_type),                         default_initial_value=up.Real(Fraction(0)))
     bstack_distance = problem.add_fluent(up.Fluent("bstack_distance", up.RealType(), trackpart=track_part_type),                         default_initial_value=up.Real(Fraction(0)))
@@ -239,16 +319,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     # add a fluent that counts the number of trains that are moving at the same time, to enforce that only one train can move at the same time
     concurrent_movements = problem.add_fluent(up.Fluent("concurrent_movements", up.IntType()), default_initial_value=up.Int(0))
     max_concurrent_movements = 1
-    direction_train = problem.add_fluent(up.Fluent("direction_train", up.BoolType(), train=arrival_train_type), default_initial_value=False) # False means towards bside, True means towards aside
-    
-    available      = problem.add_fluent(up.Fluent("available",      up.BoolType(), unit=train_unit_type),                               default_initial_value=False)
-    request_open   = problem.add_fluent(up.Fluent("request_open",   up.BoolType(), request=departure_request_type),                     default_initial_value=False)
-    slot_open      = problem.add_fluent(up.Fluent("slot_open",      up.BoolType(), slot=request_slot_type),                             default_initial_value=False)
-    slot_filled    = problem.add_fluent(up.Fluent("slot_filled",    up.BoolType(), slot=request_slot_type),                             default_initial_value=False)
-    compatible     = problem.add_fluent(up.Fluent("compatible",     up.BoolType(), unit=train_unit_type, slot=request_slot_type),        default_initial_value=False)
-    matched        = problem.add_fluent(up.Fluent("matched",        up.BoolType(), unit=train_unit_type, slot=request_slot_type),        default_initial_value=False)
-    slot_for_request = problem.add_fluent(up.Fluent("slot_for_request", up.BoolType(), slot=request_slot_type, request=departure_request_type), default_initial_value=False)
-    
 
     startMove = up.InstantaneousAction('start_move', t=arrival_train_type)
     startMove.add_precondition(up.Not(allowed_to_move(startMove.t)))
@@ -268,7 +338,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(endMove)
 
     move_aside_empty = up.InstantaneousAction('move_aside_empty', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
-    move_aside_empty.add_precondition(direction_train(move_aside_empty.t)) # only allow move aside if train is facing aside
     move_aside_empty.add_precondition(allowed_to_move(move_aside_empty.t))
     move_aside_empty.add_precondition(at(move_aside_empty.t, move_aside_empty.l_from))
     move_aside_empty.add_precondition(connected_aside(move_aside_empty.l_from, move_aside_empty.l_to))
@@ -287,7 +356,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(move_aside_empty)
 
     move_aside_occupied = up.InstantaneousAction('move_aside_occupied', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
-    move_aside_occupied.add_precondition(direction_train(move_aside_occupied.t)) # only allow move aside if train is facing aside
     move_aside_occupied.add_precondition(allowed_to_move(move_aside_occupied.t))
     move_aside_occupied.add_precondition(at(move_aside_occupied.t, move_aside_occupied.l_from))
     move_aside_occupied.add_precondition(connected_aside(move_aside_occupied.l_from, move_aside_occupied.l_to))
@@ -305,7 +373,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(move_aside_occupied)
 
     move_bside_empty = up.InstantaneousAction('move_bside_empty', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
-    move_bside_empty.add_precondition(up.Not(direction_train(move_bside_empty.t))) # only allow move bside if train is facing bside
     move_bside_empty.add_precondition(allowed_to_move(move_bside_empty.t))
     move_bside_empty.add_precondition(at(move_bside_empty.t, move_bside_empty.l_from))
     move_bside_empty.add_precondition(connected_bside(move_bside_empty.l_from, move_bside_empty.l_to))
@@ -324,7 +391,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(move_bside_empty)
 
     move_bside_occupied = up.InstantaneousAction('move_bside_occupied', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
-    move_bside_occupied.add_precondition(up.Not(direction_train(move_bside_occupied.t))) # only allow move bside if train is facing bside
     move_bside_occupied.add_precondition(allowed_to_move(move_bside_occupied.t))
     move_bside_occupied.add_precondition(at(move_bside_occupied.t, move_bside_occupied.l_from))
     move_bside_occupied.add_precondition(connected_bside(move_bside_occupied.l_from, move_bside_occupied.l_to))
@@ -342,7 +408,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(move_bside_occupied)
 
     depart_aside = up.InstantaneousAction('depart_aside', t=arrival_train_type, l=track_part_type)
-    depart_aside.add_precondition(direction_train(depart_aside.t)) # only allow depart aside if train is facing aside
     depart_aside.add_precondition(allowed_to_move(depart_aside.t))
     depart_aside.add_precondition(at(depart_aside.t, depart_aside.l))
     depart_aside.add_precondition(departure_exit_a(depart_aside.l))
@@ -358,7 +423,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(depart_aside)
 
     depart_bside = up.InstantaneousAction('depart_bside', t=arrival_train_type, l=track_part_type)
-    depart_bside.add_precondition(up.Not(direction_train(depart_bside.t))) # only allow depart bside if train is facing bside
     depart_bside.add_precondition(allowed_to_move(depart_bside.t))
     depart_bside.add_precondition(at(depart_bside.t, depart_bside.l))
     depart_bside.add_precondition(departure_exit_b(depart_bside.l))
@@ -383,75 +447,28 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     park.add_effect(concurrent_movements, concurrent_movements - 1)
     problem.add_action(park)
 
-    turn_a_side = up.InstantaneousAction('turn_a_side', t=arrival_train_type, l=track_part_type)
-    turn_a_side.add_precondition(allowed_to_move(turn_a_side.t))
-    turn_a_side.add_precondition(up.Not(direction_train(turn_a_side.t))) # only allow turn if train is currently facing bside, so it will end up facing aside
-    turn_a_side.add_precondition(at(turn_a_side.t, turn_a_side.l))
-    turn_a_side.add_precondition(turning_allowed(turn_a_side.l))
-    turn_a_side.add_effect(direction_train(turn_a_side.t), True)
-    problem.add_action(turn_a_side)
+    switch_like_track_ids = {
+        track_part["id"]
+        for track_part in location_object["trackParts"]
+        if _is_switch_like_track_part(track_part)
+    }
 
-    turn_b_side = up.InstantaneousAction('turn_b_side', t=arrival_train_type, l=track_part_type)
-    turn_b_side.add_precondition(allowed_to_move(turn_b_side.t))
-    turn_b_side.add_precondition(direction_train(turn_b_side.t)) # only allow turn if train is currently facing aside, so it will end up facing bside
-    turn_b_side.add_precondition(at(turn_b_side.t, turn_b_side.l))
-    turn_b_side.add_precondition(turning_allowed(turn_b_side.l))
-    turn_b_side.add_effect(direction_train(turn_b_side.t), False)
-    problem.add_action(turn_b_side)
-
-    explicit_uncoupling = coupling_mode in ["implicit_explicit_uncoupling", "explicit_coupling"]
-    explicit_coupling = coupling_mode == "explicit_coupling"
-
-    if explicit_uncoupling:
-        # Units in a multi-unit arrival must first be released from their composition.
-        part_of_composition = problem.add_fluent(up.Fluent("part_of_composition", up.BoolType(), unit=train_unit_type, composition=arrival_composition_type), default_initial_value=False)
-        composition_needs_uncoupling = problem.add_fluent(up.Fluent("composition_needs_uncoupling", up.BoolType(), composition=arrival_composition_type), default_initial_value=False)
-
-        uncouple = up.InstantaneousAction("uncouple", unit=train_unit_type, composition=arrival_composition_type)
-        # Preconditions: the unit belongs to a composition that still needs splitting.
-        uncouple.add_precondition(part_of_composition(uncouple.unit, uncouple.composition))
-        uncouple.add_precondition(composition_needs_uncoupling(uncouple.composition))
-        # Effects: the unit becomes independently matchable and is removed from that composition.
-        uncouple.add_effect(available(uncouple.unit), True)
-        uncouple.add_effect(part_of_composition(uncouple.unit, uncouple.composition), False)
-        problem.add_action(uncouple)
-
-    if explicit_coupling:
-        # Explicit coupling turns a completed match into a coupled departure slot.
-        slot_coupled = problem.add_fluent(up.Fluent("slot_coupled", up.BoolType(), slot=request_slot_type), default_initial_value=False)
-        coupled_to_request = problem.add_fluent(up.Fluent("coupled_to_request", up.BoolType(), unit=train_unit_type, request=departure_request_type), default_initial_value=False)
-
-        couple_to_request = up.InstantaneousAction("couple_to_request", unit=train_unit_type, slot=request_slot_type, request=departure_request_type)
-        # Preconditions: the unit is already matched to a slot that belongs to this request.
-        couple_to_request.add_precondition(matched(couple_to_request.unit, couple_to_request.slot))
-        couple_to_request.add_precondition(slot_for_request(couple_to_request.slot, couple_to_request.request))
-        # Effects: the slot is explicitly marked as coupled into the departure request.
-        couple_to_request.add_effect(slot_coupled(couple_to_request.slot), True)
-        couple_to_request.add_effect(coupled_to_request(couple_to_request.unit, couple_to_request.request), True)
-        problem.add_action(couple_to_request)
-
-    # Matching assigns exactly one compatible available unit to an open request slot.
-    match = up.InstantaneousAction("match", unit=train_unit_type, slot=request_slot_type)
-    # Preconditions: the unit is unused, the slot is empty, and the unit type fits the slot.
-    match.add_precondition(available(match.unit))
-    match.add_precondition(slot_open(match.slot))
-    match.add_precondition(compatible(match.unit, match.slot))
-    # Effects: record the assignment, close the slot, and prevent reusing the unit.
-    match.add_effect(matched(match.unit, match.slot), True)
-    match.add_effect(slot_filled(match.slot), True)
-    match.add_effect(available(match.unit), False)
-    match.add_effect(slot_open(match.slot), False)
-    problem.add_action(match)
-    
+    simplified_track_parts = [
+        track_part
+        for track_part in location_object["trackParts"]
+        if track_part["id"] not in switch_like_track_ids
+    ]
+    simplified_location_object = dict(location_object)
+    simplified_location_object["trackParts"] = simplified_track_parts
 
     # Pre-compute connectivity and entry distances from JSON (no UP objects yet)
-    adjacency = _build_adjacency(location_object)
-    exit_ids_a, exit_ids_b = _departure_exit_ids(scenario_object, location_object)
+    adjacency = _build_adjacency(simplified_location_object)
+    exit_ids_a, exit_ids_b = _departure_exit_ids(scenario_object, simplified_location_object)
     exit_ids = exit_ids_a.union(exit_ids_b)
     bfs_dist = _bfs_from(adjacency, exit_ids)
 
     # Find ids of all tracks where parking is allowed
-    parking_ids = {tp["id"] for tp in location_object["trackParts"] if tp.get("parkingAllowed")}
+    parking_ids = {tp["id"] for tp in simplified_track_parts if tp.get("parkingAllowed")}
     # Create sorted dictionary from all different bfs distances to the id's of parking tracks with those distances
     parking_bfs_values = sorted({bfs_dist[pid] for pid in parking_ids if pid in bfs_dist})
     # Normalize the distances; all closest parking tracks get 1, those after get 2 etc.
@@ -461,22 +478,19 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     in_standing_trains = scenario_object.get("inStanding", {}).get("trains", [])
     out_standing_trains = scenario_object.get("outStanding", {}).get("trainRequests", [])
     out_requests = scenario_object.get("out", {}).get("trainRequests", [])
-    # train_to_rank = _compute_departure_ranks(inbound_trains)
     track_occupancies = {}
     track_train_counts = {}
     arrival_train_objs = []
 
     # Add track part objects
     id_to_track_part = {}
-    for track_part in location_object["trackParts"]:
+    for track_part in simplified_track_parts:
         obj = problem.add_object(track_part["name"], track_part_type)
         id_to_track_part[track_part["id"]] = obj
         if track_part["id"] in exit_ids_a:
             problem.set_initial_value(departure_exit_a(obj), True)
         if track_part["id"] in exit_ids_b:
             problem.set_initial_value(departure_exit_b(obj), True)
-        if track_part.get("sawMovementAllowed", False):
-            problem.set_initial_value(turning_allowed(obj), True)
         if track_part.get("parkingAllowed", False):
             problem.set_initial_value(parking_allowed(obj), True)
             tp_id = track_part["id"]
@@ -490,125 +504,73 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     # Set connectivity (each undirected edge -> two directed facts)
     connected_pairs = set()
-    for track_part in location_object["trackParts"]:
+    for track_part in simplified_track_parts:
         src_id = track_part["id"]
-        for nb_id in track_part.get("aSide", []):
+        all_aside_neighbors = get_all_aside_neighbors_that_are_not_switch_like(track_part, switch_like_track_ids, location_object)
+        for nb_id in all_aside_neighbors:
             if nb_id in id_to_track_part:
                 pair = tuple(sorted([src_id, nb_id]))
-                # problem.set_initial_value(connected(id_to_track_part[src_id], id_to_track_part[nb_id]), True)
-                # problem.set_initial_value(connected(id_to_track_part[nb_id], id_to_track_part[src_id]), True)
                 problem.set_initial_value(connected_aside(id_to_track_part[src_id], id_to_track_part[nb_id]), True)
                 if pair not in connected_pairs:
                     connected_pairs.add(pair)
 
-        for nb_id in track_part.get("bSide", []):
+        all_bside_neighbors = get_all_bside_neighbors_that_are_not_switch_like(track_part, switch_like_track_ids, location_object)
+        for nb_id in all_bside_neighbors:
             if nb_id in id_to_track_part:
                 pair = tuple(sorted([src_id, nb_id]))
-                # problem.set_initial_value(connected(id_to_track_part[src_id], id_to_track_part[nb_id]), True)
-                # problem.set_initial_value(connected(id_to_track_part[nb_id], id_to_track_part[src_id]), True)
                 problem.set_initial_value(connected_bside(id_to_track_part[src_id], id_to_track_part[nb_id]), True)
                 if pair not in connected_pairs:
                     connected_pairs.add(pair)
 
 
-    id_to_unit = {}
-    unit_type_by_id = {}
+    # Add inbound trains
+    for train in inbound_trains:
+        arrival_train = problem.add_object("train" + train["id"], arrival_train_type)
+        arrival_train_objs.append(arrival_train)
+        problem.set_initial_value(arrival(arrival_train), up.Int(int(train["arrival"])))
+        initial_track_id = _train_initial_track_id(train, ["entryTrackPart", "firstParkingTrackPart"])
+        problem.set_initial_value(at(arrival_train, id_to_track_part[initial_track_id]), True)
+        train_total_length = _train_total_length(train)
+        problem.set_initial_value(train_length(arrival_train), up.Real(train_total_length))
+        previous_length_on_track = track_occupancies.get(initial_track_id, Fraction(0))
+        problem.set_initial_value(aside_distance(arrival_train), up.Real(previous_length_on_track))
+        track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
+        track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
 
-    if include_parking:
-        # Add inbound trains
-        for train in inbound_trains:
-            arrival_train = problem.add_object("train" + train["id"], arrival_train_type)
-            arrival_train_objs.append(arrival_train)
-            problem.set_initial_value(arrival(arrival_train), up.Int(int(train["arrival"])))
-            initial_track_id = _train_initial_track_id(train, ["entryTrackPart", "firstParkingTrackPart"])
-            problem.set_initial_value(at(arrival_train, id_to_track_part[initial_track_id]), True)
-            # problem.set_initial_value(departure_rank(arrival_train), up.Int(train_to_rank[train["id"]]))
+
+    for index, train in enumerate(in_standing_trains):
+        standing_train = problem.add_object(f"train_in_standing_{index}", arrival_train_type)
+        arrival_train_objs.append(standing_train)
+        initial_track_id = _train_initial_track_id(train, ["firstParkingTrackPart", "entryTrackPart"])
+        problem.set_initial_value(arrival(standing_train), up.Int(int(train.get("arrival", 0))))
+        if initial_track_id is not None:
+            problem.set_initial_value(at(standing_train, id_to_track_part[initial_track_id]), True)
             train_total_length = _train_total_length(train)
-            problem.set_initial_value(train_length(arrival_train), up.Real(train_total_length))
+            problem.set_initial_value(train_length(standing_train), up.Real(train_total_length))
             previous_length_on_track = track_occupancies.get(initial_track_id, Fraction(0))
-            problem.set_initial_value(aside_distance(arrival_train), up.Real(previous_length_on_track))
+            problem.set_initial_value(aside_distance(standing_train), up.Real(previous_length_on_track))
             track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
             track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
-            problem.set_initial_value(direction_train(arrival_train), determine_initial_direction(train, location_object, initial_track_id))
 
+    # Each outstanding request contributes one required parked train on its target track.
+    required_parked_per_track = {}
+    for request in out_standing_trains:
+        track_id = request.get("lastParkingTrackPart")
+        if track_id in id_to_track_part:
+            required_parked_per_track[track_id] = required_parked_per_track.get(track_id, 0) + 1
 
-        for index, train in enumerate(in_standing_trains):
-            standing_train = problem.add_object(f"train_in_standing_{index}", arrival_train_type)
-            arrival_train_objs.append(standing_train)
-            initial_track_id = _train_initial_track_id(train, ["firstParkingTrackPart", "entryTrackPart"])
-            problem.set_initial_value(arrival(standing_train), up.Int(int(train.get("arrival", 0))))
-            if initial_track_id is not None:
-                problem.set_initial_value(at(standing_train, id_to_track_part[initial_track_id]), True)
-                train_total_length = _train_total_length(train)
-                problem.set_initial_value(train_length(standing_train), up.Real(train_total_length))
-                previous_length_on_track = track_occupancies.get(initial_track_id, Fraction(0))
-                problem.set_initial_value(aside_distance(standing_train), up.Real(previous_length_on_track))
-                track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
-                track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
+    for track_id, required_count in required_parked_per_track.items():
+        problem.add_goal(up.Equals(number_of_parked_trains(id_to_track_part[track_id]), up.Int(required_count)))
 
-        if not include_matching:
-            # Each outstanding request contributes one required parked train on its target track.
-            required_parked_per_track = {}
-            for request in out_standing_trains:
-                track_id = request.get("lastParkingTrackPart")
-                if track_id in id_to_track_part:
-                    required_parked_per_track[track_id] = required_parked_per_track.get(track_id, 0) + 1
+    # Add outbound train requests: these trains must be assembled (contain all units) and depart.
+    # Add a goal stating that the number of departed trains must be equal to out_requests
+    problem.add_goal(up.Equals(num_of_departed_trains(), up.Int(len(out_requests))))
 
-            for track_id, required_count in required_parked_per_track.items():
-                problem.add_goal(up.Equals(number_of_parked_trains(id_to_track_part[track_id]), up.Int(required_count)))
-
-        # Add outbound train requests: these trains must be assembled (contain all units) and depart.
-        # Add a goal stating that the number of departed trains must be equal to out_requests
-        if not include_matching:
-            problem.add_goal(up.Equals(num_of_departed_trains(), up.Int(len(out_requests))))
-
-        for track_id, occupied_length_value in track_occupancies.items():
-            track_obj = id_to_track_part[track_id]
-            # problem.set_initial_value(free(track_obj), False)
-            problem.set_initial_value(astack_distance(track_obj), up.Real(Fraction(0)))
-            problem.set_initial_value(bstack_distance(track_obj), up.Real(occupied_length_value))
-            problem.set_initial_value(number_of_trains_on_track(track_obj), up.Int(track_train_counts.get(track_id, 0)))
-
-    for train in all_trains(scenario_object):
-        train_members = train["members"]
-        composition_obj = None
-        if explicit_uncoupling and len(train_members) > 1:
-            composition_obj = problem.add_object("composition" + train["id"], arrival_composition_type)
-            problem.set_initial_value(composition_needs_uncoupling(composition_obj), True)
-
-        for trainunit in train_members:
-            unit = trainunit["trainUnit"]
-            unit_obj = problem.add_object("unit" + unit["id"], train_unit_type)
-            id_to_unit[unit["id"]] = unit_obj
-            unit_type_by_id[unit["id"]] = train_unit_type_key(unit)
-            if composition_obj is None:
-                problem.set_initial_value(available(unit_obj), True)
-            else:
-                problem.set_initial_value(part_of_composition(unit_obj, composition_obj), True)
-
-    if include_matching:
-        # Map request names to their problem objects so we don't add duplicates later
-        request_objs = {}
-        for request in all_train_requests(scenario_object):
-            request_name = "request" + request["displayName"]
-            request_obj = problem.add_object(request_name, departure_request_type)
-            request_objs[request_name] = request_obj
-            problem.set_initial_value(request_open(request_obj), True)
-
-            for index, requested_unit in enumerate(request["trainUnits"]):
-                slot_obj = problem.add_object(f"{request_name}_slot{index}", request_slot_type)
-                requested_key = train_unit_type_key(requested_unit)
-
-                problem.set_initial_value(slot_open(slot_obj), True)
-                problem.set_initial_value(slot_for_request(slot_obj, request_obj), True)
-                if explicit_coupling:
-                    problem.add_goal(slot_coupled(slot_obj))
-                else:
-                    problem.add_goal(slot_filled(slot_obj))
-
-                for unit_id, unit_obj in id_to_unit.items():
-                    if unit_type_by_id[unit_id] == requested_key:
-                        problem.set_initial_value(compatible(unit_obj, slot_obj), True)
+    for track_id, occupied_length_value in track_occupancies.items():
+        track_obj = id_to_track_part[track_id]
+        problem.set_initial_value(astack_distance(track_obj), up.Real(Fraction(0)))
+        problem.set_initial_value(bstack_distance(track_obj), up.Real(occupied_length_value))
+        problem.set_initial_value(number_of_trains_on_track(track_obj), up.Int(track_train_counts.get(track_id, 0)))
 
     ### Write to files
     if output_file is None:
@@ -637,4 +599,4 @@ if __name__ == "__main__":
 
 
 
-    create_instance_from_scenario(domain_file=args.domain_file, path_to_folder=args.path_to_folder, scenario_file=args.scenario_file, location_file=args.location_file, output_file=args.output_file, coupling_mode=args.coupling_mode, subproblem=args.subproblem)
+    create_instance_from_scenario(domain_file=args.domain_file, path_to_folder=args.path_to_folder, scenario_file=args.scenario_file, location_file=args.location_file, output_file=args.output_file)
