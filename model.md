@@ -9,6 +9,7 @@
 | v0.4 | 2026-05-19 | Matching/coupling variants: request slots, `match`, optional `uncouple`, and optional `couple_to_request` |
 | v0.5 | 2026-05-18 | Added the routing subproblem: `depart` action, `departure_exit` fluent, capacity tracking with `track_capacity`, `train_length`, `occupied_length`, and `track_is_parked_at` |
 | v0.6 | 2026-05-25 | Explicit coupling now requires physical two-unit assembly: same track, valid coupling track, and correct order |
+| v0.7 | 2026-05-31 | Merged routing direction model with shunting-unit split, coupling, movement, and departure |
 
 ---
 
@@ -28,6 +29,8 @@
 - Matching adds request slots and the `match` action; compatibility uses unit type, carriage count, and length.
 - `--coupling-mode` can switch between free uncoupling, explicit uncoupling, and explicit coupling.
 - Explicit uncoupling adds `uncouple`; explicit coupling adds `couple_to_request`.
+- Physical explicit coupling uses `shuntingunit` objects for the current movable composition after split/couple actions.
+- Routing branch converter variants are documented separately in `src/convert/md_files`.
 - `run.py` exposes subproblem, coupling-mode, and planner-backend choices.
 
 ---
@@ -41,6 +44,7 @@
 | `departurerequest` | An outgoing train request used by matching | coupling/parking branch |
 | `requestslot` | One required unit position inside an outgoing request | coupling/parking branch |
 | `arrivalcomposition` | A multi-unit incoming composition that may need uncoupling | coupling/parking branch |
+| `shuntingunit` | A movable physical train composition used after split/couple actions | v0.7 |
 
 ---
 

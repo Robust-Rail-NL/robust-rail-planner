@@ -171,6 +171,34 @@ def _train_object_name(source, index, train):
     return "train" + train["id"]
 
 
+def determine_initial_direction(train, location_object, initial_track_id):
+    # Determines the initial direction of the train based on whether its initial track has no connection on its aSide (facing aside) or bSide (facing bside).
+    # If it is parked on a turnable track sawMovementAllowed = True the direction does not matter so we default to bside.
+    print("hello")
+    if initial_track_id is None:
+        print("Initial track ID is None")
+        return None
+
+    track_parts = location_object.get("trackParts", [])
+    print(initial_track_id)
+    for tp in track_parts:
+        if tp["id"] == initial_track_id:
+            print("found")
+            if tp.get("sawMovementAllowed", False):
+                print("Track is turnable, defaulting to bside")
+                return False  # Default to bside if on a turnable track
+            print(tp.get("aSide"), tp.get("bSide"))
+            has_aside_connection = bool(tp.get("aSide"))
+            has_bside_connection = bool(tp.get("bSide"))
+            print(has_aside_connection, has_bside_connection)
+            if has_aside_connection and not has_bside_connection:
+                return True  # Facing aside
+            elif not has_aside_connection and has_bside_connection:
+                return False  # Facing bside
+            else:
+                return False  # Default to bside if both or neither connections are present
+
+
 def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None, coupling_mode="implicit_free_uncoupling", subproblem="combined"):
     # Path defaults to ../../scenario-planning-inputs/Location_KleineBinckhorst/
     if path_to_folder is None:
@@ -209,6 +237,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     arrival        = problem.add_fluent(up.Fluent("arrival",        up.IntType(),  train=arrival_train_type))
     at             = problem.add_fluent(up.Fluent("at",             up.BoolType(), unit=arrival_train_type, trackpart=track_part_type),  default_initial_value=False)
     parking_allowed = problem.add_fluent(up.Fluent("parking_allowed", up.BoolType(), trackpart=track_part_type),                         default_initial_value=False)
+    turning_allowed = problem.add_fluent(up.Fluent("turning_allowed", up.BoolType(), trackpart=track_part_type),                         default_initial_value=False)
     parked         = problem.add_fluent(up.Fluent("parked",         up.BoolType(), train=arrival_train_type),                           default_initial_value=False)
     departed       = problem.add_fluent(up.Fluent("departed",       up.BoolType(), train=arrival_train_type),                           default_initial_value=False)
     locked_train   = problem.add_fluent(up.Fluent("locked_train",   up.BoolType(), train=arrival_train_type),                           default_initial_value=False)
@@ -219,7 +248,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     departure_exit_b = problem.add_fluent(up.Fluent("departure_exit_b", up.BoolType(), trackpart=track_part_type),                          default_initial_value=False)
     entry_distance = problem.add_fluent(up.Fluent("entry_distance", up.IntType(),  trackpart=track_part_type),                          default_initial_value=up.Int(0))
     departure_rank = problem.add_fluent(up.Fluent("departure_rank", up.IntType(),  train=arrival_train_type),                           default_initial_value=up.Int(0))
-    track_is_parked_at = problem.add_fluent(up.Fluent("track_is_parked_at", up.BoolType(), trackpart=track_part_type),                  default_initial_value=False)
+    number_of_parked_trains = problem.add_fluent(up.Fluent("number_of_parked_trains", up.IntType(), trackpart=track_part_type),                 default_initial_value=up.Int(0))
     number_of_trains_on_track = problem.add_fluent(up.Fluent("number_of_trains_on_track", up.IntType(), trackpart=track_part_type),                 default_initial_value=up.Int(0))
     num_of_departed_trains = problem.add_fluent(up.Fluent("num_of_departed_trains", up.IntType()),                                      default_initial_value=up.Int(0))
     track_length = problem.add_fluent(up.Fluent("track_length", up.RealType(), trackpart=track_part_type),                          default_initial_value=up.Real(Fraction(0)))
@@ -232,6 +261,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     # add a fluent that counts the number of trains that are moving at the same time, to enforce that only one train can move at the same time
     concurrent_movements = problem.add_fluent(up.Fluent("concurrent_movements", up.IntType()), default_initial_value=up.Int(0))
     max_concurrent_movements = 1
+    direction_train = problem.add_fluent(up.Fluent("direction_train", up.BoolType(), train=arrival_train_type), default_initial_value=False) # False means towards bside, True means towards aside
     
     available      = problem.add_fluent(up.Fluent("available",      up.BoolType(), unit=train_unit_type),                               default_initial_value=False)
     request_open   = problem.add_fluent(up.Fluent("request_open",   up.BoolType(), request=departure_request_type),                     default_initial_value=False)
@@ -260,6 +290,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     startMove = up.InstantaneousAction('start_move', t=arrival_train_type)
     startMove.add_precondition(up.Not(allowed_to_move(startMove.t)))
     startMove.add_precondition(up.Not(locked_train(startMove.t)))
+    startMove.add_precondition(up.Not(departed(startMove.t)))
+    startMove.add_precondition(up.Not(parked(startMove.t)))
     startMove.add_precondition(concurrent_movements < max_concurrent_movements)
     startMove.add_effect(allowed_to_move(startMove.t), True)
     startMove.add_effect(concurrent_movements, concurrent_movements + 1)
@@ -291,11 +323,11 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(endMoveSu)
 
     move_aside_empty = up.InstantaneousAction('move_aside_empty', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
+    move_aside_empty.add_precondition(direction_train(move_aside_empty.t)) # only allow move aside if train is facing aside
     move_aside_empty.add_precondition(allowed_to_move(move_aside_empty.t))
     move_aside_empty.add_precondition(up.Not(locked_train(move_aside_empty.t)))
     move_aside_empty.add_precondition(at(move_aside_empty.t, move_aside_empty.l_from))
     move_aside_empty.add_precondition(connected_aside(move_aside_empty.l_from, move_aside_empty.l_to))
-    move_aside_empty.add_precondition(up.Not(parked(move_aside_empty.t)))
     move_aside_empty.add_precondition(aside_distance(move_aside_empty.t) <= astack_distance(move_aside_empty.l_from))
     move_aside_empty.add_precondition(up.Equals(number_of_trains_on_track(move_aside_empty.l_to), 0))
     move_aside_empty.add_precondition(train_length(move_aside_empty.t) <= track_length(move_aside_empty.l_to))
@@ -330,11 +362,11 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(move_aside_empty_su)
 
     move_aside_occupied = up.InstantaneousAction('move_aside_occupied', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
+    move_aside_occupied.add_precondition(direction_train(move_aside_occupied.t)) # only allow move aside if train is facing aside
     move_aside_occupied.add_precondition(allowed_to_move(move_aside_occupied.t))
     move_aside_occupied.add_precondition(up.Not(locked_train(move_aside_occupied.t)))
     move_aside_occupied.add_precondition(at(move_aside_occupied.t, move_aside_occupied.l_from))
     move_aside_occupied.add_precondition(connected_aside(move_aside_occupied.l_from, move_aside_occupied.l_to))
-    move_aside_occupied.add_precondition(up.Not(parked(move_aside_occupied.t)))
     move_aside_occupied.add_precondition(aside_distance(move_aside_occupied.t) <= astack_distance(move_aside_occupied.l_from))
     move_aside_occupied.add_precondition(number_of_trains_on_track(move_aside_occupied.l_to) > 0)
     move_aside_occupied.add_precondition(train_length(move_aside_occupied.t) <= track_length(move_aside_occupied.l_to) - bstack_distance(move_aside_occupied.l_to))
@@ -367,11 +399,11 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(move_aside_occupied_su)
 
     move_bside_empty = up.InstantaneousAction('move_bside_empty', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
+    move_bside_empty.add_precondition(up.Not(direction_train(move_bside_empty.t))) # only allow move bside if train is facing bside
     move_bside_empty.add_precondition(allowed_to_move(move_bside_empty.t))
     move_bside_empty.add_precondition(up.Not(locked_train(move_bside_empty.t)))
     move_bside_empty.add_precondition(at(move_bside_empty.t, move_bside_empty.l_from))
     move_bside_empty.add_precondition(connected_bside(move_bside_empty.l_from, move_bside_empty.l_to))
-    move_bside_empty.add_precondition(up.Not(parked(move_bside_empty.t)))
     move_bside_empty.add_precondition(aside_distance(move_bside_empty.t) >= bstack_distance(move_bside_empty.l_from) - train_length(move_bside_empty.t))
     move_bside_empty.add_precondition(up.Equals(number_of_trains_on_track(move_bside_empty.l_to), 0))
     move_bside_empty.add_precondition(train_length(move_bside_empty.t) <= track_length(move_bside_empty.l_to))
@@ -405,11 +437,11 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(move_bside_empty_su)
 
     move_bside_occupied = up.InstantaneousAction('move_bside_occupied', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
+    move_bside_occupied.add_precondition(up.Not(direction_train(move_bside_occupied.t))) # only allow move bside if train is facing bside
     move_bside_occupied.add_precondition(allowed_to_move(move_bside_occupied.t))
     move_bside_occupied.add_precondition(up.Not(locked_train(move_bside_occupied.t)))
     move_bside_occupied.add_precondition(at(move_bside_occupied.t, move_bside_occupied.l_from))
     move_bside_occupied.add_precondition(connected_bside(move_bside_occupied.l_from, move_bside_occupied.l_to))
-    move_bside_occupied.add_precondition(up.Not(parked(move_bside_occupied.t)))
     move_bside_occupied.add_precondition(aside_distance(move_bside_occupied.t) >= bstack_distance(move_bside_occupied.l_from) - train_length(move_bside_occupied.t))
     move_bside_occupied.add_precondition(number_of_trains_on_track(move_bside_occupied.l_to) > 0)
     move_bside_occupied.add_precondition(train_length(move_bside_occupied.t) <= astack_distance(move_bside_occupied.l_to))
@@ -443,6 +475,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     depart_aside = up.InstantaneousAction('depart_aside', t=arrival_train_type, l=track_part_type)
     depart_aside.add_precondition(up.Not(locked_train(depart_aside.t)))
+    depart_aside.add_precondition(direction_train(depart_aside.t)) # only allow depart aside if train is facing aside
+    depart_aside.add_precondition(allowed_to_move(depart_aside.t))
     depart_aside.add_precondition(at(depart_aside.t, depart_aside.l))
     depart_aside.add_precondition(departure_exit_a(depart_aside.l))
     depart_aside.add_precondition(aside_distance(depart_aside.t) <= astack_distance(depart_aside.l))
@@ -458,6 +492,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     depart_bside = up.InstantaneousAction('depart_bside', t=arrival_train_type, l=track_part_type)
     depart_bside.add_precondition(up.Not(locked_train(depart_bside.t)))
+    depart_bside.add_precondition(up.Not(direction_train(depart_bside.t))) # only allow depart bside if train is facing bside
+    depart_bside.add_precondition(allowed_to_move(depart_bside.t))
     depart_bside.add_precondition(at(depart_bside.t, depart_bside.l))
     depart_bside.add_precondition(departure_exit_b(depart_bside.l))
     depart_bside.add_precondition(aside_distance(depart_bside.t) >= bstack_distance(depart_bside.l) - train_length(depart_bside.t))
@@ -507,11 +543,30 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     park = up.InstantaneousAction('park', t=arrival_train_type, l=track_part_type)
     park.add_precondition(up.Not(locked_train(park.t)))
+    park.add_precondition(allowed_to_move(park.t))
     park.add_precondition(at(park.t, park.l))
     park.add_precondition(parking_allowed(park.l))
     park.add_effect(parked(park.t), True)
-    park.add_effect(track_is_parked_at(park.l), True)
+    park.add_effect(number_of_parked_trains(park.l), number_of_parked_trains(park.l) + 1)
+    park.add_effect(allowed_to_move(park.t), False)
+    park.add_effect(concurrent_movements, concurrent_movements - 1)
     problem.add_action(park)
+
+    turn_a_side = up.InstantaneousAction('turn_a_side', t=arrival_train_type, l=track_part_type)
+    turn_a_side.add_precondition(allowed_to_move(turn_a_side.t))
+    turn_a_side.add_precondition(up.Not(direction_train(turn_a_side.t))) # only allow turn if train is currently facing bside, so it will end up facing aside
+    turn_a_side.add_precondition(at(turn_a_side.t, turn_a_side.l))
+    turn_a_side.add_precondition(turning_allowed(turn_a_side.l))
+    turn_a_side.add_effect(direction_train(turn_a_side.t), True)
+    problem.add_action(turn_a_side)
+
+    turn_b_side = up.InstantaneousAction('turn_b_side', t=arrival_train_type, l=track_part_type)
+    turn_b_side.add_precondition(allowed_to_move(turn_b_side.t))
+    turn_b_side.add_precondition(direction_train(turn_b_side.t)) # only allow turn if train is currently facing aside, so it will end up facing bside
+    turn_b_side.add_precondition(at(turn_b_side.t, turn_b_side.l))
+    turn_b_side.add_precondition(turning_allowed(turn_b_side.l))
+    turn_b_side.add_effect(direction_train(turn_b_side.t), False)
+    problem.add_action(turn_b_side)
 
     explicit_uncoupling = coupling_mode in ["implicit_explicit_uncoupling", "explicit_coupling"]
     explicit_coupling = coupling_mode == "explicit_coupling"
@@ -744,6 +799,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             problem.set_initial_value(departure_exit_a(obj), True)
         if track_part["id"] in exit_ids_b:
             problem.set_initial_value(departure_exit_b(obj), True)
+        if track_part.get("sawMovementAllowed", False):
+            problem.set_initial_value(turning_allowed(obj), True)
         if track_part.get("parkingAllowed", False):
             problem.set_initial_value(parking_allowed(obj), True)
             problem.set_initial_value(coupling_allowed(obj), True)
@@ -798,7 +855,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             problem.set_initial_value(aside_distance(arrival_train), up.Real(previous_length_on_track))
             track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
             track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
-            #problem.add_goal(parked(arrival_train))
+            problem.set_initial_value(direction_train(arrival_train), determine_initial_direction(train, location_object, initial_track_id))
 
         for index, train in enumerate(in_standing_trains):
             standing_train = problem.add_object(_train_object_name("inStanding", index, train), arrival_train_type)
@@ -816,10 +873,15 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
 
         if not include_matching:
+            # Each outstanding request contributes one required parked train on its target track.
+            required_parked_per_track = {}
             for request in out_standing_trains:
                 track_id = request.get("lastParkingTrackPart")
                 if track_id in id_to_track_part:
-                    problem.add_goal(track_is_parked_at(id_to_track_part[track_id]))
+                    required_parked_per_track[track_id] = required_parked_per_track.get(track_id, 0) + 1
+
+            for track_id, required_count in required_parked_per_track.items():
+                problem.add_goal(up.Equals(number_of_parked_trains(id_to_track_part[track_id]), up.Int(required_count)))
 
         # Add outbound train requests: these trains must be assembled (contain all units) and depart.
         # Add a goal stating that the number of departed trains must be equal to out_requests
