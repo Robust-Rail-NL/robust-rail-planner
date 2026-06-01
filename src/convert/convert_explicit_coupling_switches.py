@@ -141,8 +141,9 @@ def all_train_requests(scenario_object):
 
 def _coupling_track_ids_for_request(request, location_object, candidate_track_ids):
     # Prefer request-specific parking/departure information, otherwise use nearby coupling tracks.
+    candidate_track_ids = {str(track_id) for track_id in candidate_track_ids}
     preferred_ids = [request.get("lastParkingTrackPart"), request.get("leaveTrackPart")]
-    preferred_ids = [track_id for track_id in preferred_ids if track_id in candidate_track_ids]
+    preferred_ids = [str(track_id) for track_id in preferred_ids if track_id is not None and str(track_id) in candidate_track_ids]
     if preferred_ids:
         return preferred_ids[:1]
 
@@ -155,9 +156,9 @@ def _coupling_track_ids_for_request(request, location_object, candidate_track_id
         if track_id in distances
     ]
     if reachable_candidates:
-        return [track_id for _, track_id in sorted(reachable_candidates)[:2]]
+        return [track_id for _, track_id in sorted(reachable_candidates)[:1]]
 
-    return sorted(candidate_track_ids)[:2]
+    return sorted(candidate_track_ids)[:1]
 
 
 def _train_total_length(train):

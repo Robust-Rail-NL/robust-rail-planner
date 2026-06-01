@@ -42,7 +42,7 @@ This converter variant models matching and coupling as a physical shunting-unit 
 - The current explicit coupling implementation supports exactly two-unit outgoing coupling requests.
 - Duration, staff resources, and temporal overlap are not modelled in this converter.
 - In explicit coupling mode, original `arrivaltrain` movement is locked so the shunting-unit layer owns the physical movement state.
-- `coupling_track_for_request` is used to prevent the planner from trying to assemble a request on every coupling-allowed track. The converter first prefers a request's `lastParkingTrackPart` or `leaveTrackPart` if it is a valid coupling track; otherwise it picks the nearest reachable coupling tracks.
+- `coupling_track_for_request` is used to prevent the planner from trying to assemble a request on every coupling-allowed track. The converter first prefers a request's `lastParkingTrackPart` or `leaveTrackPart` if it is a valid coupling track; otherwise it picks the nearest reachable coupling track.
 
 ## Known Performance Failure
 - `scenario_solver_example3.json` with explicit coupling and no switches was run with ENHSP after the routing/coupling merge. It did not produce a plan after roughly 104 minutes.
