@@ -49,3 +49,5 @@ This converter variant models matching and coupling as a physical shunting-unit 
 - The last observed search status was about 1.7 million expanded nodes and 4.6 million evaluated states.
 - This failure suggests that fully free physical coupling plus routing is too unconstrained for ENHSP on realistic multi-unit cases.
 - The request-specific coupling-track restriction was added as the first corrective modelling choice: it keeps physical coupling, but removes the choice of arbitrary assembly location from the planner.
+- After restricting each request to a single coupling track, the original `scenario_solver_example3.json` stress case was rerun for 35 minutes using ENHSP. It still did not produce a plan.
+- The last observed progress before stopping the run was about 701k expanded nodes and 1.91M evaluated states. This indicates that the coupling-track restriction helps with location symmetry, but does not remove the remaining matching/routing search blow-up in the original all-`SLT` example.
