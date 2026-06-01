@@ -381,7 +381,9 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     # Advance the clock by one 5-minute step without moving any train.
     # The planner uses this only when it must wait for a train to arrive.
     # total_cost minimisation ensures wait is never used unnecessarily.
-    wait = up.InstantaneousAction('wait')
+    wait = up.InstantaneousAction('wait', t=arrival_train_type)
+    wait.add_precondition(up.Not(has_arrived(wait.t)))
+    wait.add_precondition(arrival(wait.t) > elapsed_time())
     wait.add_effect(total_cost(), total_cost() + 300)
     wait.add_effect(elapsed_time(), elapsed_time() + 300)
     problem.add_action(wait)
