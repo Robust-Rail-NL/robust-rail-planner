@@ -226,7 +226,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     concurrent_movements = problem.add_fluent(up.Fluent("concurrent_movements", up.IntType()), default_initial_value=up.Int(0))
     max_concurrent_movements = 1
     total_cost = problem.add_fluent(up.Fluent("total_cost", up.IntType()), default_initial_value=up.Int(0))
-    elapsed_time = problem.add_fluent(up.Fluent("elapsed_time", up.IntType()), default_initial_value=up.Int(0))
     has_arrived = problem.add_fluent(up.Fluent("has_arrived", up.BoolType(), train=arrival_train_type), default_initial_value=False)
     entry_track_of = problem.add_fluent(up.Fluent("entry_track_of", up.BoolType(), train=arrival_train_type, trackpart=track_part_type), default_initial_value=False)
     
@@ -277,7 +276,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_aside_empty.add_effect(at(move_aside_empty.t, move_aside_empty.l_to), True)
     move_aside_empty.add_effect(at(move_aside_empty.t, move_aside_empty.l_from), False)
     move_aside_empty.add_effect(total_cost(), total_cost() + 300)
-    move_aside_empty.add_effect(elapsed_time(), elapsed_time() + 300)
     problem.add_action(move_aside_empty)
 
     move_aside_occupied = up.InstantaneousAction('move_aside_occupied', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
@@ -297,7 +295,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_aside_occupied.add_effect(at(move_aside_occupied.t, move_aside_occupied.l_to), True)
     move_aside_occupied.add_effect(at(move_aside_occupied.t, move_aside_occupied.l_from), False)
     move_aside_occupied.add_effect(total_cost(), total_cost() + 300)
-    move_aside_occupied.add_effect(elapsed_time(), elapsed_time() + 300)
     problem.add_action(move_aside_occupied)
 
     move_bside_empty = up.InstantaneousAction('move_bside_empty', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
@@ -318,7 +315,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_bside_empty.add_effect(at(move_bside_empty.t, move_bside_empty.l_to), True)
     move_bside_empty.add_effect(at(move_bside_empty.t, move_bside_empty.l_from), False)
     move_bside_empty.add_effect(total_cost(), total_cost() + 300)
-    move_bside_empty.add_effect(elapsed_time(), elapsed_time() + 300)
     problem.add_action(move_bside_empty)
 
     move_bside_occupied = up.InstantaneousAction('move_bside_occupied', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
@@ -338,7 +334,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_bside_occupied.add_effect(at(move_bside_occupied.t, move_bside_occupied.l_to), True)
     move_bside_occupied.add_effect(at(move_bside_occupied.t, move_bside_occupied.l_from), False)
     move_bside_occupied.add_effect(total_cost(), total_cost() + 300)
-    move_bside_occupied.add_effect(elapsed_time(), elapsed_time() + 300)
     problem.add_action(move_bside_occupied)
 
     depart_aside = up.InstantaneousAction('depart_aside', t=arrival_train_type, l=track_part_type)
@@ -381,11 +376,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     # Advance the clock by one 5-minute step without moving any train.
     # The planner uses this only when it must wait for a train to arrive.
     # total_cost minimisation ensures wait is never used unnecessarily.
-    wait = up.InstantaneousAction('wait', t=arrival_train_type)
-    wait.add_precondition(up.Not(has_arrived(wait.t)))
-    wait.add_precondition(arrival(wait.t) > elapsed_time())
+    wait = up.InstantaneousAction('wait')
     wait.add_effect(total_cost(), total_cost() + 300)
-    wait.add_effect(elapsed_time(), elapsed_time() + 300)
     problem.add_action(wait)
 
     # Generic arrive action: places an inbound train at its designated entry track
@@ -393,7 +385,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     arrive = up.InstantaneousAction('arrive', t=arrival_train_type, l=track_part_type)
     arrive.add_precondition(up.Not(has_arrived(arrive.t)))
     arrive.add_precondition(entry_track_of(arrive.t, arrive.l))
-    arrive.add_precondition(elapsed_time() >= arrival(arrive.t))
+    arrive.add_precondition(total_cost() >= arrival(arrive.t))
     arrive.add_effect(has_arrived(arrive.t), True)
     arrive.add_effect(at(arrive.t, arrive.l), True)
     arrive.add_effect(aside_distance(arrive.t), bstack_distance(arrive.l))
@@ -420,7 +412,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         uncouple.add_effect(available(uncouple.unit), True)
         uncouple.add_effect(part_of_composition(uncouple.unit, uncouple.composition), False)
         uncouple.add_effect(total_cost(), total_cost() + 120)
-        uncouple.add_effect(elapsed_time(), elapsed_time() + 120)
         problem.add_action(uncouple)
 
     if explicit_coupling:
@@ -463,7 +454,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         couple_two_units.add_effect(physically_coupled(couple_two_units.unit_a, couple_two_units.unit_b), True)
         couple_two_units.add_effect(request_assembled(couple_two_units.request), True)
         couple_two_units.add_effect(total_cost(), total_cost() + 180)
-        couple_two_units.add_effect(elapsed_time(), elapsed_time() + 180)
         problem.add_action(couple_two_units)
 
         couple_two_units_same_train = up.InstantaneousAction(
@@ -495,7 +485,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         couple_two_units_same_train.add_effect(physically_coupled(couple_two_units_same_train.unit_a, couple_two_units_same_train.unit_b), True)
         couple_two_units_same_train.add_effect(request_assembled(couple_two_units_same_train.request), True)
         couple_two_units_same_train.add_effect(total_cost(), total_cost() + 180)
-        couple_two_units_same_train.add_effect(elapsed_time(), elapsed_time() + 180)
         problem.add_action(couple_two_units_same_train)
 
     # Matching assigns exactly one compatible available unit to an open request slot.
