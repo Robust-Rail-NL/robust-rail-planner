@@ -14,7 +14,7 @@ parser.add_argument("-s", "--scenario-file", help="Specifies the name of the sce
 parser.add_argument("-l", "--location-file", help="Specifies the name of the location file. Defaults to location_solver.json. Can be either a filename (relative to the --path above) or a full path.", required=False, default="location_solver.json")
 parser.add_argument("-o", "--output-file", help="Specifies the name of the output pddl instance file. Defaults to {scenario_file}.pddl. Will be stored in /data/", required=False, default=None)
 parser.add_argument("-d", "--domain-file", help="Specifies the name of the output pddl domain file. If none, the domain is not written. Will be stored in /data/", required=False, default=None)
-parser.add_argument("--coupling-mode", choices=["implicit_free_uncoupling", "implicit_explicit_uncoupling", "explicit_coupling"], default="implicit_free_uncoupling", required=False, help="Controls the matching/coupling modelling ladder.")
+parser.add_argument("--coupling-mode", choices=["implicit_free_uncoupling", "implicit_explicit_uncoupling", "explicit_coupling"], default="explicit_coupling", required=False, help="Controls the matching/coupling modelling ladder.")
 parser.add_argument("--subproblem", choices=["matching", "parking", "combined"], default="combined", required=False, help="Selects which subproblem goals to emit.")
 
 
@@ -137,6 +137,28 @@ def all_train_requests(scenario_object):
     requests.extend(scenario_object.get("out", {}).get("trainRequests", []))
     requests.extend(scenario_object.get("outStanding", {}).get("trainRequests", []))
     return requests
+
+
+def _coupling_track_ids_for_request(request, location_object, candidate_track_ids):
+    # Prefer request-specific parking/departure information, otherwise use nearby coupling tracks.
+    candidate_track_ids = {str(track_id) for track_id in candidate_track_ids}
+    preferred_ids = [request.get("lastParkingTrackPart"), request.get("leaveTrackPart")]
+    preferred_ids = [str(track_id) for track_id in preferred_ids if track_id is not None and str(track_id) in candidate_track_ids]
+    if preferred_ids:
+        return preferred_ids[:1]
+
+    leave_track_id = request.get("leaveTrackPart")
+    adjacency = _build_adjacency(location_object)
+    distances = _bfs_from(adjacency, [leave_track_id] if leave_track_id else [])
+    reachable_candidates = [
+        (distances[track_id], track_id)
+        for track_id in candidate_track_ids
+        if track_id in distances
+    ]
+    if reachable_candidates:
+        return [track_id for _, track_id in sorted(reachable_candidates)[:1]]
+
+    return sorted(candidate_track_ids)[:1]
 
 
 def _train_total_length(train):
@@ -262,7 +284,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     concurrent_movements = problem.add_fluent(up.Fluent("concurrent_movements", up.IntType()), default_initial_value=up.Int(0))
     max_concurrent_movements = 1
     direction_train = problem.add_fluent(up.Fluent("direction_train", up.BoolType(), train=arrival_train_type), default_initial_value=False) # False means towards bside, True means towards aside
-
+    
     available      = problem.add_fluent(up.Fluent("available",      up.BoolType(), unit=train_unit_type),                               default_initial_value=False)
     request_open   = problem.add_fluent(up.Fluent("request_open",   up.BoolType(), request=departure_request_type),                     default_initial_value=False)
     slot_open      = problem.add_fluent(up.Fluent("slot_open",      up.BoolType(), slot=request_slot_type),                             default_initial_value=False)
@@ -274,6 +296,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     unit_in_train = problem.add_fluent(up.Fluent("unit_in_train", up.BoolType(), unit=train_unit_type, train=arrival_train_type), default_initial_value=False)
     unit_before = problem.add_fluent(up.Fluent("unit_before", up.BoolType(), first=train_unit_type, second=train_unit_type), default_initial_value=False)
     coupling_allowed = problem.add_fluent(up.Fluent("coupling_allowed", up.BoolType(), trackpart=track_part_type), default_initial_value=False)
+    coupling_track_for_request = problem.add_fluent(up.Fluent("coupling_track_for_request", up.BoolType(), request=departure_request_type, trackpart=track_part_type), default_initial_value=False)
 
     # Shunting units represent movable train compositions created by split/couple actions.
     active_su        = problem.add_fluent(up.Fluent("active_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
@@ -571,19 +594,19 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     explicit_uncoupling = coupling_mode in ["implicit_explicit_uncoupling", "explicit_coupling"]
     explicit_coupling = coupling_mode == "explicit_coupling"
 
+    part_of_composition = problem.add_fluent(up.Fluent("part_of_composition", up.BoolType(), unit=train_unit_type, composition=arrival_composition_type), default_initial_value=False)
+    composition_needs_uncoupling = problem.add_fluent(up.Fluent("composition_needs_uncoupling", up.BoolType(), composition=arrival_composition_type), default_initial_value=False)
+
     if explicit_uncoupling:
         # Units in a multi-unit arrival must first be released from their composition.
-        part_of_composition = problem.add_fluent(up.Fluent("part_of_composition", up.BoolType(), unit=train_unit_type, composition=arrival_composition_type), default_initial_value=False)
-        composition_needs_uncoupling = problem.add_fluent(up.Fluent("composition_needs_uncoupling", up.BoolType(), composition=arrival_composition_type), default_initial_value=False)
-
         uncouple = up.InstantaneousAction("uncouple", unit=train_unit_type, composition=arrival_composition_type)
         # Preconditions: the unit belongs to a composition that still needs splitting.
         uncouple.add_precondition(part_of_composition(uncouple.unit, uncouple.composition))
         uncouple.add_precondition(composition_needs_uncoupling(uncouple.composition))
         # Effects: the unit becomes independently matchable and is removed from that composition.
         uncouple.add_effect(available(uncouple.unit), True)
-    uncouple.add_effect(part_of_composition(uncouple.unit, uncouple.composition), False)
-    problem.add_action(uncouple)
+        uncouple.add_effect(part_of_composition(uncouple.unit, uncouple.composition), False)
+        problem.add_action(uncouple)
 
     split_two_unit_su = up.InstantaneousAction(
         "split_two_unit_su",
@@ -661,6 +684,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         couple_two_units.add_precondition(at(couple_two_units.train_a, couple_two_units.track))
         couple_two_units.add_precondition(at(couple_two_units.train_b, couple_two_units.track))
         couple_two_units.add_precondition(coupling_allowed(couple_two_units.track))
+        couple_two_units.add_precondition(coupling_track_for_request(couple_two_units.request, couple_two_units.track))
         couple_two_units.add_precondition(aside_distance(couple_two_units.train_a) < aside_distance(couple_two_units.train_b))
         # Completing this action proves the ordered request is physically assembled.
         couple_two_units.add_effect(slot_coupled(couple_two_units.slot_a), True)
@@ -691,6 +715,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         couple_two_units_same_train.add_precondition(unit_in_train(couple_two_units_same_train.unit_b, couple_two_units_same_train.train))
         couple_two_units_same_train.add_precondition(at(couple_two_units_same_train.train, couple_two_units_same_train.track))
         couple_two_units_same_train.add_precondition(coupling_allowed(couple_two_units_same_train.track))
+        couple_two_units_same_train.add_precondition(coupling_track_for_request(couple_two_units_same_train.request, couple_two_units_same_train.track))
         couple_two_units_same_train.add_precondition(unit_before(couple_two_units_same_train.unit_a, couple_two_units_same_train.unit_b))
         # Same-train coupling has the same completion effects as separate-train coupling.
         couple_two_units_same_train.add_effect(slot_coupled(couple_two_units_same_train.slot_a), True)
@@ -726,6 +751,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         couple_two_sus.add_precondition(at_su(couple_two_sus.su_a, couple_two_sus.track))
         couple_two_sus.add_precondition(at_su(couple_two_sus.su_b, couple_two_sus.track))
         couple_two_sus.add_precondition(coupling_allowed(couple_two_sus.track))
+        couple_two_sus.add_precondition(coupling_track_for_request(couple_two_sus.request, couple_two_sus.track))
         # The two shunting units must be adjacent in the same order as the departure request slots.
         couple_two_sus.add_precondition(up.Equals(su_aside_distance(couple_two_sus.su_b), su_aside_distance(couple_two_sus.su_a) + su_length(couple_two_sus.su_a)))
         couple_two_sus.add_precondition(matched(couple_two_sus.unit_a, couple_two_sus.slot_a))
@@ -789,6 +815,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     track_train_counts = {}
     arrival_train_objs = []
     train_obj_by_key = {}
+    coupling_candidate_track_ids = set()
 
     # Add track part objects
     id_to_track_part = {}
@@ -804,6 +831,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         if track_part.get("parkingAllowed", False):
             problem.set_initial_value(parking_allowed(obj), True)
             problem.set_initial_value(coupling_allowed(obj), True)
+            coupling_candidate_track_ids.add(track_part["id"])
             tp_id = track_part["id"]
             if tp_id in bfs_dist and bfs_dist[tp_id] in bfs_to_entry_dist:
                 problem.set_initial_value(entry_distance(obj), up.Int(bfs_to_entry_dist[bfs_dist[tp_id]]))
@@ -872,7 +900,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
                 track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
 
-        if include_parking:
+        if not include_matching:
             # Each outstanding request contributes one required parked train on its target track.
             required_parked_per_track = {}
             for request in out_standing_trains:
@@ -885,7 +913,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
         # Add outbound train requests: these trains must be assembled (contain all units) and depart.
         # Add a goal stating that the number of departed trains must be equal to out_requests
-        if include_parking:
+        if not include_matching:
             problem.add_goal(up.Equals(num_of_departed_trains(), up.Int(len(out_requests))))
 
         for track_id, occupied_length_value in track_occupancies.items():
@@ -973,6 +1001,10 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             request_obj = problem.add_object(request_name, departure_request_type)
             request_objs[request_name] = request_obj
             problem.set_initial_value(request_open(request_obj), True)
+
+            for track_id in _coupling_track_ids_for_request(request, location_object, coupling_candidate_track_ids):
+                if track_id in id_to_track_part:
+                    problem.set_initial_value(coupling_track_for_request(request_obj, id_to_track_part[track_id]), True)
 
             slot_objects = []
             for index, requested_unit in enumerate(request["trainUnits"]):

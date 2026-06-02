@@ -1,4 +1,4 @@
-(define (domain scenario_solver_example3-domain)
+(define (domain scenario_solver_two_arrivals_coupling-domain)
  (:requirements :strips :typing :negative-preconditions :equality :numeric-fluents)
  (:types arrivaltrain trackpart trainunit departurerequest requestslot shuntingunit arrivalcomposition)
  (:predicates 

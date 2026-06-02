@@ -4,13 +4,14 @@
 | Version | Date | Summary of Changes |
 |---------|------|--------------------|
 | v0.1 | 2026-04-28 | Initial model |
-| v0.2 | 2026-05-12 | Added `park` action, `parking_allowed` and `parked` fluents |
-| v0.3 | 2026-05-12 | Parking subproblem: `connected` on `move`; `entry_distance` + `departure_rank` on `park` |
-| v0.4 | 2026-05-19 | Matching/coupling variants: request slots, `match`, optional `uncouple`, and optional `couple_to_request` |
+| v0.2    | 2026-05-12 | Added `park` action, `parking_allowed` and `parked` fluents |
+| v0.3    | 2026-05-12 | Parking subproblem: `connected` on `move`; `entry_distance` + `departure_rank` on `park` |
+| v0.4    | 2026-05-19 | Matching/coupling variants: request slots, `match`, optional `uncouple`, and optional `couple_to_request` |
 | v0.5 | 2026-05-18 | Added the routing subproblem: `depart` action, `departure_exit` fluent, capacity tracking with `astack_distance`, `bstack_distance`, `train_length`, `track_length`, and `track_is_parked_at` |
-| v0.6 | 2026-05-25 | Explicit coupling now requires physical two-unit assembly: same track, valid coupling track, and correct order |
-| v0.7 | 2026-05-27 | Cost metric: `total_cost` (seconds), move cost = 300s, `(:metric minimize (total_cost))`. Arrival timing: `has_arrived`, `entry_track_of`, `arrive`, and `wait` actions; inbound trains deferred from init |
-| v0.8 | 2026-05-27 | Coupling costs added: `uncouple` = 120s, `couple_two_units` / `couple_two_units_same_train` = 180s (from NS scenario `splitDuration`/`combineDuration`) |
+| v0.6    | 2026-05-25 | Explicit coupling now requires physical two-unit assembly: same track, valid coupling track, and correct order |
+| v0.7    | 2026-05-31 | Merged routing direction model with shunting-unit split, coupling, movement, and departure |
+| v0.8    | 2026-05-27 | Cost metric: `total_cost` (seconds), move cost = 300s, `(:metric minimize (total_cost))`. Arrival timing: `has_arrived`, `entry_track_of`, `arrive`, and `wait` actions; inbound trains deferred from init |
+| v0.9    | 2026-05-27 | Coupling costs added: `uncouple` = 120s, `couple_two_units` / `couple_two_units_same_train` = 180s (from NS scenario `splitDuration`/`combineDuration`) |
 
 ---
 
@@ -29,7 +30,9 @@
 - `convert.py` can emit `parking`, `matching`, or `combined` variants with `--subproblem`.
 - Matching adds request slots and the `match` action; compatibility uses unit type, carriage count, and length.
 - `--coupling-mode` can switch between free uncoupling, explicit uncoupling, and explicit coupling.
-- Explicit uncoupling adds `uncouple`; explicit coupling adds `couple_two_units` / `couple_two_units_same_train`.
+- Explicit uncoupling adds `uncouple`; explicit coupling adds `couple_to_request`.
+- Physical explicit coupling uses `shuntingunit` objects for the current movable composition after split/couple actions.
+- Routing branch converter variants are documented separately in `src/convert/md_files`.
 - `run.py` exposes subproblem, coupling-mode, and planner-backend choices.
 
 ---
@@ -39,10 +42,11 @@
 |------|-------------|------------|
 | `trackpart` | A piece of track on the shunting yard | v0.1 |
 | `trainunit` | An individual train unit (atomic) | v0.1 |
-| `arrivaltrain` | An arriving or standing train composition | v0.1 |
-| `departurerequest` | An outgoing train request used by matching | v0.4 |
-| `requestslot` | One required unit position inside an outgoing request | v0.4 |
-| `arrivalcomposition` | A multi-unit incoming composition that may need uncoupling | v0.4 |
+| `arrivaltrain` | An arriving train | v0.1 |
+| `departurerequest` | An outgoing train request used by matching | coupling/parking branch |
+| `requestslot` | One required unit position inside an outgoing request | coupling/parking branch |
+| `arrivalcomposition` | A multi-unit incoming composition that may need uncoupling | coupling/parking branch |
+| `shuntingunit` | A movable physical train composition used after split/couple actions | v0.7 |
 
 ---
 
