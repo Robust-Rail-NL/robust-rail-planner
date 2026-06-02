@@ -16,10 +16,18 @@ function default_enhsp_jar()
 end
 
 function default_java()
-    microsoft_java = raw"C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot\bin\java.exe"
-    homebrew_java  = "/opt/homebrew/opt/openjdk@17/bin/java"
-    isfile(microsoft_java) && return microsoft_java
-    isfile(homebrew_java)  && return homebrew_java
+    # Standard cross-platform mechanism
+    if haskey(ENV, "JAVA_HOME")
+        exe = Sys.iswindows() ? "java.exe" : "java"
+        candidate = joinpath(ENV["JAVA_HOME"], "bin", exe)
+        isfile(candidate) && return candidate
+    end
+    # Known hardcoded paths for common setups
+    for path in [raw"C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot\bin\java.exe",
+                 "/opt/homebrew/opt/openjdk@17/bin/java",
+                 "/usr/local/opt/openjdk@17/bin/java"]
+        isfile(path) && return path
+    end
     return "java"
 end
 
