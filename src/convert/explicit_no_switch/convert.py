@@ -14,8 +14,6 @@ parser.add_argument("-s", "--scenario-file", help="Specifies the name of the sce
 parser.add_argument("-l", "--location-file", help="Specifies the name of the location file. Defaults to location_solver.json. Can be either a filename (relative to the --path above) or a full path.", required=False, default="location_solver.json")
 parser.add_argument("-o", "--output-file", help="Specifies the name of the output pddl instance file. Defaults to {scenario_file}.pddl. Will be stored in /data/", required=False, default=None)
 parser.add_argument("-d", "--domain-file", help="Specifies the name of the output pddl domain file. If none, the domain is not written. Will be stored in /data/", required=False, default=None)
-parser.add_argument("--coupling-mode", choices=["implicit_free_uncoupling", "implicit_explicit_uncoupling", "explicit_coupling"], default="explicit_coupling", required=False, help="Controls the matching/coupling modelling ladder.")
-parser.add_argument("--subproblem", choices=["matching", "parking", "combined"], default="combined", required=False, help="Selects which subproblem goals to emit.")
 
 
 ### Add logging to the arguments
@@ -312,7 +310,7 @@ def determine_initial_direction(train, location_object, initial_track_id):
                 return False  # Default to bside if both or neither connections are present
 
 
-def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None, coupling_mode="implicit_free_uncoupling", subproblem="combined"):
+def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None):
     # Path defaults to ../../scenario-planning-inputs/Location_KleineBinckhorst/
     if path_to_folder is None:
         path_to_folder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "scenario-planning-inputs", "Location_KleineBinckhorst")
@@ -333,8 +331,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     location_object = json.load(open(location_file))
     scenario_object = json.load(open(scenario_file))
-    include_parking = subproblem in ["parking", "combined"]
-    include_matching = subproblem in ["matching", "combined"]
 
     # In unified planning the domain information is included in the problem class
     problem = up.Problem(scenario_name)
@@ -674,24 +670,21 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     turn_b_side.add_precondition(at(turn_b_side.t, turn_b_side.l))
     turn_b_side.add_precondition(turning_allowed(turn_b_side.l))
     turn_b_side.add_effect(direction_train(turn_b_side.t), False)
-    # No-switch explicit coupling does not expose turn actions; movement is not direction-gated.
 
-    explicit_uncoupling = coupling_mode in ["implicit_explicit_uncoupling", "explicit_coupling"]
-    explicit_coupling = coupling_mode == "explicit_coupling"
 
     part_of_composition = problem.add_fluent(up.Fluent("part_of_composition", up.BoolType(), unit=train_unit_type, composition=arrival_composition_type), default_initial_value=False)
     composition_needs_uncoupling = problem.add_fluent(up.Fluent("composition_needs_uncoupling", up.BoolType(), composition=arrival_composition_type), default_initial_value=False)
 
-    if explicit_uncoupling:
-        # Units in a multi-unit arrival must first be released from their composition.
-        uncouple = up.InstantaneousAction("uncouple", unit=train_unit_type, composition=arrival_composition_type)
-        # Preconditions: the unit belongs to a composition that still needs splitting.
-        uncouple.add_precondition(part_of_composition(uncouple.unit, uncouple.composition))
-        uncouple.add_precondition(composition_needs_uncoupling(uncouple.composition))
-        # Effects: the unit becomes independently matchable and is removed from that composition.
-        uncouple.add_effect(available(uncouple.unit), True)
-        uncouple.add_effect(part_of_composition(uncouple.unit, uncouple.composition), False)
-        problem.add_action(uncouple)
+
+    # Units in a multi-unit arrival must first be released from their composition.
+    uncouple = up.InstantaneousAction("uncouple", unit=train_unit_type, composition=arrival_composition_type)
+    # Preconditions: the unit belongs to a composition that still needs splitting.
+    uncouple.add_precondition(part_of_composition(uncouple.unit, uncouple.composition))
+    uncouple.add_precondition(composition_needs_uncoupling(uncouple.composition))
+    # Effects: the unit becomes independently matchable and is removed from that composition.
+    uncouple.add_effect(available(uncouple.unit), True)
+    uncouple.add_effect(part_of_composition(uncouple.unit, uncouple.composition), False)
+    problem.add_action(uncouple)
 
     split_two_unit_su = up.InstantaneousAction(
         "split_two_unit_su",
@@ -738,131 +731,130 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     split_two_unit_su.add_effect(part_of_composition(split_two_unit_su.unit_b, split_two_unit_su.composition), False)
     problem.add_action(split_two_unit_su)
 
-    if explicit_coupling:
-        # Explicit coupling goals track both slot completion and physical assembly.
-        slot_coupled = problem.add_fluent(up.Fluent("slot_coupled", up.BoolType(), slot=request_slot_type), default_initial_value=False)
-        coupled_to_request = problem.add_fluent(up.Fluent("coupled_to_request", up.BoolType(), unit=train_unit_type, request=departure_request_type), default_initial_value=False)
-        physically_coupled = problem.add_fluent(up.Fluent("physically_coupled", up.BoolType(), first=train_unit_type, second=train_unit_type), default_initial_value=False)
-        request_assembled = problem.add_fluent(up.Fluent("request_assembled", up.BoolType(), request=departure_request_type), default_initial_value=False)
+    # Explicit coupling goals track both slot completion and physical assembly.
+    slot_coupled = problem.add_fluent(up.Fluent("slot_coupled", up.BoolType(), slot=request_slot_type), default_initial_value=False)
+    coupled_to_request = problem.add_fluent(up.Fluent("coupled_to_request", up.BoolType(), unit=train_unit_type, request=departure_request_type), default_initial_value=False)
+    physically_coupled = problem.add_fluent(up.Fluent("physically_coupled", up.BoolType(), first=train_unit_type, second=train_unit_type), default_initial_value=False)
+    request_assembled = problem.add_fluent(up.Fluent("request_assembled", up.BoolType(), request=departure_request_type), default_initial_value=False)
 
-        couple_two_units = up.InstantaneousAction(
-            "couple_two_units",
-            unit_a=train_unit_type,
-            unit_b=train_unit_type,
-            train_a=arrival_train_type,
-            train_b=arrival_train_type,
-            track=track_part_type,
-            slot_a=request_slot_type,
-            slot_b=request_slot_type,
-            request=departure_request_type,
-        )
-        # The matched units must be the two ordered slots of the same outgoing request.
-        couple_two_units.add_precondition(matched(couple_two_units.unit_a, couple_two_units.slot_a))
-        couple_two_units.add_precondition(matched(couple_two_units.unit_b, couple_two_units.slot_b))
-        couple_two_units.add_precondition(slot_for_request(couple_two_units.slot_a, couple_two_units.request))
-        couple_two_units.add_precondition(slot_for_request(couple_two_units.slot_b, couple_two_units.request))
-        couple_two_units.add_precondition(slot_before(couple_two_units.slot_a, couple_two_units.slot_b))
-        couple_two_units.add_precondition(up.Not(up.Equals(couple_two_units.unit_a, couple_two_units.unit_b)))
-        # Physical checks: each unit belongs to its train, both trains share a valid track, and order matches the slots.
-        couple_two_units.add_precondition(unit_in_train(couple_two_units.unit_a, couple_two_units.train_a))
-        couple_two_units.add_precondition(unit_in_train(couple_two_units.unit_b, couple_two_units.train_b))
-        couple_two_units.add_precondition(at(couple_two_units.train_a, couple_two_units.track))
-        couple_two_units.add_precondition(at(couple_two_units.train_b, couple_two_units.track))
-        couple_two_units.add_precondition(coupling_allowed(couple_two_units.track))
-        couple_two_units.add_precondition(coupling_track_for_request(couple_two_units.request, couple_two_units.track))
-        couple_two_units.add_precondition(aside_distance(couple_two_units.train_a) < aside_distance(couple_two_units.train_b))
-        # Completing this action proves the ordered request is physically assembled.
-        couple_two_units.add_effect(slot_coupled(couple_two_units.slot_a), True)
-        couple_two_units.add_effect(slot_coupled(couple_two_units.slot_b), True)
-        couple_two_units.add_effect(coupled_to_request(couple_two_units.unit_a, couple_two_units.request), True)
-        couple_two_units.add_effect(coupled_to_request(couple_two_units.unit_b, couple_two_units.request), True)
-        couple_two_units.add_effect(physically_coupled(couple_two_units.unit_a, couple_two_units.unit_b), True)
-        couple_two_units.add_effect(request_assembled(couple_two_units.request), True)
-        problem.add_action(couple_two_units)
+    couple_two_units = up.InstantaneousAction(
+        "couple_two_units",
+        unit_a=train_unit_type,
+        unit_b=train_unit_type,
+        train_a=arrival_train_type,
+        train_b=arrival_train_type,
+        track=track_part_type,
+        slot_a=request_slot_type,
+        slot_b=request_slot_type,
+        request=departure_request_type,
+    )
+    # The matched units must be the two ordered slots of the same outgoing request.
+    couple_two_units.add_precondition(matched(couple_two_units.unit_a, couple_two_units.slot_a))
+    couple_two_units.add_precondition(matched(couple_two_units.unit_b, couple_two_units.slot_b))
+    couple_two_units.add_precondition(slot_for_request(couple_two_units.slot_a, couple_two_units.request))
+    couple_two_units.add_precondition(slot_for_request(couple_two_units.slot_b, couple_two_units.request))
+    couple_two_units.add_precondition(slot_before(couple_two_units.slot_a, couple_two_units.slot_b))
+    couple_two_units.add_precondition(up.Not(up.Equals(couple_two_units.unit_a, couple_two_units.unit_b)))
+    # Physical checks: each unit belongs to its train, both trains share a valid track, and order matches the slots.
+    couple_two_units.add_precondition(unit_in_train(couple_two_units.unit_a, couple_two_units.train_a))
+    couple_two_units.add_precondition(unit_in_train(couple_two_units.unit_b, couple_two_units.train_b))
+    couple_two_units.add_precondition(at(couple_two_units.train_a, couple_two_units.track))
+    couple_two_units.add_precondition(at(couple_two_units.train_b, couple_two_units.track))
+    couple_two_units.add_precondition(coupling_allowed(couple_two_units.track))
+    couple_two_units.add_precondition(coupling_track_for_request(couple_two_units.request, couple_two_units.track))
+    couple_two_units.add_precondition(aside_distance(couple_two_units.train_a) < aside_distance(couple_two_units.train_b))
+    # Completing this action proves the ordered request is physically assembled.
+    couple_two_units.add_effect(slot_coupled(couple_two_units.slot_a), True)
+    couple_two_units.add_effect(slot_coupled(couple_two_units.slot_b), True)
+    couple_two_units.add_effect(coupled_to_request(couple_two_units.unit_a, couple_two_units.request), True)
+    couple_two_units.add_effect(coupled_to_request(couple_two_units.unit_b, couple_two_units.request), True)
+    couple_two_units.add_effect(physically_coupled(couple_two_units.unit_a, couple_two_units.unit_b), True)
+    couple_two_units.add_effect(request_assembled(couple_two_units.request), True)
+    problem.add_action(couple_two_units)
 
-        couple_two_units_same_train = up.InstantaneousAction(
-            "couple_two_units_same_train",
-            unit_a=train_unit_type,
-            unit_b=train_unit_type,
-            train=arrival_train_type,
-            track=track_part_type,
-            slot_a=request_slot_type,
-            slot_b=request_slot_type,
-            request=departure_request_type,
-        )
-        couple_two_units_same_train.add_precondition(matched(couple_two_units_same_train.unit_a, couple_two_units_same_train.slot_a))
-        couple_two_units_same_train.add_precondition(matched(couple_two_units_same_train.unit_b, couple_two_units_same_train.slot_b))
-        couple_two_units_same_train.add_precondition(slot_for_request(couple_two_units_same_train.slot_a, couple_two_units_same_train.request))
-        couple_two_units_same_train.add_precondition(slot_for_request(couple_two_units_same_train.slot_b, couple_two_units_same_train.request))
-        couple_two_units_same_train.add_precondition(slot_before(couple_two_units_same_train.slot_a, couple_two_units_same_train.slot_b))
-        couple_two_units_same_train.add_precondition(up.Not(up.Equals(couple_two_units_same_train.unit_a, couple_two_units_same_train.unit_b)))
-        couple_two_units_same_train.add_precondition(unit_in_train(couple_two_units_same_train.unit_a, couple_two_units_same_train.train))
-        couple_two_units_same_train.add_precondition(unit_in_train(couple_two_units_same_train.unit_b, couple_two_units_same_train.train))
-        couple_two_units_same_train.add_precondition(at(couple_two_units_same_train.train, couple_two_units_same_train.track))
-        couple_two_units_same_train.add_precondition(coupling_allowed(couple_two_units_same_train.track))
-        couple_two_units_same_train.add_precondition(coupling_track_for_request(couple_two_units_same_train.request, couple_two_units_same_train.track))
-        couple_two_units_same_train.add_precondition(unit_before(couple_two_units_same_train.unit_a, couple_two_units_same_train.unit_b))
-        # Same-train coupling has the same completion effects as separate-train coupling.
-        couple_two_units_same_train.add_effect(slot_coupled(couple_two_units_same_train.slot_a), True)
-        couple_two_units_same_train.add_effect(slot_coupled(couple_two_units_same_train.slot_b), True)
-        couple_two_units_same_train.add_effect(coupled_to_request(couple_two_units_same_train.unit_a, couple_two_units_same_train.request), True)
-        couple_two_units_same_train.add_effect(coupled_to_request(couple_two_units_same_train.unit_b, couple_two_units_same_train.request), True)
-        couple_two_units_same_train.add_effect(physically_coupled(couple_two_units_same_train.unit_a, couple_two_units_same_train.unit_b), True)
-        couple_two_units_same_train.add_effect(request_assembled(couple_two_units_same_train.request), True)
-        problem.add_action(couple_two_units_same_train)
+    couple_two_units_same_train = up.InstantaneousAction(
+        "couple_two_units_same_train",
+        unit_a=train_unit_type,
+        unit_b=train_unit_type,
+        train=arrival_train_type,
+        track=track_part_type,
+        slot_a=request_slot_type,
+        slot_b=request_slot_type,
+        request=departure_request_type,
+    )
+    couple_two_units_same_train.add_precondition(matched(couple_two_units_same_train.unit_a, couple_two_units_same_train.slot_a))
+    couple_two_units_same_train.add_precondition(matched(couple_two_units_same_train.unit_b, couple_two_units_same_train.slot_b))
+    couple_two_units_same_train.add_precondition(slot_for_request(couple_two_units_same_train.slot_a, couple_two_units_same_train.request))
+    couple_two_units_same_train.add_precondition(slot_for_request(couple_two_units_same_train.slot_b, couple_two_units_same_train.request))
+    couple_two_units_same_train.add_precondition(slot_before(couple_two_units_same_train.slot_a, couple_two_units_same_train.slot_b))
+    couple_two_units_same_train.add_precondition(up.Not(up.Equals(couple_two_units_same_train.unit_a, couple_two_units_same_train.unit_b)))
+    couple_two_units_same_train.add_precondition(unit_in_train(couple_two_units_same_train.unit_a, couple_two_units_same_train.train))
+    couple_two_units_same_train.add_precondition(unit_in_train(couple_two_units_same_train.unit_b, couple_two_units_same_train.train))
+    couple_two_units_same_train.add_precondition(at(couple_two_units_same_train.train, couple_two_units_same_train.track))
+    couple_two_units_same_train.add_precondition(coupling_allowed(couple_two_units_same_train.track))
+    couple_two_units_same_train.add_precondition(coupling_track_for_request(couple_two_units_same_train.request, couple_two_units_same_train.track))
+    couple_two_units_same_train.add_precondition(unit_before(couple_two_units_same_train.unit_a, couple_two_units_same_train.unit_b))
+    # Same-train coupling has the same completion effects as separate-train coupling.
+    couple_two_units_same_train.add_effect(slot_coupled(couple_two_units_same_train.slot_a), True)
+    couple_two_units_same_train.add_effect(slot_coupled(couple_two_units_same_train.slot_b), True)
+    couple_two_units_same_train.add_effect(coupled_to_request(couple_two_units_same_train.unit_a, couple_two_units_same_train.request), True)
+    couple_two_units_same_train.add_effect(coupled_to_request(couple_two_units_same_train.unit_b, couple_two_units_same_train.request), True)
+    couple_two_units_same_train.add_effect(physically_coupled(couple_two_units_same_train.unit_a, couple_two_units_same_train.unit_b), True)
+    couple_two_units_same_train.add_effect(request_assembled(couple_two_units_same_train.request), True)
+    problem.add_action(couple_two_units_same_train)
 
-        couple_two_sus = up.InstantaneousAction(
-            "couple_two_sus",
-            su_a=shunting_unit_type,
-            su_b=shunting_unit_type,
-            su_result=shunting_unit_type,
-            unit_a=train_unit_type,
-            unit_b=train_unit_type,
-            track=track_part_type,
-            slot_a=request_slot_type,
-            slot_b=request_slot_type,
-            request=departure_request_type,
-        )
-        # Coupling consumes two active shunting units and activates the assembled request unit.
-        couple_two_sus.add_precondition(active_su(couple_two_sus.su_a))
-        couple_two_sus.add_precondition(active_su(couple_two_sus.su_b))
-        couple_two_sus.add_precondition(up.Not(active_su(couple_two_sus.su_result)))
-        couple_two_sus.add_precondition(up.Not(up.Equals(couple_two_sus.su_a, couple_two_sus.su_b)))
-        couple_two_sus.add_precondition(contains_su(couple_two_sus.su_a, couple_two_sus.unit_a))
-        couple_two_sus.add_precondition(contains_su(couple_two_sus.su_b, couple_two_sus.unit_b))
-        couple_two_sus.add_precondition(single_unit_su(couple_two_sus.su_a, couple_two_sus.unit_a))
-        couple_two_sus.add_precondition(single_unit_su(couple_two_sus.su_b, couple_two_sus.unit_b))
-        couple_two_sus.add_precondition(request_su_for_request(couple_two_sus.su_result, couple_two_sus.request))
-        couple_two_sus.add_precondition(at_su(couple_two_sus.su_a, couple_two_sus.track))
-        couple_two_sus.add_precondition(at_su(couple_two_sus.su_b, couple_two_sus.track))
-        couple_two_sus.add_precondition(coupling_allowed(couple_two_sus.track))
-        couple_two_sus.add_precondition(coupling_track_for_request(couple_two_sus.request, couple_two_sus.track))
-        # The two shunting units must be adjacent in the same order as the departure request slots.
-        couple_two_sus.add_precondition(up.Equals(su_aside_distance(couple_two_sus.su_b), su_aside_distance(couple_two_sus.su_a) + su_length(couple_two_sus.su_a)))
-        couple_two_sus.add_precondition(matched(couple_two_sus.unit_a, couple_two_sus.slot_a))
-        couple_two_sus.add_precondition(matched(couple_two_sus.unit_b, couple_two_sus.slot_b))
-        couple_two_sus.add_precondition(slot_for_request(couple_two_sus.slot_a, couple_two_sus.request))
-        couple_two_sus.add_precondition(slot_for_request(couple_two_sus.slot_b, couple_two_sus.request))
-        couple_two_sus.add_precondition(slot_before(couple_two_sus.slot_a, couple_two_sus.slot_b))
-        couple_two_sus.add_effect(active_su(couple_two_sus.su_a), False)
-        couple_two_sus.add_effect(active_su(couple_two_sus.su_b), False)
-        couple_two_sus.add_effect(active_su(couple_two_sus.su_result), True)
-        couple_two_sus.add_effect(at_su(couple_two_sus.su_a, couple_two_sus.track), False)
-        couple_two_sus.add_effect(at_su(couple_two_sus.su_b, couple_two_sus.track), False)
-        couple_two_sus.add_effect(at_su(couple_two_sus.su_result, couple_two_sus.track), True)
-        # The assembled shunting unit inherits the front unit's position and combined length.
-        couple_two_sus.add_effect(su_aside_distance(couple_two_sus.su_result), su_aside_distance(couple_two_sus.su_a))
-        couple_two_sus.add_effect(su_length(couple_two_sus.su_result), su_length(couple_two_sus.su_a) + su_length(couple_two_sus.su_b))
-        couple_two_sus.add_effect(number_of_trains_on_track(couple_two_sus.track), number_of_trains_on_track(couple_two_sus.track) - 1)
-        couple_two_sus.add_effect(contains_su(couple_two_sus.su_result, couple_two_sus.unit_a), True)
-        couple_two_sus.add_effect(contains_su(couple_two_sus.su_result, couple_two_sus.unit_b), True)
-        couple_two_sus.add_effect(slot_coupled(couple_two_sus.slot_a), True)
-        couple_two_sus.add_effect(slot_coupled(couple_two_sus.slot_b), True)
-        couple_two_sus.add_effect(coupled_to_request(couple_two_sus.unit_a, couple_two_sus.request), True)
-        couple_two_sus.add_effect(coupled_to_request(couple_two_sus.unit_b, couple_two_sus.request), True)
-        couple_two_sus.add_effect(physically_coupled(couple_two_sus.unit_a, couple_two_sus.unit_b), True)
-        couple_two_sus.add_effect(request_assembled(couple_two_sus.request), True)
-        problem.add_action(couple_two_sus)
+    couple_two_sus = up.InstantaneousAction(
+        "couple_two_sus",
+        su_a=shunting_unit_type,
+        su_b=shunting_unit_type,
+        su_result=shunting_unit_type,
+        unit_a=train_unit_type,
+        unit_b=train_unit_type,
+        track=track_part_type,
+        slot_a=request_slot_type,
+        slot_b=request_slot_type,
+        request=departure_request_type,
+    )
+    # Coupling consumes two active shunting units and activates the assembled request unit.
+    couple_two_sus.add_precondition(active_su(couple_two_sus.su_a))
+    couple_two_sus.add_precondition(active_su(couple_two_sus.su_b))
+    couple_two_sus.add_precondition(up.Not(active_su(couple_two_sus.su_result)))
+    couple_two_sus.add_precondition(up.Not(up.Equals(couple_two_sus.su_a, couple_two_sus.su_b)))
+    couple_two_sus.add_precondition(contains_su(couple_two_sus.su_a, couple_two_sus.unit_a))
+    couple_two_sus.add_precondition(contains_su(couple_two_sus.su_b, couple_two_sus.unit_b))
+    couple_two_sus.add_precondition(single_unit_su(couple_two_sus.su_a, couple_two_sus.unit_a))
+    couple_two_sus.add_precondition(single_unit_su(couple_two_sus.su_b, couple_two_sus.unit_b))
+    couple_two_sus.add_precondition(request_su_for_request(couple_two_sus.su_result, couple_two_sus.request))
+    couple_two_sus.add_precondition(at_su(couple_two_sus.su_a, couple_two_sus.track))
+    couple_two_sus.add_precondition(at_su(couple_two_sus.su_b, couple_two_sus.track))
+    couple_two_sus.add_precondition(coupling_allowed(couple_two_sus.track))
+    couple_two_sus.add_precondition(coupling_track_for_request(couple_two_sus.request, couple_two_sus.track))
+    # The two shunting units must be adjacent in the same order as the departure request slots.
+    couple_two_sus.add_precondition(up.Equals(su_aside_distance(couple_two_sus.su_b), su_aside_distance(couple_two_sus.su_a) + su_length(couple_two_sus.su_a)))
+    couple_two_sus.add_precondition(matched(couple_two_sus.unit_a, couple_two_sus.slot_a))
+    couple_two_sus.add_precondition(matched(couple_two_sus.unit_b, couple_two_sus.slot_b))
+    couple_two_sus.add_precondition(slot_for_request(couple_two_sus.slot_a, couple_two_sus.request))
+    couple_two_sus.add_precondition(slot_for_request(couple_two_sus.slot_b, couple_two_sus.request))
+    couple_two_sus.add_precondition(slot_before(couple_two_sus.slot_a, couple_two_sus.slot_b))
+    couple_two_sus.add_effect(active_su(couple_two_sus.su_a), False)
+    couple_two_sus.add_effect(active_su(couple_two_sus.su_b), False)
+    couple_two_sus.add_effect(active_su(couple_two_sus.su_result), True)
+    couple_two_sus.add_effect(at_su(couple_two_sus.su_a, couple_two_sus.track), False)
+    couple_two_sus.add_effect(at_su(couple_two_sus.su_b, couple_two_sus.track), False)
+    couple_two_sus.add_effect(at_su(couple_two_sus.su_result, couple_two_sus.track), True)
+    # The assembled shunting unit inherits the front unit's position and combined length.
+    couple_two_sus.add_effect(su_aside_distance(couple_two_sus.su_result), su_aside_distance(couple_two_sus.su_a))
+    couple_two_sus.add_effect(su_length(couple_two_sus.su_result), su_length(couple_two_sus.su_a) + su_length(couple_two_sus.su_b))
+    couple_two_sus.add_effect(number_of_trains_on_track(couple_two_sus.track), number_of_trains_on_track(couple_two_sus.track) - 1)
+    couple_two_sus.add_effect(contains_su(couple_two_sus.su_result, couple_two_sus.unit_a), True)
+    couple_two_sus.add_effect(contains_su(couple_two_sus.su_result, couple_two_sus.unit_b), True)
+    couple_two_sus.add_effect(slot_coupled(couple_two_sus.slot_a), True)
+    couple_two_sus.add_effect(slot_coupled(couple_two_sus.slot_b), True)
+    couple_two_sus.add_effect(coupled_to_request(couple_two_sus.unit_a, couple_two_sus.request), True)
+    couple_two_sus.add_effect(coupled_to_request(couple_two_sus.unit_b, couple_two_sus.request), True)
+    couple_two_sus.add_effect(physically_coupled(couple_two_sus.unit_a, couple_two_sus.unit_b), True)
+    couple_two_sus.add_effect(request_assembled(couple_two_sus.request), True)
+    problem.add_action(couple_two_sus)
 
     # Matching assigns exactly one compatible available unit to an open request slot.
     match = up.InstantaneousAction("match", unit=train_unit_type, slot=request_slot_type)
@@ -897,6 +889,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     out_requests = scenario_object.get("out", {}).get("trainRequests", [])
     # train_to_rank = _compute_departure_ranks(inbound_trains)
     track_occupancies = {}
+    train_initial_aside = {}
     track_train_counts = {}
     arrival_train_objs = []
     train_obj_by_key = {}
@@ -959,61 +952,61 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     id_to_unit = {}
     unit_type_by_id = {}
 
-    if include_parking:
-        # Add inbound trains
-        for index, train in enumerate(inbound_trains):
-            arrival_train = problem.add_object(_train_object_name("in", index, train), arrival_train_type)
-            train_obj_by_key[("in", index)] = arrival_train
-            arrival_train_objs.append(arrival_train)
-            problem.set_initial_value(arrival(arrival_train), up.Int(int(train["arrival"])))
-            initial_track_id = _train_initial_track_id(train, ["entryTrackPart", "firstParkingTrackPart"])
-            problem.set_initial_value(at(arrival_train, id_to_track_part[initial_track_id]), True)
-            # problem.set_initial_value(departure_rank(arrival_train), up.Int(train_to_rank[train["id"]]))
+
+    # Add inbound trains
+    for index, train in enumerate(inbound_trains):
+        arrival_train = problem.add_object(_train_object_name("in", index, train), arrival_train_type)
+        train_obj_by_key[("in", index)] = arrival_train
+        arrival_train_objs.append(arrival_train)
+        problem.set_initial_value(arrival(arrival_train), up.Int(int(train["arrival"])))
+        initial_track_id = _train_initial_track_id(train, ["entryTrackPart", "firstParkingTrackPart"])
+        problem.set_initial_value(at(arrival_train, id_to_track_part[initial_track_id]), True)
+        # problem.set_initial_value(departure_rank(arrival_train), up.Int(train_to_rank[train["id"]]))
+        train_total_length = _train_total_length(train)
+        problem.set_initial_value(train_length(arrival_train), up.Real(train_total_length))
+        previous_length_on_track = track_occupancies.get(initial_track_id, Fraction(0))
+        problem.set_initial_value(aside_distance(arrival_train), up.Real(previous_length_on_track))
+        train_initial_aside[_train_object_name("in", index, train)] = previous_length_on_track
+        track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
+        track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
+        problem.set_initial_value(direction_train(arrival_train), determine_initial_direction(train, location_object, initial_track_id))
+
+    for index, train in enumerate(in_standing_trains):
+        standing_train = problem.add_object(_train_object_name("inStanding", index, train), arrival_train_type)
+        train_obj_by_key[("inStanding", index)] = standing_train
+        arrival_train_objs.append(standing_train)
+        initial_track_id = _train_initial_track_id(train, ["firstParkingTrackPart", "entryTrackPart"])
+        problem.set_initial_value(arrival(standing_train), up.Int(int(train.get("arrival", 0))))
+        if initial_track_id is not None:
+            problem.set_initial_value(at(standing_train, id_to_track_part[initial_track_id]), True)
             train_total_length = _train_total_length(train)
-            problem.set_initial_value(train_length(arrival_train), up.Real(train_total_length))
+            problem.set_initial_value(train_length(standing_train), up.Real(train_total_length))
             previous_length_on_track = track_occupancies.get(initial_track_id, Fraction(0))
-            problem.set_initial_value(aside_distance(arrival_train), up.Real(previous_length_on_track))
+            problem.set_initial_value(aside_distance(standing_train), up.Real(previous_length_on_track))
+            train_initial_aside[_train_object_name("inStanding", index, train)] = previous_length_on_track
             track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
             track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
-            problem.set_initial_value(direction_train(arrival_train), determine_initial_direction(train, location_object, initial_track_id))
 
-        for index, train in enumerate(in_standing_trains):
-            standing_train = problem.add_object(_train_object_name("inStanding", index, train), arrival_train_type)
-            train_obj_by_key[("inStanding", index)] = standing_train
-            arrival_train_objs.append(standing_train)
-            initial_track_id = _train_initial_track_id(train, ["firstParkingTrackPart", "entryTrackPart"])
-            problem.set_initial_value(arrival(standing_train), up.Int(int(train.get("arrival", 0))))
-            if initial_track_id is not None:
-                problem.set_initial_value(at(standing_train, id_to_track_part[initial_track_id]), True)
-                train_total_length = _train_total_length(train)
-                problem.set_initial_value(train_length(standing_train), up.Real(train_total_length))
-                previous_length_on_track = track_occupancies.get(initial_track_id, Fraction(0))
-                problem.set_initial_value(aside_distance(standing_train), up.Real(previous_length_on_track))
-                track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
-                track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
+    # Each outstanding request contributes one required parked train on its target track.
+    required_parked_per_track = {}
+    for request in out_standing_trains:
+        track_id = request.get("lastParkingTrackPart")
+        if track_id in id_to_track_part:
+            required_parked_per_track[track_id] = required_parked_per_track.get(track_id, 0) + 1
 
-        if not include_matching:
-            # Each outstanding request contributes one required parked train on its target track.
-            required_parked_per_track = {}
-            for request in out_standing_trains:
-                track_id = request.get("lastParkingTrackPart")
-                if track_id in id_to_track_part:
-                    required_parked_per_track[track_id] = required_parked_per_track.get(track_id, 0) + 1
+    for track_id, required_count in required_parked_per_track.items():
+        problem.add_goal(up.Equals(number_of_parked_trains(id_to_track_part[track_id]), up.Int(required_count)))
 
-            for track_id, required_count in required_parked_per_track.items():
-                problem.add_goal(up.Equals(number_of_parked_trains(id_to_track_part[track_id]), up.Int(required_count)))
+    # Add outbound train requests: these trains must be assembled (contain all units) and depart.
+    # Add a goal stating that the number of departed trains must be equal to out_requests
 
-        # Add outbound train requests: these trains must be assembled (contain all units) and depart.
-        # Add a goal stating that the number of departed trains must be equal to out_requests
-        if not include_matching:
-            problem.add_goal(up.Equals(num_of_departed_trains(), up.Int(len(out_requests))))
+    problem.add_goal(up.Equals(num_of_departed_trains(), up.Int(len(out_requests))))
 
-        for track_id, occupied_length_value in track_occupancies.items():
-            track_obj = id_to_track_part[track_id]
-            # problem.set_initial_value(free(track_obj), False)
-            problem.set_initial_value(astack_distance(track_obj), up.Real(Fraction(0)))
-            problem.set_initial_value(bstack_distance(track_obj), up.Real(occupied_length_value))
-            problem.set_initial_value(number_of_trains_on_track(track_obj), up.Int(track_train_counts.get(track_id, 0)))
+    for track_id, occupied_length_value in track_occupancies.items():
+        track_obj = id_to_track_part[track_id]
+        problem.set_initial_value(astack_distance(track_obj), up.Real(Fraction(0)))
+        problem.set_initial_value(bstack_distance(track_obj), up.Real(occupied_length_value))
+        problem.set_initial_value(number_of_trains_on_track(track_obj), up.Int(track_train_counts.get(track_id, 0)))
 
     for source, index, train in all_trains_with_source(scenario_object):
         # Matching-only runs still need physical train objects for coupling checks.
@@ -1031,10 +1024,13 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 problem.set_initial_value(at(physical_train, id_to_track_part[initial_track_id]), True)
                 problem.set_initial_value(train_length(physical_train), up.Real(train_total_length))
                 problem.set_initial_value(aside_distance(physical_train), up.Real(previous_length_on_track))
+                train_initial_aside[_train_object_name(source, index, train)] = previous_length_on_track
                 track_occupancies[initial_track_id] = previous_length_on_track + train_total_length
 
-        # In explicit coupling mode, the shunting unit is the physical mover for this train.
-        if explicit_coupling:
+        train_members = train["members"]
+
+        # Only lock multi-unit trains: single-unit trains don't need coupling and must be able to move.
+        if len(train_members) > 1:
             problem.set_initial_value(locked_train(physical_train), True)
 
         # Initial shunting units mirror each arriving train before any split/couple action.
@@ -1044,11 +1040,10 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         problem.set_initial_value(su_length(shunting_unit), up.Real(train_total_length))
         if initial_track_id in id_to_track_part:
             problem.set_initial_value(at_su(shunting_unit, id_to_track_part[initial_track_id]), True)
-            problem.set_initial_value(su_aside_distance(shunting_unit), up.Real(track_occupancies.get(initial_track_id, Fraction(0))))
-
-        train_members = train["members"]
+            su_aside = train_initial_aside.get(_train_object_name(source, index, train), Fraction(0))
+            problem.set_initial_value(su_aside_distance(shunting_unit), up.Real(su_aside))
         composition_obj = None
-        if explicit_uncoupling and len(train_members) > 1:
+        if len(train_members) > 1:
             composition_obj = problem.add_object("composition" + train["id"], arrival_composition_type)
             problem.set_initial_value(composition_needs_uncoupling(composition_obj), True)
 
@@ -1077,52 +1072,52 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             second_obj = id_to_unit[second["trainUnit"]["id"]]
             problem.set_initial_value(unit_before(first_obj, second_obj), True)
 
-    if include_matching:
-        # Map request names to their problem objects so we don't add duplicates later
-        request_objs = {}
-        for request in all_train_requests(scenario_object):
-            # This explicit-coupling variant is intentionally scoped to two-unit requests.
-            if explicit_coupling and len(request["trainUnits"]) > 2:
-                raise ValueError(
-                    "explicit_coupling currently supports only one-unit requests "
-                    f"or physical coupling of exactly two units; request {request['displayName']} "
-                    f"has {len(request['trainUnits'])} units"
-                )
 
-            request_name = "request" + request["displayName"]
-            request_obj = problem.add_object(request_name, departure_request_type)
-            request_objs[request_name] = request_obj
-            problem.set_initial_value(request_open(request_obj), True)
+    # Map request names to their problem objects so we don't add duplicates later
+    request_objs = {}
+    for request in all_train_requests(scenario_object):
+        # This explicit-coupling variant is intentionally scoped to two-unit requests.
+        if len(request["trainUnits"]) > 2:
+            raise ValueError(
+                "explicit_coupling currently supports only one-unit requests "
+                f"or physical coupling of exactly two units; request {request['displayName']} "
+                f"has {len(request['trainUnits'])} units"
+            )
 
-            for track_id in _coupling_track_ids_for_request(request, location_object, coupling_candidate_track_ids):
-                if track_id in id_to_track_part:
-                    problem.set_initial_value(coupling_track_for_request(request_obj, id_to_track_part[track_id]), True)
+        request_name = "request" + request["displayName"]
+        request_obj = problem.add_object(request_name, departure_request_type)
+        request_objs[request_name] = request_obj
+        problem.set_initial_value(request_open(request_obj), True)
 
-            slot_objects = []
-            for index, requested_unit in enumerate(request["trainUnits"]):
-                slot_obj = problem.add_object(f"{request_name}_slot{index}", request_slot_type)
-                slot_objects.append(slot_obj)
-                requested_key = train_unit_type_key(requested_unit)
+        for track_id in _coupling_track_ids_for_request(request, location_object, coupling_candidate_track_ids):
+            if track_id in id_to_track_part:
+                problem.set_initial_value(coupling_track_for_request(request_obj, id_to_track_part[track_id]), True)
 
-                problem.set_initial_value(slot_open(slot_obj), True)
-                problem.set_initial_value(slot_for_request(slot_obj, request_obj), True)
-                if not explicit_coupling or len(request["trainUnits"]) == 1:
-                    problem.add_goal(slot_filled(slot_obj))
+        slot_objects = []
+        for index, requested_unit in enumerate(request["trainUnits"]):
+            slot_obj = problem.add_object(f"{request_name}_slot{index}", request_slot_type)
+            slot_objects.append(slot_obj)
+            requested_key = train_unit_type_key(requested_unit)
 
-                # Compatibility keeps matching type-safe before any coupling action runs.
-                for unit_id, unit_obj in id_to_unit.items():
-                    if unit_type_by_id[unit_id] == requested_key:
-                        problem.set_initial_value(compatible(unit_obj, slot_obj), True)
+            problem.set_initial_value(slot_open(slot_obj), True)
+            problem.set_initial_value(slot_for_request(slot_obj, request_obj), True)
+            if len(request["trainUnits"]) == 1:
+                problem.add_goal(slot_filled(slot_obj))
 
-            if len(slot_objects) == 2:
-                # Slot order is only used by explicit two-unit coupling.
-                problem.set_initial_value(slot_before(slot_objects[0], slot_objects[1]), True)
-                # Request shunting units are inactive until a coupling action assembles them.
-                request_su = problem.add_object("su_" + request_name, shunting_unit_type)
-                problem.set_initial_value(request_su_for_request(request_su, request_obj), True)
-                if explicit_coupling:
-                    problem.add_goal(request_assembled(request_obj))
-                    problem.add_goal(departed_su(request_su))
+            # Compatibility keeps matching type-safe before any coupling action runs.
+            for unit_id, unit_obj in id_to_unit.items():
+                if unit_type_by_id[unit_id] == requested_key:
+                    problem.set_initial_value(compatible(unit_obj, slot_obj), True)
+
+        if len(slot_objects) == 2:
+            # Slot order is only used by explicit two-unit coupling.
+            problem.set_initial_value(slot_before(slot_objects[0], slot_objects[1]), True)
+            # Request shunting units are inactive until a coupling action assembles them.
+            request_su = problem.add_object("su_" + request_name, shunting_unit_type)
+            problem.set_initial_value(request_su_for_request(request_su, request_obj), True)
+
+            problem.add_goal(request_assembled(request_obj))
+            problem.add_goal(departed_su(request_su))
 
     ### Write to files
     if output_file is None:
@@ -1151,4 +1146,4 @@ if __name__ == "__main__":
 
 
 
-    create_instance_from_scenario(domain_file=args.domain_file, path_to_folder=args.path_to_folder, scenario_file=args.scenario_file, location_file=args.location_file, output_file=args.output_file, coupling_mode=args.coupling_mode, subproblem=args.subproblem)
+    create_instance_from_scenario(domain_file=args.domain_file, path_to_folder=args.path_to_folder, scenario_file=args.scenario_file, location_file=args.location_file, output_file=args.output_file)
