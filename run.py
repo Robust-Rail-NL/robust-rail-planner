@@ -14,10 +14,30 @@ SCENARIO_INPUTS = os.path.join(REPO_ROOT, "scenario-planning-inputs")
 if not os.path.isdir(SCENARIO_INPUTS):
     SCENARIO_INPUTS = os.path.join(os.path.dirname(REPO_ROOT), "Robust-Rail-NL", "scenario-planning-inputs")
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-CONVERT_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "convert", "convert.py")
+_CONVERT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "convert")
+CONVERT_SCRIPT = os.path.join(_CONVERT_DIR, "convert.py")
 PLANNER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "plan", "planner.jl")
 PYTHON = sys.executable
 JULIA = "julia"
+
+
+def _find_enhsp_jar():
+    """Return path to enhsp.jar, checking the venv-installed up_enhsp package first."""
+    import importlib.util
+    spec = importlib.util.find_spec("up_enhsp")
+    if spec:
+        candidate = os.path.join(os.path.dirname(spec.origin), "ENHSP", "enhsp.jar")
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+
+CONVERTER_CHOICES = {
+    "convert.py          (no arrival modeling)": os.path.join(_CONVERT_DIR, "convert.py"),
+    "model_clock         (elapsed_time clock)":  os.path.join(_CONVERT_DIR, "model_clock", "convert.py"),
+    "time_precedence     (arrival predicates)":  os.path.join(_CONVERT_DIR, "time_precedence", "convert.py"),
+}
 
 SUBPROBLEM_CHOICES = {
     "Parking only": "parking",
@@ -127,14 +147,17 @@ def run_paths(location, scenario_name, run_num):
 # Pipeline steps
 # ---------------------------------------------------------------------------
 
-def run_convert(location, scenario_file, run_num, subproblem="parking", coupling_mode="implicit_free_uncoupling"):
+def run_convert(location, scenario_file, run_num, subproblem="parking", coupling_mode="implicit_free_uncoupling", convert_script=None):
+    if convert_script is None:
+        convert_script = CONVERT_SCRIPT
     location_dir = os.path.join(SCENARIO_INPUTS, location)
     scenario_name = scenario_file.replace(".json", "")
     problem_file, domain_file, _ = run_paths(location, scenario_name, run_num)
 
     os.makedirs(os.path.dirname(problem_file), exist_ok=True)
 
-    print(f"\n  Converting  {scenario_file}")
+    print(f"\n  Converter   {os.path.relpath(convert_script, os.path.dirname(os.path.abspath(__file__)))}")
+    print(f"  Converting  {scenario_file}")
     print(f"  Subproblem ->  {subproblem}")
     if subproblem in ("matching", "combined"):
         print(f"  Coupling   ->  {coupling_mode}")
@@ -142,7 +165,7 @@ def run_convert(location, scenario_file, run_num, subproblem="parking", coupling
     print(f"  Domain     ->  {os.path.relpath(domain_file, REPO_ROOT)}")
 
     result = subprocess.run(
-        [PYTHON, CONVERT_SCRIPT,
+        [PYTHON, convert_script,
          "-p", location_dir,
          "-s", scenario_file,
          "-o", problem_file,
@@ -175,10 +198,18 @@ def run_planner(location, scenario_name, run_num, planner_backend="enhsp"):
     print(f"  Planner   {planner_backend}\n")
 
     # Stream Julia output line-by-line with elapsed timestamps so slow searches are visible.
+    env = os.environ.copy()
+    if planner_backend == "enhsp":
+        jar = _find_enhsp_jar()
+        if jar:
+            env["ENHSP_JAR"] = jar
+        else:
+            print("  [WARNING] ENHSP jar not found. Install with: pip install up-enhsp")
+
     start = time.monotonic()
     process = subprocess.Popen(
         [JULIA, "--project=" + os.path.dirname(os.path.abspath(__file__)), PLANNER_SCRIPT, domain_file, problem_file, planner_backend],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
     )
     for line in process.stdout:
         elapsed = time.monotonic() - start
@@ -253,6 +284,15 @@ def main():
         planner_backend = PLANNER_BACKEND_CHOICES[selected_planner_backend]
 
     if action in ("Convert to PDDL", "Convert then plan"):
+        selected_converter = questionary.select(
+            "Converter:",
+            choices=list(CONVERTER_CHOICES.keys()),
+            style=STYLE,
+        ).ask()
+        if selected_converter is None:
+            return
+        convert_script = CONVERTER_CHOICES[selected_converter]
+
         selected_subproblem = questionary.select(
             "Subproblem model:",
             choices=list(SUBPROBLEM_CHOICES.keys()),
@@ -274,7 +314,7 @@ def main():
             coupling_mode = COUPLING_MODE_CHOICES[selected_coupling_mode]
 
         run_num = next_run_number(location, scenario_name)
-        ok = run_convert(location, scenario, run_num, subproblem=subproblem, coupling_mode=coupling_mode)
+        ok = run_convert(location, scenario, run_num, subproblem=subproblem, coupling_mode=coupling_mode, convert_script=convert_script)
         if not ok and action == "Convert then plan":
             print()
             return
