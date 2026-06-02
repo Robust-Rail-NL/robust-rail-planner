@@ -17,7 +17,10 @@ end
 
 function default_java()
     microsoft_java = raw"C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot\bin\java.exe"
-    return isfile(microsoft_java) ? microsoft_java : "java"
+    homebrew_java  = "/opt/homebrew/opt/openjdk@17/bin/java"
+    isfile(microsoft_java) && return microsoft_java
+    isfile(homebrew_java)  && return homebrew_java
+    return "java"
 end
 
 function parse_args()
