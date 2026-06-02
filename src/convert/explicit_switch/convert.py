@@ -812,6 +812,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     out_requests = scenario_object.get("out", {}).get("trainRequests", [])
     # train_to_rank = _compute_departure_ranks(inbound_trains)
     track_occupancies = {}
+    train_initial_aside = {}
     track_train_counts = {}
     arrival_train_objs = []
     train_obj_by_key = {}
@@ -881,6 +882,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             problem.set_initial_value(train_length(arrival_train), up.Real(train_total_length))
             previous_length_on_track = track_occupancies.get(initial_track_id, Fraction(0))
             problem.set_initial_value(aside_distance(arrival_train), up.Real(previous_length_on_track))
+            train_initial_aside[_train_object_name("in", index, train)] = previous_length_on_track
             track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
             track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
             problem.set_initial_value(direction_train(arrival_train), determine_initial_direction(train, location_object, initial_track_id))
@@ -897,6 +899,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 problem.set_initial_value(train_length(standing_train), up.Real(train_total_length))
                 previous_length_on_track = track_occupancies.get(initial_track_id, Fraction(0))
                 problem.set_initial_value(aside_distance(standing_train), up.Real(previous_length_on_track))
+                train_initial_aside[_train_object_name("inStanding", index, train)] = previous_length_on_track
                 track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
                 track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
 
@@ -939,10 +942,13 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 problem.set_initial_value(at(physical_train, id_to_track_part[initial_track_id]), True)
                 problem.set_initial_value(train_length(physical_train), up.Real(train_total_length))
                 problem.set_initial_value(aside_distance(physical_train), up.Real(previous_length_on_track))
+                train_initial_aside[_train_object_name(source, index, train)] = previous_length_on_track
                 track_occupancies[initial_track_id] = previous_length_on_track + train_total_length
 
-        # In explicit coupling mode, the shunting unit is the physical mover for this train.
-        if explicit_coupling:
+        train_members = train["members"]
+
+        # Only lock multi-unit trains: single-unit trains don't need coupling and must be able to move.
+        if explicit_coupling and len(train_members) > 1:
             problem.set_initial_value(locked_train(physical_train), True)
 
         # Initial shunting units mirror each arriving train before any split/couple action.
@@ -952,9 +958,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         problem.set_initial_value(su_length(shunting_unit), up.Real(train_total_length))
         if initial_track_id in id_to_track_part:
             problem.set_initial_value(at_su(shunting_unit, id_to_track_part[initial_track_id]), True)
-            problem.set_initial_value(su_aside_distance(shunting_unit), up.Real(track_occupancies.get(initial_track_id, Fraction(0))))
-
-        train_members = train["members"]
+            su_aside = train_initial_aside.get(_train_object_name(source, index, train), Fraction(0))
+            problem.set_initial_value(su_aside_distance(shunting_unit), up.Real(su_aside))
         composition_obj = None
         if explicit_uncoupling and len(train_members) > 1:
             composition_obj = problem.add_object("composition" + train["id"], arrival_composition_type)
