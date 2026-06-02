@@ -225,9 +225,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     # add a fluent that counts the number of trains that are moving at the same time, to enforce that only one train can move at the same time
     concurrent_movements = problem.add_fluent(up.Fluent("concurrent_movements", up.IntType()), default_initial_value=up.Int(0))
     max_concurrent_movements = 1
-    total_cost = problem.add_fluent(up.Fluent("total_cost", up.IntType()), default_initial_value=up.Int(0))
-    has_arrived = problem.add_fluent(up.Fluent("has_arrived", up.BoolType(), train=arrival_train_type), default_initial_value=False)
-    entry_track_of = problem.add_fluent(up.Fluent("entry_track_of", up.BoolType(), train=arrival_train_type, trackpart=track_part_type), default_initial_value=False)
     
     available      = problem.add_fluent(up.Fluent("available",      up.BoolType(), unit=train_unit_type),                               default_initial_value=False)
     request_open   = problem.add_fluent(up.Fluent("request_open",   up.BoolType(), request=departure_request_type),                     default_initial_value=False)
@@ -245,7 +242,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     startMove = up.InstantaneousAction('start_move', t=arrival_train_type)
     startMove.add_precondition(up.Not(allowed_to_move(startMove.t)))
     startMove.add_precondition(concurrent_movements < max_concurrent_movements)
-    startMove.add_precondition(has_arrived(startMove.t))
     startMove.add_effect(allowed_to_move(startMove.t), True)
     startMove.add_effect(concurrent_movements, concurrent_movements + 1)
     problem.add_action(startMove)
@@ -275,7 +271,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_aside_empty.add_effect(bstack_distance(move_aside_empty.l_to), train_length(move_aside_empty.t))
     move_aside_empty.add_effect(at(move_aside_empty.t, move_aside_empty.l_to), True)
     move_aside_empty.add_effect(at(move_aside_empty.t, move_aside_empty.l_from), False)
-    move_aside_empty.add_effect(total_cost(), total_cost() + 300)
     problem.add_action(move_aside_empty)
 
     move_aside_occupied = up.InstantaneousAction('move_aside_occupied', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
@@ -294,7 +289,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_aside_occupied.add_effect(bstack_distance(move_aside_occupied.l_to), bstack_distance(move_aside_occupied.l_to) + train_length(move_aside_occupied.t))
     move_aside_occupied.add_effect(at(move_aside_occupied.t, move_aside_occupied.l_to), True)
     move_aside_occupied.add_effect(at(move_aside_occupied.t, move_aside_occupied.l_from), False)
-    move_aside_occupied.add_effect(total_cost(), total_cost() + 300)
     problem.add_action(move_aside_occupied)
 
     move_bside_empty = up.InstantaneousAction('move_bside_empty', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
@@ -314,7 +308,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_bside_empty.add_effect(bstack_distance(move_bside_empty.l_to), train_length(move_bside_empty.t))
     move_bside_empty.add_effect(at(move_bside_empty.t, move_bside_empty.l_to), True)
     move_bside_empty.add_effect(at(move_bside_empty.t, move_bside_empty.l_from), False)
-    move_bside_empty.add_effect(total_cost(), total_cost() + 300)
     problem.add_action(move_bside_empty)
 
     move_bside_occupied = up.InstantaneousAction('move_bside_occupied', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
@@ -333,7 +326,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_bside_occupied.add_effect(astack_distance(move_bside_occupied.l_to), astack_distance(move_bside_occupied.l_to) - train_length(move_bside_occupied.t))
     move_bside_occupied.add_effect(at(move_bside_occupied.t, move_bside_occupied.l_to), True)
     move_bside_occupied.add_effect(at(move_bside_occupied.t, move_bside_occupied.l_from), False)
-    move_bside_occupied.add_effect(total_cost(), total_cost() + 300)
     problem.add_action(move_bside_occupied)
 
     depart_aside = up.InstantaneousAction('depart_aside', t=arrival_train_type, l=track_part_type)
@@ -373,26 +365,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     park.add_effect(track_is_parked_at(park.l), True)
     problem.add_action(park)
 
-    # Advance the clock by one 5-minute step without moving any train.
-    # The planner uses this only when it must wait for a train to arrive.
-    # total_cost minimisation ensures wait is never used unnecessarily.
-    wait = up.InstantaneousAction('wait')
-    wait.add_effect(total_cost(), total_cost() + 300)
-    problem.add_action(wait)
-
-    # Generic arrive action: places an inbound train at its designated entry track
-    # once the clock has reached the train's scheduled arrival time.
-    arrive = up.InstantaneousAction('arrive', t=arrival_train_type, l=track_part_type)
-    arrive.add_precondition(up.Not(has_arrived(arrive.t)))
-    arrive.add_precondition(entry_track_of(arrive.t, arrive.l))
-    arrive.add_precondition(total_cost() >= arrival(arrive.t))
-    arrive.add_effect(has_arrived(arrive.t), True)
-    arrive.add_effect(at(arrive.t, arrive.l), True)
-    arrive.add_effect(aside_distance(arrive.t), bstack_distance(arrive.l))
-    arrive.add_effect(bstack_distance(arrive.l), bstack_distance(arrive.l) + train_length(arrive.t))
-    arrive.add_effect(number_of_trains_on_track(arrive.l), number_of_trains_on_track(arrive.l) + 1)
-    problem.add_action(arrive)
-
     explicit_uncoupling = coupling_mode in ["implicit_explicit_uncoupling", "explicit_coupling"]
     explicit_coupling = coupling_mode == "explicit_coupling"
 
@@ -401,17 +373,13 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         part_of_composition = problem.add_fluent(up.Fluent("part_of_composition", up.BoolType(), unit=train_unit_type, composition=arrival_composition_type), default_initial_value=False)
         composition_needs_uncoupling = problem.add_fluent(up.Fluent("composition_needs_uncoupling", up.BoolType(), composition=arrival_composition_type), default_initial_value=False)
 
-        uncouple = up.InstantaneousAction("uncouple", unit=train_unit_type, composition=arrival_composition_type, train=arrival_train_type)
-        # Preconditions: the unit belongs to a composition that still needs splitting,
-        # and the train must be physically present in the yard.
+        uncouple = up.InstantaneousAction("uncouple", unit=train_unit_type, composition=arrival_composition_type)
+        # Preconditions: the unit belongs to a composition that still needs splitting.
         uncouple.add_precondition(part_of_composition(uncouple.unit, uncouple.composition))
         uncouple.add_precondition(composition_needs_uncoupling(uncouple.composition))
-        uncouple.add_precondition(unit_in_train(uncouple.unit, uncouple.train))
-        uncouple.add_precondition(has_arrived(uncouple.train))
         # Effects: the unit becomes independently matchable and is removed from that composition.
         uncouple.add_effect(available(uncouple.unit), True)
         uncouple.add_effect(part_of_composition(uncouple.unit, uncouple.composition), False)
-        uncouple.add_effect(total_cost(), total_cost() + 120)
         problem.add_action(uncouple)
 
     if explicit_coupling:
@@ -453,7 +421,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         couple_two_units.add_effect(coupled_to_request(couple_two_units.unit_b, couple_two_units.request), True)
         couple_two_units.add_effect(physically_coupled(couple_two_units.unit_a, couple_two_units.unit_b), True)
         couple_two_units.add_effect(request_assembled(couple_two_units.request), True)
-        couple_two_units.add_effect(total_cost(), total_cost() + 180)
         problem.add_action(couple_two_units)
 
         couple_two_units_same_train = up.InstantaneousAction(
@@ -484,18 +451,14 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         couple_two_units_same_train.add_effect(coupled_to_request(couple_two_units_same_train.unit_b, couple_two_units_same_train.request), True)
         couple_two_units_same_train.add_effect(physically_coupled(couple_two_units_same_train.unit_a, couple_two_units_same_train.unit_b), True)
         couple_two_units_same_train.add_effect(request_assembled(couple_two_units_same_train.request), True)
-        couple_two_units_same_train.add_effect(total_cost(), total_cost() + 180)
         problem.add_action(couple_two_units_same_train)
 
     # Matching assigns exactly one compatible available unit to an open request slot.
-    match = up.InstantaneousAction("match", unit=train_unit_type, slot=request_slot_type, train=arrival_train_type)
-    # Preconditions: the unit is unused, the slot is empty, the unit type fits the slot,
-    # and the unit's train must be physically present in the yard.
+    match = up.InstantaneousAction("match", unit=train_unit_type, slot=request_slot_type)
+    # Preconditions: the unit is unused, the slot is empty, and the unit type fits the slot.
     match.add_precondition(available(match.unit))
     match.add_precondition(slot_open(match.slot))
     match.add_precondition(compatible(match.unit, match.slot))
-    match.add_precondition(unit_in_train(match.unit, match.train))
-    match.add_precondition(has_arrived(match.train))
     # Effects: record the assignment, close the slot, and prevent reusing the unit.
     match.add_effect(matched(match.unit, match.slot), True)
     match.add_effect(slot_filled(match.slot), True)
@@ -575,27 +538,22 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     unit_type_by_id = {}
 
     if include_parking:
-        # Add inbound trains — trains with arrival > 0 are not placed initially;
+        # Add inbound trains
         for index, train in enumerate(inbound_trains):
             arrival_train = problem.add_object(_train_object_name("in", index, train), arrival_train_type)
             train_obj_by_key[("in", index)] = arrival_train
             arrival_train_objs.append(arrival_train)
-            arrival_time = int(train["arrival"])
-            problem.set_initial_value(arrival(arrival_train), up.Int(arrival_time))
+            problem.set_initial_value(arrival(arrival_train), up.Int(int(train["arrival"])))
+            initial_track_id = _train_initial_track_id(train, ["entryTrackPart", "firstParkingTrackPart"])
+            problem.set_initial_value(at(arrival_train, id_to_track_part[initial_track_id]), True)
+            # problem.set_initial_value(departure_rank(arrival_train), up.Int(train_to_rank[train["id"]]))
             train_total_length = _train_total_length(train)
             problem.set_initial_value(train_length(arrival_train), up.Real(train_total_length))
-            initial_track_id = _train_initial_track_id(train, ["entryTrackPart", "firstParkingTrackPart"])
-            if arrival_time == 0:
-                # Already present at yard start — place immediately like a standing train
-                problem.set_initial_value(has_arrived(arrival_train), True)
-                problem.set_initial_value(at(arrival_train, id_to_track_part[initial_track_id]), True)
-                previous_length_on_track = track_occupancies.get(initial_track_id, Fraction(0))
-                problem.set_initial_value(aside_distance(arrival_train), up.Real(previous_length_on_track))
-                track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
-                track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
-            else:
-                # Mark which track this train must arrive at
-                problem.set_initial_value(entry_track_of(arrival_train, id_to_track_part[initial_track_id]), True)
+            previous_length_on_track = track_occupancies.get(initial_track_id, Fraction(0))
+            problem.set_initial_value(aside_distance(arrival_train), up.Real(previous_length_on_track))
+            track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
+            track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
+            #problem.add_goal(parked(arrival_train))
 
         for index, train in enumerate(in_standing_trains):
             standing_train = problem.add_object(_train_object_name("inStanding", index, train), arrival_train_type)
@@ -603,7 +561,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             arrival_train_objs.append(standing_train)
             initial_track_id = _train_initial_track_id(train, ["firstParkingTrackPart", "entryTrackPart"])
             problem.set_initial_value(arrival(standing_train), up.Int(int(train.get("arrival", 0))))
-            problem.set_initial_value(has_arrived(standing_train), True)
             if initial_track_id is not None:
                 problem.set_initial_value(at(standing_train, id_to_track_part[initial_track_id]), True)
                 train_total_length = _train_total_length(train)
@@ -708,8 +665,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 problem.set_initial_value(slot_before(slot_objects[0], slot_objects[1]), True)
                 if explicit_coupling:
                     problem.add_goal(request_assembled(request_obj))
-
-    problem.add_quality_metric(up.MinimizeExpressionOnFinalState(total_cost()))
 
     ### Write to files
     if output_file is None:
