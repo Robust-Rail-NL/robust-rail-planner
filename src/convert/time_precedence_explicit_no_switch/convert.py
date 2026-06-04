@@ -404,6 +404,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     su_length        = problem.add_fluent(up.Fluent("su_length", up.RealType(), shunting_unit=shunting_unit_type), default_initial_value=up.Real(Fraction(0)))
     su_aside_distance = problem.add_fluent(up.Fluent("su_aside_distance", up.RealType(), shunting_unit=shunting_unit_type), default_initial_value=up.Real(Fraction(0)))
     allowed_to_move_su = problem.add_fluent(up.Fluent("allowed_to_move_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
+    su_may_move       = problem.add_fluent(up.Fluent("su_may_move", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
 
 
     startMove = up.InstantaneousAction('start_move', t=arrival_train_type)
@@ -421,6 +422,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     startMoveSu.add_precondition(active_su(startMoveSu.su))
     startMoveSu.add_precondition(up.Not(allowed_to_move_su(startMoveSu.su)))
     startMoveSu.add_precondition(concurrent_movements < max_concurrent_movements)
+    startMoveSu.add_precondition(su_may_move(startMoveSu.su))
     startMoveSu.add_effect(allowed_to_move_su(startMoveSu.su), True)
     startMoveSu.add_effect(concurrent_movements, concurrent_movements + 1)
     problem.add_action(startMoveSu)
@@ -763,6 +765,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     split_two_unit_su.add_effect(concurrent_movements, concurrent_movements - 1)
     split_two_unit_su.add_effect(active_su(split_two_unit_su.left_su), True)
     split_two_unit_su.add_effect(active_su(split_two_unit_su.right_su), True)
+    split_two_unit_su.add_effect(su_may_move(split_two_unit_su.left_su), True)
+    split_two_unit_su.add_effect(su_may_move(split_two_unit_su.right_su), True)
     split_two_unit_su.add_effect(at_su(split_two_unit_su.parent_su, split_two_unit_su.track), False)
     split_two_unit_su.add_effect(at_su(split_two_unit_su.left_su, split_two_unit_su.track), True)
     split_two_unit_su.add_effect(at_su(split_two_unit_su.right_su, split_two_unit_su.track), True)
@@ -887,6 +891,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     couple_two_sus.add_effect(active_su(couple_two_sus.su_a), False)
     couple_two_sus.add_effect(active_su(couple_two_sus.su_b), False)
     couple_two_sus.add_effect(active_su(couple_two_sus.su_result), True)
+    couple_two_sus.add_effect(su_may_move(couple_two_sus.su_result), True)
     couple_two_sus.add_effect(at_su(couple_two_sus.su_a, couple_two_sus.track), False)
     couple_two_sus.add_effect(at_su(couple_two_sus.su_b, couple_two_sus.track), False)
     couple_two_sus.add_effect(at_su(couple_two_sus.su_result, couple_two_sus.track), True)
