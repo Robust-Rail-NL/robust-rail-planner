@@ -432,6 +432,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(endMoveSu)
 
     move_aside_empty = up.InstantaneousAction('move_aside_empty', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
+    move_aside_empty.add_precondition(direction_train(move_aside_empty.t)) # only allow move aside if train is facing aside
     move_aside_empty.add_precondition(allowed_to_move(move_aside_empty.t))
     move_aside_empty.add_precondition(up.Not(locked_train(move_aside_empty.t)))
     move_aside_empty.add_precondition(at(move_aside_empty.t, move_aside_empty.l_from))
@@ -470,6 +471,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(move_aside_empty_su)
 
     move_aside_occupied = up.InstantaneousAction('move_aside_occupied', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
+    move_aside_occupied.add_precondition(direction_train(move_aside_occupied.t)) # only allow move aside if train is facing aside
     move_aside_occupied.add_precondition(allowed_to_move(move_aside_occupied.t))
     move_aside_occupied.add_precondition(up.Not(locked_train(move_aside_occupied.t)))
     move_aside_occupied.add_precondition(at(move_aside_occupied.t, move_aside_occupied.l_from))
@@ -506,6 +508,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(move_aside_occupied_su)
 
     move_bside_empty = up.InstantaneousAction('move_bside_empty', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
+    move_bside_empty.add_precondition(up.Not(direction_train(move_bside_empty.t))) # only allow move bside if train is facing bside
     move_bside_empty.add_precondition(allowed_to_move(move_bside_empty.t))
     move_bside_empty.add_precondition(up.Not(locked_train(move_bside_empty.t)))
     move_bside_empty.add_precondition(at(move_bside_empty.t, move_bside_empty.l_from))
@@ -543,6 +546,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(move_bside_empty_su)
 
     move_bside_occupied = up.InstantaneousAction('move_bside_occupied', t=arrival_train_type, l_from=track_part_type, l_to=track_part_type)
+    move_bside_occupied.add_precondition(up.Not(direction_train(move_bside_occupied.t))) # only allow move bside if train is facing bside
     move_bside_occupied.add_precondition(allowed_to_move(move_bside_occupied.t))
     move_bside_occupied.add_precondition(up.Not(locked_train(move_bside_occupied.t)))
     move_bside_occupied.add_precondition(at(move_bside_occupied.t, move_bside_occupied.l_from))
@@ -675,8 +679,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     part_of_composition = problem.add_fluent(up.Fluent("part_of_composition", up.BoolType(), unit=train_unit_type, composition=arrival_composition_type), default_initial_value=False)
     composition_needs_uncoupling = problem.add_fluent(up.Fluent("composition_needs_uncoupling", up.BoolType(), composition=arrival_composition_type), default_initial_value=False)
-
-
     # Units in a multi-unit arrival must first be released from their composition.
     uncouple = up.InstantaneousAction("uncouple", unit=train_unit_type, composition=arrival_composition_type)
     # Preconditions: the unit belongs to a composition that still needs splitting.
@@ -953,7 +955,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     id_to_unit = {}
     unit_type_by_id = {}
 
-
     # Add inbound trains
     for index, train in enumerate(inbound_trains):
         arrival_train = problem.add_object(_train_object_name("in", index, train), arrival_train_type)
@@ -1000,7 +1001,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     # Add outbound train requests: these trains must be assembled (contain all units) and depart.
     # Add a goal stating that the number of departed trains must be equal to out_requests
-
     problem.add_goal(up.Equals(num_of_departed_trains(), up.Int(len(out_requests))))
 
     for track_id, occupied_length_value in track_occupancies.items():
@@ -1073,7 +1073,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             first_obj = id_to_unit[first["trainUnit"]["id"]]
             second_obj = id_to_unit[second["trainUnit"]["id"]]
             problem.set_initial_value(unit_before(first_obj, second_obj), True)
-
 
     # Map request names to their problem objects so we don't add duplicates later
     request_objs = {}
