@@ -331,7 +331,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     location_object = json.load(open(location_file))
     scenario_object = json.load(open(scenario_file))
-
     # In unified planning the domain information is included in the problem class
     problem = up.Problem(scenario_name)
     track_part_type = up.UserType("trackpart")
@@ -581,6 +580,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     depart_aside = up.InstantaneousAction('depart_aside', t=arrival_train_type, l=track_part_type)
     depart_aside.add_precondition(up.Not(locked_train(depart_aside.t)))
+    depart_aside.add_precondition(direction_train(depart_aside.t)) # only allow depart aside if train is facing aside
     depart_aside.add_precondition(allowed_to_move(depart_aside.t))
     depart_aside.add_precondition(at(depart_aside.t, depart_aside.l))
     depart_aside.add_precondition(departure_exit_a(depart_aside.l))
@@ -597,6 +597,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     depart_bside = up.InstantaneousAction('depart_bside', t=arrival_train_type, l=track_part_type)
     depart_bside.add_precondition(up.Not(locked_train(depart_bside.t)))
+    depart_bside.add_precondition(up.Not(direction_train(depart_bside.t))) # only allow depart bside if train is facing bside
     depart_bside.add_precondition(allowed_to_move(depart_bside.t))
     depart_bside.add_precondition(at(depart_bside.t, depart_bside.l))
     depart_bside.add_precondition(departure_exit_b(depart_bside.l))
@@ -662,7 +663,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     turn_a_side.add_precondition(at(turn_a_side.t, turn_a_side.l))
     turn_a_side.add_precondition(turning_allowed(turn_a_side.l))
     turn_a_side.add_effect(direction_train(turn_a_side.t), True)
-    # No-switch explicit coupling does not expose turn actions; movement is not direction-gated.
+    problem.add_action(turn_a_side)
 
     turn_b_side = up.InstantaneousAction('turn_b_side', t=arrival_train_type, l=track_part_type)
     turn_b_side.add_precondition(allowed_to_move(turn_b_side.t))
@@ -670,7 +671,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     turn_b_side.add_precondition(at(turn_b_side.t, turn_b_side.l))
     turn_b_side.add_precondition(turning_allowed(turn_b_side.l))
     turn_b_side.add_effect(direction_train(turn_b_side.t), False)
-
+    problem.add_action(turn_b_side)
 
     part_of_composition = problem.add_fluent(up.Fluent("part_of_composition", up.BoolType(), unit=train_unit_type, composition=arrival_composition_type), default_initial_value=False)
     composition_needs_uncoupling = problem.add_fluent(up.Fluent("composition_needs_uncoupling", up.BoolType(), composition=arrival_composition_type), default_initial_value=False)
@@ -1004,6 +1005,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     for track_id, occupied_length_value in track_occupancies.items():
         track_obj = id_to_track_part[track_id]
+        # problem.set_initial_value(free(track_obj), False)
         problem.set_initial_value(astack_distance(track_obj), up.Real(Fraction(0)))
         problem.set_initial_value(bstack_distance(track_obj), up.Real(occupied_length_value))
         problem.set_initial_value(number_of_trains_on_track(track_obj), up.Int(track_train_counts.get(track_id, 0)))
