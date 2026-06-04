@@ -32,24 +32,34 @@ def _find_enhsp_jar():
     return None
 
 
+def _find_java17():
+    """Return path to a Java 17+ executable, or None if not found."""
+    java_home = os.environ.get("JAVA_HOME", "")
+    candidates = [
+        os.path.join(java_home, "bin", "java") if java_home else None,
+        "/opt/homebrew/opt/openjdk@17/bin/java",
+        "/usr/local/opt/openjdk@17/bin/java",
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
+    return None
 
-CONVERTER_CHOICES = {
-    "convert.py          (no arrival modeling)": os.path.join(_CONVERT_DIR, "convert.py"),
-    "model_clock         (elapsed_time clock)":  os.path.join(_CONVERT_DIR, "model_clock", "convert.py"),
-    "time_precedence     (arrival predicates)":  os.path.join(_CONVERT_DIR, "time_precedence", "convert.py"),
-}
 
-SUBPROBLEM_CHOICES = {
-    "Parking only": "parking",
-    "Coupling / matching only": "matching",
-    "Parking + coupling / matching": "combined",
-}
 
-COUPLING_MODE_CHOICES = {
-    "Implicit coupling, free uncoupling": "implicit_free_uncoupling",
-    "Implicit coupling, explicit uncoupling": "implicit_explicit_uncoupling",
-    "Explicit coupling and explicit uncoupling": "explicit_coupling",
-}
+def discover_converters():
+    """Return an ordered dict of label -> path for all available converters."""
+    converters = {}
+    root_script = os.path.join(_CONVERT_DIR, "convert.py")
+    if os.path.isfile(root_script):
+        converters["convert.py  (root)"] = root_script
+    for name in sorted(os.listdir(_CONVERT_DIR)):
+        subdir = os.path.join(_CONVERT_DIR, name)
+        candidate = os.path.join(subdir, "convert.py")
+        if os.path.isdir(subdir) and os.path.isfile(candidate):
+            converters[name] = candidate
+    return converters
+
 
 PLANNER_BACKEND_CHOICES = {
     "ENHSP via Julia": "enhsp",
@@ -147,7 +157,7 @@ def run_paths(location, scenario_name, run_num):
 # Pipeline steps
 # ---------------------------------------------------------------------------
 
-def run_convert(location, scenario_file, run_num, subproblem="parking", coupling_mode="implicit_free_uncoupling", convert_script=None):
+def run_convert(location, scenario_file, run_num, convert_script=None):
     if convert_script is None:
         convert_script = CONVERT_SCRIPT
     location_dir = os.path.join(SCENARIO_INPUTS, location)
@@ -158,9 +168,6 @@ def run_convert(location, scenario_file, run_num, subproblem="parking", coupling
 
     print(f"\n  Converter   {os.path.relpath(convert_script, os.path.dirname(os.path.abspath(__file__)))}")
     print(f"  Converting  {scenario_file}")
-    print(f"  Subproblem ->  {subproblem}")
-    if subproblem in ("matching", "combined"):
-        print(f"  Coupling   ->  {coupling_mode}")
     print(f"  Problem    ->  {os.path.relpath(problem_file, REPO_ROOT)}")
     print(f"  Domain     ->  {os.path.relpath(domain_file, REPO_ROOT)}")
 
@@ -169,9 +176,7 @@ def run_convert(location, scenario_file, run_num, subproblem="parking", coupling
          "-p", location_dir,
          "-s", scenario_file,
          "-o", problem_file,
-         "-d", domain_file,
-         "--subproblem", subproblem,
-         "--coupling-mode", coupling_mode],
+         "-d", domain_file],
         capture_output=True, text=True,
     )
     if result.returncode != 0:
@@ -205,6 +210,12 @@ def run_planner(location, scenario_name, run_num, planner_backend="enhsp"):
             env["ENHSP_JAR"] = jar
         else:
             print("  [WARNING] ENHSP jar not found. Install with: pip install up-enhsp")
+        if "JAVA_EXE" not in env:
+            java = _find_java17()
+            if java:
+                env["JAVA_EXE"] = java
+            else:
+                print("  [WARNING] Java 17 not found. Set JAVA_HOME or install with: brew install openjdk@17")
 
     start = time.monotonic()
     process = subprocess.Popen(
@@ -284,37 +295,21 @@ def main():
         planner_backend = PLANNER_BACKEND_CHOICES[selected_planner_backend]
 
     if action in ("Convert to PDDL", "Convert then plan"):
+        converters = discover_converters()
+        if not converters:
+            print("  No converter scripts found under src/convert/")
+            return
         selected_converter = questionary.select(
             "Converter:",
-            choices=list(CONVERTER_CHOICES.keys()),
+            choices=list(converters.keys()),
             style=STYLE,
         ).ask()
         if selected_converter is None:
             return
-        convert_script = CONVERTER_CHOICES[selected_converter]
-
-        selected_subproblem = questionary.select(
-            "Subproblem model:",
-            choices=list(SUBPROBLEM_CHOICES.keys()),
-            style=STYLE,
-        ).ask()
-        if selected_subproblem is None:
-            return
-        subproblem = SUBPROBLEM_CHOICES[selected_subproblem]
-
-        coupling_mode = "implicit_free_uncoupling"
-        if subproblem in ("matching", "combined"):
-            selected_coupling_mode = questionary.select(
-                "Coupling mode:",
-                choices=list(COUPLING_MODE_CHOICES.keys()),
-                style=STYLE,
-            ).ask()
-            if selected_coupling_mode is None:
-                return
-            coupling_mode = COUPLING_MODE_CHOICES[selected_coupling_mode]
+        convert_script = converters[selected_converter]
 
         run_num = next_run_number(location, scenario_name)
-        ok = run_convert(location, scenario, run_num, subproblem=subproblem, coupling_mode=coupling_mode, convert_script=convert_script)
+        ok = run_convert(location, scenario, run_num, convert_script=convert_script)
         if not ok and action == "Convert then plan":
             print()
             return
