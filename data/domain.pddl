@@ -40,8 +40,6 @@
              (astack_distance ?trackpart - trackpart)
              (bstack_distance ?trackpart - trackpart)
              (concurrent_movements)
-             (trains_being_serviced ?trackpart - trackpart)
-             (max_simultaneous_service ?trackpart - trackpart)
  )
  (:action start_move
   :parameters ( ?t - arrivaltrain)
@@ -81,8 +79,8 @@
   :effect (and (parked ?t) (track_is_parked_at ?l)))
  (:action service
   :parameters ( ?t - arrivaltrain ?l - trackpart ?f - facilitytype)
-  :precondition (and (at ?t ?l) (service_allowed ?l) (facility_type ?l ?f) (requires_facility ?t ?f) (< (trains_being_serviced ?l) (max_simultaneous_service ?l)))
-  :effect (and (serviced ?t) (assign (trains_being_serviced ?l) (+ 1 (trains_being_serviced ?l)))))
+  :precondition (and (at ?t ?l) (service_allowed ?l) (facility_type ?l ?f) (requires_facility ?t ?f))
+  :effect (and (serviced ?t)))
  (:action match
   :parameters ( ?unit_0 - trainunit ?slot - requestslot)
   :precondition (and (available ?unit_0) (slot_open ?slot) (compatible ?unit_0 ?slot))

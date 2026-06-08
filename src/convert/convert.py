@@ -267,9 +267,9 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     # requires_facility links a train to the type of service it needs
     requires_facility = problem.add_fluent(up.Fluent("requires_facility", up.BoolType(), train=arrival_train_type, ftype=facility_type_type), default_initial_value=False)
     # tracks the number of trains currently being serviced on a track
-    trains_being_serviced = problem.add_fluent(up.Fluent("trains_being_serviced", up.IntType(), trackpart=track_part_type), default_initial_value=up.Int(0))
+    # trains_being_serviced = problem.add_fluent(up.Fluent("trains_being_serviced", up.IntType(), trackpart=track_part_type), default_initial_value=up.Int(0))
     # maximum simultaneous service capacity per track, read from facilities[].simultaneousUsageCount
-    max_simultaneous_service = problem.add_fluent(up.Fluent("max_simultaneous_service", up.IntType(), trackpart=track_part_type), default_initial_value=up.Int(0))
+    # max_simultaneous_service = problem.add_fluent(up.Fluent("max_simultaneous_service", up.IntType(), trackpart=track_part_type), default_initial_value=up.Int(0))
 
     startMove = up.InstantaneousAction('start_move', t=arrival_train_type)
     startMove.add_precondition(up.Not(allowed_to_move(startMove.t)))
@@ -405,9 +405,9 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     service.add_precondition(service_allowed(service.l))
     service.add_precondition(facility_type(service.l, service.f))
     service.add_precondition(requires_facility(service.t, service.f))
-    service.add_precondition(trains_being_serviced(service.l) < max_simultaneous_service(service.l))
+    # service.add_precondition(trains_being_serviced(service.l) < max_simultaneous_service(service.l))
     service.add_effect(serviced(service.t), True)
-    service.add_effect(trains_being_serviced(service.l), trains_being_serviced(service.l) + 1)
+    # service.add_effect(trains_being_serviced(service.l), trains_being_serviced(service.l) + 1)
     problem.add_action(service)
 
     explicit_uncoupling = coupling_mode in ["implicit_explicit_uncoupling", "explicit_coupling"]
@@ -565,7 +565,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             info = service_track_ids[str(track_part["id"])]
             problem.set_initial_value(service_allowed(obj), True)
             problem.set_initial_value(facility_type(obj, id_to_facility_type[info["type"]]), True)
-            problem.set_initial_value(max_simultaneous_service(obj), up.Int(info["capacity"]))
+            # problem.set_initial_value(max_simultaneous_service(obj), up.Int(info["capacity"]))
         problem.set_initial_value(track_length(obj), up.Real(Fraction(str(track_part.get("length", 100.0)))))
 
         # Use a very large number to indicate effectively infinite capacity for non-parking tracks, so that they can be used for temporary movements
