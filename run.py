@@ -14,7 +14,14 @@ SCENARIO_INPUTS = os.path.join(REPO_ROOT, "scenario-planning-inputs")
 DATA_DIR        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 CONVERT_SCRIPT  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "convert", "v1", "convert_v1.py")
 PLANNER_SCRIPT  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "plan", "planner.jl")
-TORS_BIN        = os.path.join(os.path.dirname(os.path.abspath(__file__)), "robust-rail-evaluator", "build", "TORS")
+EVALUATOR_ROOT = os.path.abspath(
+    os.environ.get(
+        "ROBUST_RAIL_EVALUATOR_ROOT",
+        os.path.join(REPO_ROOT, "robust-rail-evaluator"),
+    )
+)
+
+TORS_BIN = os.environ.get("TORS_BIN")
 PYTHON          = sys.executable
 JULIA           = "julia"
 
@@ -87,6 +94,43 @@ def run_paths(location, scenario_name, run_num):
     base = os.path.join(d, f"run{run_num}")
     return base + ".pddl", base + "_domain.pddl", base + ".plan", base + "_eval.txt"
 
+def find_tors_binary():
+    """
+    Find the robust-rail-evaluator CLI executable.
+
+    Priority:
+    1. TORS_BIN environment variable
+    2. Common CMake output locations
+    3. Any executable file under robust-rail-evaluator/build
+    """
+    if TORS_BIN:
+        candidate = os.path.abspath(TORS_BIN)
+        if os.path.isfile(candidate):
+            return candidate
+
+    candidates = [
+        os.path.join(EVALUATOR_ROOT, "build", "TORS"),
+        os.path.join(EVALUATOR_ROOT, "build", "cTORS", "TORS"),
+        os.path.join(EVALUATOR_ROOT, "build", "cTORS", "tors"),
+        os.path.join(EVALUATOR_ROOT, "build", "Release", "TORS"),
+        os.path.join(EVALUATOR_ROOT, "build", "Debug", "TORS"),
+    ]
+
+    for candidate in candidates:
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+
+    build_dir = os.path.join(EVALUATOR_ROOT, "build")
+    if os.path.isdir(build_dir):
+        for root, _, files in os.walk(build_dir):
+            for name in files:
+                path = os.path.join(root, name)
+                if os.path.isfile(path) and os.access(path, os.X_OK):
+                    # Prefer names that look like the evaluator binary.
+                    if name.lower() in {"tors", "ctors"}:
+                        return path
+
+    return None
 
 # ---------------------------------------------------------------------------
 # Pipeline steps
@@ -162,41 +206,103 @@ def run_evaluator(location, scenario_file, run_num):
     scenario_name = scenario_file.replace(".json", "")
     _, __, plan_file, eval_txt = run_paths(location, scenario_name, run_num)
 
-    scenario_path = os.path.join(SCENARIO_INPUTS, location, "scenarios", scenario_file)
-    location_folder = os.path.join(SCENARIO_INPUTS, location)
+    scenario_path = os.path.abspath(
+        os.path.join(SCENARIO_INPUTS, location, "scenarios", scenario_file)
+    )
+    location_folder = os.path.abspath(
+        os.path.join(SCENARIO_INPUTS, location)
+    )
+    plan_file = os.path.abspath(plan_file)
+    eval_txt = os.path.abspath(eval_txt)
 
     if not os.path.exists(plan_file):
         print(f"  Plan file not found: {os.path.relpath(plan_file, REPO_ROOT)}")
         print("  Run the planner first.")
         return False
 
-    if not os.path.exists(TORS_BIN):
-        print(f"  TORS binary not found: {TORS_BIN}")
-        print("  Build robust-rail-evaluator first.")
+    tors_bin = find_tors_binary()
+
+    if tors_bin is None:
+        print("  TORS evaluator binary not found.")
+        print(f"  Looked under: {EVALUATOR_ROOT}")
+        print()
+        print("  Build the evaluator first, for example:")
+        print("    cd /workspace/robust-rail-evaluator")
+        print("    mkdir -p build")
+        print("    cd build")
+        print('    cmake .. -DCONDA_ENV="$CONDA_PREFIX"')
+        print("    cmake --build . -j")
+        print()
+        print("  Then check what was built:")
+        print("    find /workspace/robust-rail-evaluator/build -type f -executable -ls")
+        print()
+        print("  If the executable has a different name, run this script with:")
+        print("    export TORS_BIN=/full/path/to/the/executable")
         return False
 
+    if not os.access(tors_bin, os.X_OK):
+        print(f"  TORS exists but is not executable: {tors_bin}")
+        print(f"  Try: chmod +x {tors_bin}")
+        return False
+
+    if not os.path.isdir(location_folder):
+        print(f"  Location folder not found: {location_folder}")
+        return False
+
+    if not os.path.exists(os.path.join(location_folder, "location.json")):
+        print(f"  location.json not found in: {location_folder}")
+        print("  --path_location must point to the folder containing location.json")
+        return False
+
+    if not os.path.exists(scenario_path):
+        print(f"  Scenario file not found: {scenario_path}")
+        return False
+
+    os.makedirs(os.path.dirname(eval_txt), exist_ok=True)
+
     print(f"\n  Evaluating  {os.path.relpath(plan_file, REPO_ROOT)}")
-    print(f"  Scenario    {os.path.relpath(scenario_path, REPO_ROOT)}")
+    print(f"  TORS        {tors_bin}")
+    print(f"  Location    {location_folder}")
+    print(f"  Scenario    {scenario_path}")
     print(f"  Result   →  {os.path.relpath(eval_txt, REPO_ROOT)}\n")
 
-    eval_proc = subprocess.run([
-        TORS_BIN,
-        "--mode",             "EVAL_AND_STORE",
-        "--path_location",    location_folder,
-        "--path_scenario",    scenario_path,
-        "--path_plan",        plan_file,
-        "--path_eval_result", eval_txt,
-        "--departure_delay",  "0",
-        "--plan_type",        "Solver",
-    ], capture_output=True, text=True)
+    env = os.environ.copy()
+
+    eval_proc = subprocess.run(
+        [
+            tors_bin,
+            "--mode", "EVAL_AND_STORE",
+            "--path_location", location_folder,
+            "--path_scenario", scenario_path,
+            "--path_plan", plan_file,
+            "--path_eval_result", eval_txt,
+            "--departure_delay", "0",
+            "--plan_type", "Solver",
+        ],
+        cwd=EVALUATOR_ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
 
     if eval_proc.returncode != 0:
-        print(f"  [evaluator ERROR]\n{eval_proc.stderr}")
+        print(f"  [evaluator ERROR] exit code {eval_proc.returncode}")
+
+        if eval_proc.stdout:
+            print("\n  [stdout]")
+            print(eval_proc.stdout)
+
+        if eval_proc.stderr:
+            print("\n  [stderr]")
+            print(eval_proc.stderr)
+
         return False
 
     print("  Evaluation passed.")
+
     if eval_proc.stdout:
         print(eval_proc.stdout)
+
     print(f"  Result written to {os.path.relpath(eval_txt, REPO_ROOT)}")
     return True
 
