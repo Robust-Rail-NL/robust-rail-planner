@@ -8,10 +8,57 @@ An AI Planning approach to solving the TUSPwSS.
 
 ## Structure
 - `src`
-  - `convert`: contains any code for converting scenarios from `scenario-planning-inputs` to PDDL 
+  - `convert.py`: contains any code for converting a scenario to a PDDL instancec and creating a PDDL domain
+  - `cli.py`: where the arguments are defined
+  - `evaluate.py`: calls the TORS evaluator. TODO: Create conversion from our plans to their plans
+  - `pipeline.py`: runs the pipeline end to end for a number of instances
   - `plan`: contains any code for updating/running a planner (using SymbolicPlanners.jl)
-- `experiments` contains any code for running experiments and comparing to `robust-rail-solver`
 - `data` contains any PDDL files, make sure to keep versions separate 
+
+## Usage
+Run commands from the `planning-approach` folder in the main repo, not from inside the dev container.
+
+```
+cd planning-approach
+```
+1. Build the project using a setup script:
+
+Linux/macOS:
+```
+bash setup.sh
+```
+Windows PowerShell:
+```
+.\setup.ps1
+```
+Windows Command Prompt:``
+```
+setup.bat
+```
+
+2. Activate the Conda environment
+```
+conda activate robust-rail-planning
+```
+
+1. After activating the Conda environment, run:
+```
+robust-rail-plan
+```
+
+Examples
+
+```robust-rail-plan --generate``` 
+
+```robust-rail-plan --examples``` TYCHO USE THIS
+
+```robust-rail-plan --subproblem parking```
+
+```robust-rail-plan --subproblem matching```
+
+```robust-rail-plan --subproblem combined```
+
+```robust-rail-plan --log-level DEBUG```
 
 ## Previous work
 Thesis:

@@ -582,7 +582,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     writer.write_problem(output_file)
 
     # Print the output file of the domain
-    print(f"Problem file written to: {output_file}")
+    logging.debug(f"Problem file written to: {output_file}")
 
     if os.sep not in domain_file:
         domain_file = os.path.join(
@@ -593,7 +593,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     os.makedirs(os.path.dirname(domain_file), exist_ok=True)
     writer.write_domain(domain_file)
-    print(f"Domain file written to: {domain_file}")
+    logging.debug(f"Domain file written to: {domain_file}")
 
 
 if __name__ == "__main__":

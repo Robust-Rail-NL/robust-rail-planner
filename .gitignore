@@ -3,3 +3,6 @@ Manifest.toml
 .idea/
 src/generate/scenarios/
 uv.lock
+domain/
+results/
+log/

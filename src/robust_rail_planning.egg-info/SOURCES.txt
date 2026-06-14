@@ -5,6 +5,7 @@ src/robust_rail_planning/__init__.py
 src/robust_rail_planning/cli.py
 src/robust_rail_planning/convert.py
 src/robust_rail_planning/convert_no_switches.py
+src/robust_rail_planning/evaluate.py
 src/robust_rail_planning/pipeline.py
 src/robust_rail_planning.egg-info/PKG-INFO
 src/robust_rail_planning.egg-info/SOURCES.txt
