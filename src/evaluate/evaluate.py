@@ -11,7 +11,7 @@ location_file   = os.path.abspath(os.path.join(script_dir, "..", "generate", "lo
 convert_dir     = os.path.abspath(os.path.join(script_dir, "..", "convert"))
 data_dir        = os.path.abspath(os.path.join(script_dir, "..", "data"))
 path_to_planner = os.path.abspath(os.path.join(script_dir, "..", "plan", "planner.jl"))
-TORS_BIN        = os.path.abspath(os.path.join(script_dir, "..", "robust-rail-evaluator", "build", "TORS"))
+TORS_BIN        = ["docker", "run", "-it", "--rm", "--mount", "type=bind,source=/Users/maytesteeghs/DSAIT/Robust-Rail-NL/planning-approach/data,target=/data", "ghcr.io/robust-rail-nl/tors:latest"]
 
 
 def evaluate_plan(
@@ -41,6 +41,7 @@ def evaluate_plan(
         return False
 
     os.makedirs(os.path.dirname(result_txt), exist_ok=True)
+
 
     eval_proc = subprocess.run([
         TORS_BIN,

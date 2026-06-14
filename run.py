@@ -21,7 +21,6 @@ EVALUATOR_ROOT = os.path.abspath(
     )
 )
 
-TORS_BIN = os.environ.get("TORS_BIN")
 PYTHON          = sys.executable
 JULIA           = "julia"
 
@@ -93,44 +92,6 @@ def run_paths(location, scenario_name, run_num):
     d = _run_dir(location, scenario_name)
     base = os.path.join(d, f"run{run_num}")
     return base + ".pddl", base + "_domain.pddl", base + ".plan", base + "_eval.txt"
-
-def find_tors_binary():
-    """
-    Find the robust-rail-evaluator CLI executable.
-
-    Priority:
-    1. TORS_BIN environment variable
-    2. Common CMake output locations
-    3. Any executable file under robust-rail-evaluator/build
-    """
-    if TORS_BIN:
-        candidate = os.path.abspath(TORS_BIN)
-        if os.path.isfile(candidate):
-            return candidate
-
-    candidates = [
-        os.path.join(EVALUATOR_ROOT, "build", "TORS"),
-        os.path.join(EVALUATOR_ROOT, "build", "cTORS", "TORS"),
-        os.path.join(EVALUATOR_ROOT, "build", "cTORS", "tors"),
-        os.path.join(EVALUATOR_ROOT, "build", "Release", "TORS"),
-        os.path.join(EVALUATOR_ROOT, "build", "Debug", "TORS"),
-    ]
-
-    for candidate in candidates:
-        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
-            return candidate
-
-    build_dir = os.path.join(EVALUATOR_ROOT, "build")
-    if os.path.isdir(build_dir):
-        for root, _, files in os.walk(build_dir):
-            for name in files:
-                path = os.path.join(root, name)
-                if os.path.isfile(path) and os.access(path, os.X_OK):
-                    # Prefer names that look like the evaluator binary.
-                    if name.lower() in {"tors", "ctors"}:
-                        return path
-
-    return None
 
 # ---------------------------------------------------------------------------
 # Pipeline steps
@@ -220,31 +181,6 @@ def run_evaluator(location, scenario_file, run_num):
         print("  Run the planner first.")
         return False
 
-    tors_bin = find_tors_binary()
-
-    if tors_bin is None:
-        print("  TORS evaluator binary not found.")
-        print(f"  Looked under: {EVALUATOR_ROOT}")
-        print()
-        print("  Build the evaluator first, for example:")
-        print("    cd /workspace/robust-rail-evaluator")
-        print("    mkdir -p build")
-        print("    cd build")
-        print('    cmake .. -DCONDA_ENV="$CONDA_PREFIX"')
-        print("    cmake --build . -j")
-        print()
-        print("  Then check what was built:")
-        print("    find /workspace/robust-rail-evaluator/build -type f -executable -ls")
-        print()
-        print("  If the executable has a different name, run this script with:")
-        print("    export TORS_BIN=/full/path/to/the/executable")
-        return False
-
-    if not os.access(tors_bin, os.X_OK):
-        print(f"  TORS exists but is not executable: {tors_bin}")
-        print(f"  Try: chmod +x {tors_bin}")
-        return False
-
     if not os.path.isdir(location_folder):
         print(f"  Location folder not found: {location_folder}")
         return False
@@ -261,29 +197,12 @@ def run_evaluator(location, scenario_file, run_num):
     os.makedirs(os.path.dirname(eval_txt), exist_ok=True)
 
     print(f"\n  Evaluating  {os.path.relpath(plan_file, REPO_ROOT)}")
-    print(f"  TORS        {tors_bin}")
     print(f"  Location    {location_folder}")
     print(f"  Scenario    {scenario_path}")
     print(f"  Result   →  {os.path.relpath(eval_txt, REPO_ROOT)}\n")
 
     env = os.environ.copy()
 
-    eval_proc = subprocess.run(
-        [
-            tors_bin,
-            "--mode", "EVAL_AND_STORE",
-            "--path_location", location_folder,
-            "--path_scenario", scenario_path,
-            "--path_plan", plan_file,
-            "--path_eval_result", eval_txt,
-            "--departure_delay", "0",
-            "--plan_type", "Solver",
-        ],
-        cwd=EVALUATOR_ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-    )
 
     if eval_proc.returncode != 0:
         print(f"  [evaluator ERROR] exit code {eval_proc.returncode}")

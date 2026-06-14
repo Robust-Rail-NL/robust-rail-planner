@@ -1,0 +1,2 @@
+[console_scripts]
+robust-rail-plan = robust_rail_planning.cli:main
