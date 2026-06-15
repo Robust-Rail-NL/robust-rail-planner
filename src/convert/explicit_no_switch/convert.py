@@ -187,9 +187,15 @@ def _request_type_keys(request):
     return {train_unit_type_key(train_unit) for train_unit in request.get("trainUnits", [])}
 
 
+# When True, restrict movement connectivity to a per-scenario corridor of relevant routes
+# (cheaper search nodes). When False, emit the full no-switch graph instead -- needed for
+# scenarios the corridor over-prunes (e.g. overlapping routes / multi-unit splits).
+ENABLE_CORRIDOR = True
+
 # Hops of maneuvering room kept around the core shortest-path routes. Shunting needs
 # reversals onto adjacent buffer/head-shunt tracks that are not on any shortest path, so a
 # pure shortest-path corridor over-prunes and can make a feasible scenario unsolvable.
+# Only used when ENABLE_CORRIDOR is True.
 CORRIDOR_EXPAND_HOPS = 2
 
 # When True, physical coupling requires the two units to be stacked in exact adjacent
@@ -203,6 +209,18 @@ ENFORCE_COUPLING_ORDER = False
 # movable body per train (roughly halving the search space) and structurally eliminates the
 # phantom-train class of bug. Parking is provided by `park_su`.
 ENABLE_ARRIVAL_LAYER = False
+
+
+# CLI overrides for the model flags above, so they can be toggled per run without editing
+# code. Each defaults to the constant above, so omitting the flag preserves current behaviour.
+parser.add_argument("--corridor", action=argparse.BooleanOptionalAction, default=ENABLE_CORRIDOR,
+                    help="Restrict movement to a per-scenario corridor (cheaper search). Use --no-corridor for the full graph. Default: %(default)s")
+parser.add_argument("--corridor-hops", type=int, default=CORRIDOR_EXPAND_HOPS,
+                    help="Hops of maneuvering room around the corridor's core routes (only used with --corridor). Default: %(default)s")
+parser.add_argument("--coupling-order", action=argparse.BooleanOptionalAction, default=ENFORCE_COUPLING_ORDER,
+                    help="Require exact-adjacent physical coupling order. Use --no-coupling-order for composition-only coupling. Default: %(default)s")
+parser.add_argument("--arrival-layer", action=argparse.BooleanOptionalAction, default=ENABLE_ARRIVAL_LAYER,
+                    help="Also emit the legacy arrival-train movement layer. Default: %(default)s")
 
 
 def _relevant_corridor_nodes(scenario_object, location_object, known_track_ids, coupling_candidate_track_ids, expand_hops=CORRIDOR_EXPAND_HOPS):
@@ -1136,7 +1154,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     # Restrict movement connectivity to the per-scenario corridor of relevant tracks.
     # When None (no relevant routes found) the full no-switch graph is kept as a fallback.
-    corridor_nodes = _relevant_corridor_nodes(scenario_object, location_object, id_to_track_part.keys(), coupling_candidate_track_ids)
+    corridor_nodes = _relevant_corridor_nodes(scenario_object, location_object, id_to_track_part.keys(), coupling_candidate_track_ids, expand_hops=CORRIDOR_EXPAND_HOPS) if ENABLE_CORRIDOR else None
 
     def _in_corridor(*ids):
         return corridor_nodes is None or all(str(i) in corridor_nodes for i in ids)
@@ -1365,6 +1383,12 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 if __name__ == "__main__":
     args = parser.parse_args()
     logging.basicConfig(level=args.log_level.upper())
+
+    # Apply CLI overrides to the model flags (read as globals at convert time).
+    ENABLE_CORRIDOR = args.corridor
+    CORRIDOR_EXPAND_HOPS = args.corridor_hops
+    ENFORCE_COUPLING_ORDER = args.coupling_order
+    ENABLE_ARRIVAL_LAYER = args.arrival_layer
 
     # Set the domain file name
     args.domain_file = "domain.pddl" if args.domain_file is None else args.domain_file
