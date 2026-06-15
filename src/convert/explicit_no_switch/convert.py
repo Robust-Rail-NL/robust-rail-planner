@@ -187,6 +187,21 @@ def _request_type_keys(request):
     return {train_unit_type_key(train_unit) for train_unit in request.get("trainUnits", [])}
 
 
+def _build_service_track_ids(location_object):
+    # Service tracks come from facilities[].relatedTrackParts for facilities with taskTypes.
+    # Returns dict: track_id (str) -> {"type": facility_type_str, "capacity": int}. Covers all
+    # facility types (Reinigingsperron = cleaning, Wasmachine = washing, Monteur = inspection).
+    service_tracks = {}
+    for facility in location_object.get("facilities", []):
+        if facility.get("taskTypes"):
+            for tp_id in facility.get("relatedTrackParts", []):
+                service_tracks[str(tp_id)] = {
+                    "type": facility["type"],
+                    "capacity": facility.get("simultaneousUsageCount", 1),
+                }
+    return service_tracks
+
+
 # When True, restrict movement connectivity to a per-scenario corridor of relevant routes
 # (cheaper search nodes). When False, emit the full no-switch graph instead -- needed for
 # scenarios the corridor over-prunes (e.g. overlapping routes / multi-unit splits).
@@ -210,6 +225,12 @@ ENFORCE_COUPLING_ORDER = False
 # phantom-train class of bug. Parking is provided by `park_su`.
 ENABLE_ARRIVAL_LAYER = False
 
+# When True, trains carrying service tasks (cleaning/washing/inspection) must visit the
+# matching facility track and be serviced before they may depart or park. When False, the
+# servicing subproblem is omitted entirely (no service fluents/action/goals), so the
+# generated model is identical to the non-servicing one even for scenarios that have tasks.
+ENABLE_SERVICING = False
+
 
 # CLI overrides for the model flags above, so they can be toggled per run without editing
 # code. Each defaults to the constant above, so omitting the flag preserves current behaviour.
@@ -221,6 +242,8 @@ parser.add_argument("--coupling-order", action=argparse.BooleanOptionalAction, d
                     help="Require exact-adjacent physical coupling order. Use --no-coupling-order for composition-only coupling. Default: %(default)s")
 parser.add_argument("--arrival-layer", action=argparse.BooleanOptionalAction, default=ENABLE_ARRIVAL_LAYER,
                     help="Also emit the legacy arrival-train movement layer. Default: %(default)s")
+parser.add_argument("--servicing", action=argparse.BooleanOptionalAction, default=ENABLE_SERVICING,
+                    help="Require trains with service tasks to be serviced at the matching facility before departing/parking. Default: %(default)s")
 
 
 def _relevant_corridor_nodes(scenario_object, location_object, known_track_ids, coupling_candidate_track_ids, expand_hops=CORRIDOR_EXPAND_HOPS):
@@ -529,6 +552,19 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     must_depart_su    = problem.add_fluent(up.Fluent("must_depart_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
     # Marks a shunting unit that has been parked (SU-layer parking goal); a parked unit may not move again.
     parked_su         = problem.add_fluent(up.Fluent("parked_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
+
+    # --- Servicing subproblem (gated). Trains carrying cleaning/washing/inspection tasks must
+    # be serviced at the matching facility before they may depart or park. `serviced` defaults
+    # True so units without tasks (and assembled/split products) are unaffected.
+    if ENABLE_SERVICING:
+        service_track_ids = _build_service_track_ids(location_object)
+        facility_type_type = up.UserType("facilitytype")
+        service_allowed   = problem.add_fluent(up.Fluent("service_allowed", up.BoolType(), trackpart=track_part_type), default_initial_value=False)
+        facility_type     = problem.add_fluent(up.Fluent("facility_type", up.BoolType(), trackpart=track_part_type, ftype=facility_type_type), default_initial_value=False)
+        requires_facility = problem.add_fluent(up.Fluent("requires_facility", up.BoolType(), shunting_unit=shunting_unit_type, ftype=facility_type_type), default_initial_value=False)
+        serviced          = problem.add_fluent(up.Fluent("serviced", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=True)
+        id_to_facility_type = {ftype_str: problem.add_object(ftype_str.lower(), facility_type_type)
+                               for ftype_str in {info["type"] for info in service_track_ids.values()}}
 
 
     startMove = up.InstantaneousAction('start_move', t=arrival_train_type)
@@ -1086,6 +1122,28 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     couple_two_sus.add_effect(request_assembled(couple_two_sus.request), True)
     problem.add_action(couple_two_sus)
 
+    if ENABLE_SERVICING:
+        # A shunting unit at a matching facility track gets serviced. Final placement
+        # (depart/park) and assembly (couple/split) all require the unit(s) serviced first.
+        service_su = up.InstantaneousAction('service_su', su=shunting_unit_type, l=track_part_type, f=facility_type_type)
+        service_su.add_precondition(active_su(service_su.su))
+        service_su.add_precondition(at_su(service_su.su, service_su.l))
+        service_su.add_precondition(service_allowed(service_su.l))
+        service_su.add_precondition(facility_type(service_su.l, service_su.f))
+        service_su.add_precondition(requires_facility(service_su.su, service_su.f))
+        service_su.add_effect(serviced(service_su.su), True)
+        problem.add_action(service_su)
+
+        couple_two_sus.add_precondition(serviced(couple_two_sus.su_a))
+        couple_two_sus.add_precondition(serviced(couple_two_sus.su_b))
+        split_two_unit_su.add_precondition(serviced(split_two_unit_su.parent_su))
+        split_three_unit_su.add_precondition(serviced(split_three_unit_su.parent_su))
+        depart_aside_su.add_precondition(serviced(depart_aside_su.su))
+        depart_bside_su.add_precondition(serviced(depart_bside_su.su))
+        depart_aside_su_for_request.add_precondition(serviced(depart_aside_su_for_request.su))
+        depart_bside_su_for_request.add_precondition(serviced(depart_bside_su_for_request.su))
+        park_su.add_precondition(serviced(park_su.su))
+
     # Matching assigns exactly one compatible available unit to an open request slot.
     match = up.InstantaneousAction("match", unit=train_unit_type, slot=request_slot_type)
     # Preconditions: the unit is unused, the slot is empty, and the unit type fits the slot.
@@ -1147,6 +1205,11 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             if tp_id in bfs_dist and bfs_dist[tp_id] in bfs_to_entry_dist:
                 problem.set_initial_value(entry_distance(obj), up.Int(bfs_to_entry_dist[bfs_dist[tp_id]]))
         problem.set_initial_value(track_length(obj), up.Real(Fraction(str(track_part.get("length", 100.0)))))
+
+        if ENABLE_SERVICING and str(track_part["id"]) in service_track_ids:
+            info = service_track_ids[str(track_part["id"])]
+            problem.set_initial_value(service_allowed(obj), True)
+            problem.set_initial_value(facility_type(obj, id_to_facility_type[info["type"]]), True)
 
         # Use a very large number to indicate effectively infinite capacity for non-parking tracks, so that they can be used for temporary movements
         if not track_part.get("parkingAllowed", False):
@@ -1273,6 +1336,18 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         # Initial shunting units mirror each arriving train before any split/couple action.
         shunting_unit = problem.add_object("su_" + _train_object_name(source, index, train), shunting_unit_type)
         problem.set_initial_value(active_su(shunting_unit), True)
+
+        if ENABLE_SERVICING:
+            # A train that carries any service task starts unserviced and records which facility
+            # type it needs (members[].tasks[].type.other); otherwise it stays serviced (default).
+            needs_service = any(task for member in train.get("members", []) for task in member.get("tasks", []))
+            if needs_service:
+                problem.set_initial_value(serviced(shunting_unit), False)
+                for member in train.get("members", []):
+                    for task in member.get("tasks", []):
+                        task_type_str = task.get("type", {}).get("other")
+                        if task_type_str and task_type_str in id_to_facility_type:
+                            problem.set_initial_value(requires_facility(shunting_unit, id_to_facility_type[task_type_str]), True)
         train_total_length = _train_total_length(train)
         problem.set_initial_value(su_length(shunting_unit), up.Real(train_total_length))
         if initial_track_id in id_to_track_part:
@@ -1389,6 +1464,7 @@ if __name__ == "__main__":
     CORRIDOR_EXPAND_HOPS = args.corridor_hops
     ENFORCE_COUPLING_ORDER = args.coupling_order
     ENABLE_ARRIVAL_LAYER = args.arrival_layer
+    ENABLE_SERVICING = args.servicing
 
     # Set the domain file name
     args.domain_file = "domain.pddl" if args.domain_file is None else args.domain_file
