@@ -12,7 +12,7 @@ This converter variant models matching and coupling as a physical shunting-unit 
 ## Main Modelling Choices
 - Incoming train units remain atomic `trainunit` objects for matching.
 - Movable physical compositions are represented as `shuntingunit` objects.
-- Multi-unit arrivals can be split into active single-unit shunting units.
+- Incoming arrivals with two or three units can be split into active single-unit shunting units.
 - Two matched shunting units can be coupled only when they are adjacent, on the same request-specific coupling track, and ordered like the departure request slots.
 - A two-unit request is complete only after the assembled request shunting unit departs.
 
@@ -34,11 +34,17 @@ This converter variant models matching and coupling as a physical shunting-unit 
 |--------|---------|
 | `match` | Assigns a compatible available train unit to a request slot |
 | `split_two_unit_su` | Splits one two-unit shunting composition into two movable single-unit shunting units |
+| `split_three_unit_su` | Full-splits one three-unit shunting composition into three movable single-unit shunting units |
 | `couple_two_sus` | Couples two active shunting units into one outgoing request shunting unit |
 | `move_*_su` | Moves active shunting units through the yard |
 | `depart_*_su` | Departs an assembled shunting unit |
 
 ## Notes
+- Incoming trains with one, two, or three units are supported. Two-unit arrivals use `split_two_unit_su`; three-unit arrivals use `split_three_unit_su`.
+- `split_three_unit_su` is a full-split abstraction: it does not model recursive intermediate compositions such as `A + BC` or `AB + C`.
+- Incoming trains with four or more units remain unsupported until recursive or additional size-specific split actions are added.
+- Multi-unit parent shunting units are initially allowed to start a movement session so a split action can consume that session.
+- Shunting-unit departure actions increment the same departure counter as train departure actions.
 - The current explicit coupling implementation supports exactly two-unit outgoing coupling requests.
 - Duration, staff resources, and temporal overlap are not modelled in this converter.
 - In explicit coupling mode, original `arrivaltrain` movement is locked so the shunting-unit layer owns the physical movement state.
