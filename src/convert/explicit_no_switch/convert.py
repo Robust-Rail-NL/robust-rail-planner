@@ -159,6 +159,115 @@ def _coupling_track_ids_for_request(request, location_object, candidate_track_id
     return sorted(candidate_track_ids)[:1]
 
 
+def _shortest_path(adjacency, start_id, goal_id):
+    # BFS shortest path (inclusive list of node ids) over the undirected track graph.
+    if start_id is None or goal_id is None:
+        return []
+    if start_id == goal_id:
+        return [start_id]
+    visited = {start_id}
+    queue = deque([[start_id]])
+    while queue:
+        path = queue.popleft()
+        for nb in adjacency.get(path[-1], ()):
+            if nb in visited:
+                continue
+            if nb == goal_id:
+                return path + [nb]
+            visited.add(nb)
+            queue.append(path + [nb])
+    return []
+
+
+def _train_unit_type_keys(train):
+    return {train_unit_type_key(member["trainUnit"]) for member in train.get("members", [])}
+
+
+def _request_type_keys(request):
+    return {train_unit_type_key(train_unit) for train_unit in request.get("trainUnits", [])}
+
+
+# Hops of maneuvering room kept around the core shortest-path routes. Shunting needs
+# reversals onto adjacent buffer/head-shunt tracks that are not on any shortest path, so a
+# pure shortest-path corridor over-prunes and can make a feasible scenario unsolvable.
+CORRIDOR_EXPAND_HOPS = 2
+
+# When True, physical coupling requires the two units to be stacked in exact adjacent
+# order. When False, only the composition (correct unit type/length per request slot) is
+# enforced, dropping the numeric exact-position constraint that drives the search blow-up.
+ENFORCE_COUPLING_ORDER = False
+
+# When False, the redundant arrival-train movement layer (start_move / move_* / park / turn
+# / depart on arrivaltrain objects) is not emitted. All movement, parking, coupling and
+# departure then happen on the single shunting-unit layer, which removes the duplicate
+# movable body per train (roughly halving the search space) and structurally eliminates the
+# phantom-train class of bug. Parking is provided by `park_su`.
+ENABLE_ARRIVAL_LAYER = False
+
+
+def _relevant_corridor_nodes(scenario_object, location_object, known_track_ids, coupling_candidate_track_ids, expand_hops=CORRIDOR_EXPAND_HOPS):
+    # Restrict movement connectivity to the tracks that matter for this scenario: the nodes
+    # on each type-compatible train's start -> coupling track -> exit/parking route, plus an
+    # `expand_hops` neighborhood for maneuvering. Returns a set of raw (str) node ids
+    # (including switch nodes, so the switch-reconnect logic still fires), or None to mean
+    # "do not restrict". Ids are normalised to str for robustness to int/str id types.
+    raw_adj = _build_adjacency(location_object)
+    adjacency = {str(k): {str(n) for n in v} for k, v in raw_adj.items()}
+    path_nodes = set()
+
+    def add_path(a, b):
+        a = None if a is None else str(a)
+        b = None if b is None else str(b)
+        path_nodes.update(_shortest_path(adjacency, a, b))
+
+    trains_with_starts = []
+    for source, _, train in all_trains_with_source(scenario_object):
+        preferred_keys = ["firstParkingTrackPart", "entryTrackPart"] if source == "inStanding" else ["entryTrackPart", "firstParkingTrackPart"]
+        start_id = _train_initial_track_id(train, preferred_keys)
+        if start_id is not None:
+            trains_with_starts.append((train, str(start_id)))
+
+    # `out` requests route start -> coupling track -> leave/parking target.
+    for request in scenario_object.get("out", {}).get("trainRequests", []):
+        request_keys = _request_type_keys(request)
+        coupling_ids = [str(c) for c in _coupling_track_ids_for_request(request, location_object, coupling_candidate_track_ids)]
+        route_targets = [str(t) for t in [request.get("leaveTrackPart"), request.get("lastParkingTrackPart")] if t is not None]
+        for train, start_id in trains_with_starts:
+            if _train_unit_type_keys(train).isdisjoint(request_keys):
+                continue
+            for coupling_id in coupling_ids:
+                add_path(start_id, coupling_id)
+                for target_id in route_targets:
+                    add_path(coupling_id, target_id)
+
+    # `outStanding` requests are parking goals: route start -> parking target.
+    for request in scenario_object.get("outStanding", {}).get("trainRequests", []):
+        target_id = request.get("lastParkingTrackPart")
+        if target_id is None:
+            continue
+        request_keys = _request_type_keys(request)
+        for train, start_id in trains_with_starts:
+            if _train_unit_type_keys(train).isdisjoint(request_keys):
+                continue
+            add_path(start_id, str(target_id))
+
+    if not path_nodes:
+        return None
+
+    # Grow the core by `expand_hops` to restore shunting maneuvering room.
+    reached = set(path_nodes)
+    frontier = set(path_nodes)
+    for _ in range(expand_hops):
+        nxt = set()
+        for n in frontier:
+            for m in adjacency.get(n, ()):
+                if m not in reached:
+                    reached.add(m)
+                    nxt.add(m)
+        frontier = nxt
+    return reached
+
+
 def _train_total_length(train):
     # Sum the physical length of every unit in an arriving composition or outgoing request.
     total_length = Fraction(0)
@@ -238,7 +347,7 @@ def _switch_like_components(location_object, switch_like_track_ids):
     return components
 
 
-def _reconnect_switch_like_components(location_object, switch_like_track_ids, id_to_track_part, problem, connected_pairs, connected_aside, connected_bside):
+def _reconnect_switch_like_components(location_object, switch_like_track_ids, id_to_track_part, problem, connected_pairs, connected_aside, connected_bside, corridor_nodes=None):
     # Collapse each switch-like component into direct boundary-to-boundary links.
     components = _switch_like_components(location_object, switch_like_track_ids)
     original_lookup = {tp["id"]: tp for tp in location_object["trackParts"]}
@@ -259,6 +368,8 @@ def _reconnect_switch_like_components(location_object, switch_like_track_ids, id
                 if left_id == right_id:
                     continue
                 pair = tuple(sorted([left_id, right_id]))
+                if corridor_nodes is not None and (str(left_id) not in corridor_nodes or str(right_id) not in corridor_nodes):
+                    continue
                 if pair in connected_pairs:
                     continue
 
@@ -398,6 +509,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     su_may_move       = problem.add_fluent(up.Fluent("su_may_move", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
     # Marks an assembled request shunting unit so it may only depart, never re-park, after coupling.
     must_depart_su    = problem.add_fluent(up.Fluent("must_depart_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
+    # Marks a shunting unit that has been parked (SU-layer parking goal); a parked unit may not move again.
+    parked_su         = problem.add_fluent(up.Fluent("parked_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
 
 
     startMove = up.InstantaneousAction('start_move', t=arrival_train_type)
@@ -408,16 +521,33 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     startMove.add_precondition(concurrent_movements < max_concurrent_movements)
     startMove.add_effect(allowed_to_move(startMove.t), True)
     startMove.add_effect(concurrent_movements, concurrent_movements + 1)
-    problem.add_action(startMove)
+    if ENABLE_ARRIVAL_LAYER: problem.add_action(startMove)
 
     startMoveSu = up.InstantaneousAction('start_move_su', su=shunting_unit_type)
     startMoveSu.add_precondition(active_su(startMoveSu.su))
     startMoveSu.add_precondition(up.Not(allowed_to_move_su(startMoveSu.su)))
     startMoveSu.add_precondition(concurrent_movements < max_concurrent_movements)
     startMoveSu.add_precondition(su_may_move(startMoveSu.su))
+    startMoveSu.add_precondition(up.Not(parked_su(startMoveSu.su)))
     startMoveSu.add_effect(allowed_to_move_su(startMoveSu.su), True)
     startMoveSu.add_effect(concurrent_movements, concurrent_movements + 1)
     problem.add_action(startMoveSu)
+
+    # SU-layer parking (replaces the retired arrival-train `park`): a moving shunting unit
+    # settles on a parking-allowed track, counts toward that track's parked total, and ends
+    # its movement session. `must_depart_su` keeps assembled request units from parking.
+    park_su = up.InstantaneousAction('park_su', su=shunting_unit_type, l=track_part_type)
+    park_su.add_precondition(active_su(park_su.su))
+    park_su.add_precondition(allowed_to_move_su(park_su.su))
+    park_su.add_precondition(at_su(park_su.su, park_su.l))
+    park_su.add_precondition(parking_allowed(park_su.l))
+    park_su.add_precondition(up.Not(must_depart_su(park_su.su)))
+    park_su.add_precondition(up.Not(parked_su(park_su.su)))
+    park_su.add_effect(parked_su(park_su.su), True)
+    park_su.add_effect(number_of_parked_trains(park_su.l), number_of_parked_trains(park_su.l) + 1)
+    park_su.add_effect(allowed_to_move_su(park_su.su), False)
+    park_su.add_effect(concurrent_movements, concurrent_movements - 1)
+    problem.add_action(park_su)
 
     endMove = up.InstantaneousAction('end_move', t=arrival_train_type, l=track_part_type)
     endMove.add_precondition(allowed_to_move(endMove.t))
@@ -425,7 +555,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     endMove.add_precondition(parking_allowed(endMove.l))
     endMove.add_effect(allowed_to_move(endMove.t), False)
     endMove.add_effect(concurrent_movements, concurrent_movements - 1)
-    problem.add_action(endMove)
+    if ENABLE_ARRIVAL_LAYER: problem.add_action(endMove)
 
     endMoveSu = up.InstantaneousAction('end_move_su', su=shunting_unit_type, l=track_part_type)
     endMoveSu.add_precondition(active_su(endMoveSu.su))
@@ -456,7 +586,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_aside_empty.add_effect(bstack_distance(move_aside_empty.l_to), train_length(move_aside_empty.t))
     move_aside_empty.add_effect(at(move_aside_empty.t, move_aside_empty.l_to), True)
     move_aside_empty.add_effect(at(move_aside_empty.t, move_aside_empty.l_from), False)
-    problem.add_action(move_aside_empty)
+    if ENABLE_ARRIVAL_LAYER: problem.add_action(move_aside_empty)
 
     move_aside_empty_su = up.InstantaneousAction('move_aside_empty_su', su=shunting_unit_type, l_from=track_part_type, l_to=track_part_type)
     # Same transition as move_aside_empty, but for the current movable shunting composition.
@@ -494,7 +624,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_aside_occupied.add_effect(bstack_distance(move_aside_occupied.l_to), bstack_distance(move_aside_occupied.l_to) + train_length(move_aside_occupied.t))
     move_aside_occupied.add_effect(at(move_aside_occupied.t, move_aside_occupied.l_to), True)
     move_aside_occupied.add_effect(at(move_aside_occupied.t, move_aside_occupied.l_from), False)
-    problem.add_action(move_aside_occupied)
+    if ENABLE_ARRIVAL_LAYER: problem.add_action(move_aside_occupied)
 
     move_aside_occupied_su = up.InstantaneousAction('move_aside_occupied_su', su=shunting_unit_type, l_from=track_part_type, l_to=track_part_type)
     # Aside-side movement into an occupied track stacks the shunting unit behind existing content.
@@ -532,7 +662,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_bside_empty.add_effect(bstack_distance(move_bside_empty.l_to), train_length(move_bside_empty.t))
     move_bside_empty.add_effect(at(move_bside_empty.t, move_bside_empty.l_to), True)
     move_bside_empty.add_effect(at(move_bside_empty.t, move_bside_empty.l_from), False)
-    problem.add_action(move_bside_empty)
+    if ENABLE_ARRIVAL_LAYER: problem.add_action(move_bside_empty)
 
     move_bside_empty_su = up.InstantaneousAction('move_bside_empty_su', su=shunting_unit_type, l_from=track_part_type, l_to=track_part_type)
     move_bside_empty_su.add_precondition(active_su(move_bside_empty_su.su))
@@ -569,7 +699,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_bside_occupied.add_effect(astack_distance(move_bside_occupied.l_to), astack_distance(move_bside_occupied.l_to) - train_length(move_bside_occupied.t))
     move_bside_occupied.add_effect(at(move_bside_occupied.t, move_bside_occupied.l_to), True)
     move_bside_occupied.add_effect(at(move_bside_occupied.t, move_bside_occupied.l_from), False)
-    problem.add_action(move_bside_occupied)
+    if ENABLE_ARRIVAL_LAYER: problem.add_action(move_bside_occupied)
 
     move_bside_occupied_su = up.InstantaneousAction('move_bside_occupied_su', su=shunting_unit_type, l_from=track_part_type, l_to=track_part_type)
     # B-side movement into an occupied track places the shunting unit at the open aside-side gap.
@@ -604,7 +734,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     depart_aside.add_effect(astack_distance(depart_aside.l), astack_distance(depart_aside.l) + train_length(depart_aside.t))
     depart_aside.add_effect(concurrent_movements, concurrent_movements - 1)
     depart_aside.add_effect(allowed_to_move(depart_aside.t), False)
-    problem.add_action(depart_aside)
+    if ENABLE_ARRIVAL_LAYER: problem.add_action(depart_aside)
 
     depart_bside = up.InstantaneousAction('depart_bside', t=arrival_train_type, l=track_part_type)
     depart_bside.add_precondition(up.Not(locked_train(depart_bside.t)))
@@ -621,7 +751,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     depart_bside.add_effect(bstack_distance(depart_bside.l), bstack_distance(depart_bside.l) - train_length(depart_bside.t))
     depart_bside.add_effect(concurrent_movements, concurrent_movements - 1)
     depart_bside.add_effect(allowed_to_move(depart_bside.t), False)
-    problem.add_action(depart_bside)
+    if ENABLE_ARRIVAL_LAYER: problem.add_action(depart_bside)
 
     depart_aside_su = up.InstantaneousAction('depart_aside_su', su=shunting_unit_type, l=track_part_type)
     # Departure for an assembled shunting unit proves it can move as a physical composition.
@@ -727,7 +857,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     park.add_effect(number_of_parked_trains(park.l), number_of_parked_trains(park.l) + 1)
     park.add_effect(allowed_to_move(park.t), False)
     park.add_effect(concurrent_movements, concurrent_movements - 1)
-    problem.add_action(park)
+    if ENABLE_ARRIVAL_LAYER: problem.add_action(park)
 
     turn_a_side = up.InstantaneousAction('turn_a_side', t=arrival_train_type, l=track_part_type)
     turn_a_side.add_precondition(allowed_to_move(turn_a_side.t))
@@ -735,7 +865,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     turn_a_side.add_precondition(at(turn_a_side.t, turn_a_side.l))
     turn_a_side.add_precondition(turning_allowed(turn_a_side.l))
     turn_a_side.add_effect(direction_train(turn_a_side.t), True)
-    problem.add_action(turn_a_side)
+    if ENABLE_ARRIVAL_LAYER: problem.add_action(turn_a_side)
 
     turn_b_side = up.InstantaneousAction('turn_b_side', t=arrival_train_type, l=track_part_type)
     turn_b_side.add_precondition(allowed_to_move(turn_b_side.t))
@@ -743,7 +873,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     turn_b_side.add_precondition(at(turn_b_side.t, turn_b_side.l))
     turn_b_side.add_precondition(turning_allowed(turn_b_side.l))
     turn_b_side.add_effect(direction_train(turn_b_side.t), False)
-    problem.add_action(turn_b_side)
+    if ENABLE_ARRIVAL_LAYER: problem.add_action(turn_b_side)
 
     part_of_composition = problem.add_fluent(up.Fluent("part_of_composition", up.BoolType(), unit=train_unit_type, composition=arrival_composition_type), default_initial_value=False)
     composition_needs_uncoupling = problem.add_fluent(up.Fluent("composition_needs_uncoupling", up.BoolType(), composition=arrival_composition_type), default_initial_value=False)
@@ -869,71 +999,12 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     physically_coupled = problem.add_fluent(up.Fluent("physically_coupled", up.BoolType(), first=train_unit_type, second=train_unit_type), default_initial_value=False)
     request_assembled = problem.add_fluent(up.Fluent("request_assembled", up.BoolType(), request=departure_request_type), default_initial_value=False)
 
-    couple_two_units = up.InstantaneousAction(
-        "couple_two_units",
-        unit_a=train_unit_type,
-        unit_b=train_unit_type,
-        train_a=arrival_train_type,
-        train_b=arrival_train_type,
-        track=track_part_type,
-        slot_a=request_slot_type,
-        slot_b=request_slot_type,
-        request=departure_request_type,
-    )
-    # The matched units must be the two ordered slots of the same outgoing request.
-    couple_two_units.add_precondition(matched(couple_two_units.unit_a, couple_two_units.slot_a))
-    couple_two_units.add_precondition(matched(couple_two_units.unit_b, couple_two_units.slot_b))
-    couple_two_units.add_precondition(slot_for_request(couple_two_units.slot_a, couple_two_units.request))
-    couple_two_units.add_precondition(slot_for_request(couple_two_units.slot_b, couple_two_units.request))
-    couple_two_units.add_precondition(slot_before(couple_two_units.slot_a, couple_two_units.slot_b))
-    couple_two_units.add_precondition(up.Not(up.Equals(couple_two_units.unit_a, couple_two_units.unit_b)))
-    # Physical checks: each unit belongs to its train, both trains share a valid track, and order matches the slots.
-    couple_two_units.add_precondition(unit_in_train(couple_two_units.unit_a, couple_two_units.train_a))
-    couple_two_units.add_precondition(unit_in_train(couple_two_units.unit_b, couple_two_units.train_b))
-    couple_two_units.add_precondition(at(couple_two_units.train_a, couple_two_units.track))
-    couple_two_units.add_precondition(at(couple_two_units.train_b, couple_two_units.track))
-    couple_two_units.add_precondition(coupling_allowed(couple_two_units.track))
-    couple_two_units.add_precondition(coupling_track_for_request(couple_two_units.request, couple_two_units.track))
-    couple_two_units.add_precondition(aside_distance(couple_two_units.train_a) < aside_distance(couple_two_units.train_b))
-    # Completing this action proves the ordered request is physically assembled.
-    couple_two_units.add_effect(slot_coupled(couple_two_units.slot_a), True)
-    couple_two_units.add_effect(slot_coupled(couple_two_units.slot_b), True)
-    couple_two_units.add_effect(coupled_to_request(couple_two_units.unit_a, couple_two_units.request), True)
-    couple_two_units.add_effect(coupled_to_request(couple_two_units.unit_b, couple_two_units.request), True)
-    couple_two_units.add_effect(physically_coupled(couple_two_units.unit_a, couple_two_units.unit_b), True)
-    couple_two_units.add_effect(request_assembled(couple_two_units.request), True)
-    problem.add_action(couple_two_units)
-
-    couple_two_units_same_train = up.InstantaneousAction(
-        "couple_two_units_same_train",
-        unit_a=train_unit_type,
-        unit_b=train_unit_type,
-        train=arrival_train_type,
-        track=track_part_type,
-        slot_a=request_slot_type,
-        slot_b=request_slot_type,
-        request=departure_request_type,
-    )
-    couple_two_units_same_train.add_precondition(matched(couple_two_units_same_train.unit_a, couple_two_units_same_train.slot_a))
-    couple_two_units_same_train.add_precondition(matched(couple_two_units_same_train.unit_b, couple_two_units_same_train.slot_b))
-    couple_two_units_same_train.add_precondition(slot_for_request(couple_two_units_same_train.slot_a, couple_two_units_same_train.request))
-    couple_two_units_same_train.add_precondition(slot_for_request(couple_two_units_same_train.slot_b, couple_two_units_same_train.request))
-    couple_two_units_same_train.add_precondition(slot_before(couple_two_units_same_train.slot_a, couple_two_units_same_train.slot_b))
-    couple_two_units_same_train.add_precondition(up.Not(up.Equals(couple_two_units_same_train.unit_a, couple_two_units_same_train.unit_b)))
-    couple_two_units_same_train.add_precondition(unit_in_train(couple_two_units_same_train.unit_a, couple_two_units_same_train.train))
-    couple_two_units_same_train.add_precondition(unit_in_train(couple_two_units_same_train.unit_b, couple_two_units_same_train.train))
-    couple_two_units_same_train.add_precondition(at(couple_two_units_same_train.train, couple_two_units_same_train.track))
-    couple_two_units_same_train.add_precondition(coupling_allowed(couple_two_units_same_train.track))
-    couple_two_units_same_train.add_precondition(coupling_track_for_request(couple_two_units_same_train.request, couple_two_units_same_train.track))
-    couple_two_units_same_train.add_precondition(unit_before(couple_two_units_same_train.unit_a, couple_two_units_same_train.unit_b))
-    # Same-train coupling has the same completion effects as separate-train coupling.
-    couple_two_units_same_train.add_effect(slot_coupled(couple_two_units_same_train.slot_a), True)
-    couple_two_units_same_train.add_effect(slot_coupled(couple_two_units_same_train.slot_b), True)
-    couple_two_units_same_train.add_effect(coupled_to_request(couple_two_units_same_train.unit_a, couple_two_units_same_train.request), True)
-    couple_two_units_same_train.add_effect(coupled_to_request(couple_two_units_same_train.unit_b, couple_two_units_same_train.request), True)
-    couple_two_units_same_train.add_effect(physically_coupled(couple_two_units_same_train.unit_a, couple_two_units_same_train.unit_b), True)
-    couple_two_units_same_train.add_effect(request_assembled(couple_two_units_same_train.request), True)
-    problem.add_action(couple_two_units_same_train)
+    # NOTE: the non-shunting-unit coupling actions `couple_two_units` and
+    # `couple_two_units_same_train` were removed. They set `request_assembled` but never
+    # activate the request shunting unit, so a plan using them can satisfy
+    # `request_assembled` while leaving the conjunct goal `departed_su(request_su)`
+    # permanently unreachable -- dead-end branches that only bloat the search. The
+    # shunting-unit path `couple_two_sus` below is the sole, correct coupling action.
 
     couple_two_sus = up.InstantaneousAction(
         "couple_two_sus",
@@ -961,8 +1032,14 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     couple_two_sus.add_precondition(at_su(couple_two_sus.su_b, couple_two_sus.track))
     couple_two_sus.add_precondition(coupling_allowed(couple_two_sus.track))
     couple_two_sus.add_precondition(coupling_track_for_request(couple_two_sus.request, couple_two_sus.track))
-    # The two shunting units must be adjacent in the same order as the departure request slots.
-    couple_two_sus.add_precondition(up.Equals(su_aside_distance(couple_two_sus.su_b), su_aside_distance(couple_two_sus.su_a) + su_length(couple_two_sus.su_a)))
+    # Physical ordering: require the two shunting units to be stacked at exact adjacent
+    # positions, in the same order as the departure request slots. This numeric-equality on
+    # continuous positions is the main driver of the coupling search blow-up. When
+    # ENFORCE_COUPLING_ORDER is False we keep composition correctness (right unit type/length
+    # per slot via `matched`/`compatible`) but no longer enforce the physical front-to-back
+    # order, which lets the planner couple as soon as both units share the coupling track.
+    if ENFORCE_COUPLING_ORDER:
+        couple_two_sus.add_precondition(up.Equals(su_aside_distance(couple_two_sus.su_b), su_aside_distance(couple_two_sus.su_a) + su_length(couple_two_sus.su_a)))
     couple_two_sus.add_precondition(matched(couple_two_sus.unit_a, couple_two_sus.slot_a))
     couple_two_sus.add_precondition(matched(couple_two_sus.unit_b, couple_two_sus.slot_b))
     couple_two_sus.add_precondition(slot_for_request(couple_two_sus.slot_a, couple_two_sus.request))
@@ -1057,6 +1134,13 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         if not track_part.get("parkingAllowed", False):
             problem.set_initial_value(track_length(obj), up.Real(Fraction(10**9)))
 
+    # Restrict movement connectivity to the per-scenario corridor of relevant tracks.
+    # When None (no relevant routes found) the full no-switch graph is kept as a fallback.
+    corridor_nodes = _relevant_corridor_nodes(scenario_object, location_object, id_to_track_part.keys(), coupling_candidate_track_ids)
+
+    def _in_corridor(*ids):
+        return corridor_nodes is None or all(str(i) in corridor_nodes for i in ids)
+
     # Set connectivity (each undirected edge -> two directed facts)
     connected_pairs = set()
     for track_part in location_object["trackParts"]:
@@ -1066,8 +1150,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         for nb_id in track_part.get("aSide", []):
             if nb_id in id_to_track_part:
                 pair = tuple(sorted([src_id, nb_id]))
-                # problem.set_initial_value(connected(id_to_track_part[src_id], id_to_track_part[nb_id]), True)
-                # problem.set_initial_value(connected(id_to_track_part[nb_id], id_to_track_part[src_id]), True)
+                if not _in_corridor(src_id, nb_id):
+                    continue
                 problem.set_initial_value(connected_aside(id_to_track_part[src_id], id_to_track_part[nb_id]), True)
                 if pair not in connected_pairs:
                     connected_pairs.add(pair)
@@ -1075,13 +1159,13 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         for nb_id in track_part.get("bSide", []):
             if nb_id in id_to_track_part:
                 pair = tuple(sorted([src_id, nb_id]))
-                # problem.set_initial_value(connected(id_to_track_part[src_id], id_to_track_part[nb_id]), True)
-                # problem.set_initial_value(connected(id_to_track_part[nb_id], id_to_track_part[src_id]), True)
+                if not _in_corridor(src_id, nb_id):
+                    continue
                 problem.set_initial_value(connected_bside(id_to_track_part[src_id], id_to_track_part[nb_id]), True)
                 if pair not in connected_pairs:
                     connected_pairs.add(pair)
 
-    _reconnect_switch_like_components(location_object, switch_like_track_ids, id_to_track_part, problem, connected_pairs, connected_aside, connected_bside)
+    _reconnect_switch_like_components(location_object, switch_like_track_ids, id_to_track_part, problem, connected_pairs, connected_aside, connected_bside, corridor_nodes)
 
 
     id_to_unit = {}
@@ -1131,8 +1215,10 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     for track_id, required_count in required_parked_per_track.items():
         problem.add_goal(up.Equals(number_of_parked_trains(id_to_track_part[track_id]), up.Int(required_count)))
 
-    # Count every request for which the converter creates a departure goal.
-    problem.add_goal(up.Equals(num_of_departed_trains(), up.Int(len(all_train_requests(scenario_object)))))
+    # Only `out` requests depart. `outStanding` requests are parking goals (their parked
+    # count is enforced above) and must NOT be counted as departures, otherwise the same
+    # stock would be required to both depart and remain parked.
+    problem.add_goal(up.Equals(num_of_departed_trains(), up.Int(len(out_requests))))
 
     for track_id, occupied_length_value in track_occupancies.items():
         track_obj = id_to_track_part[track_id]
@@ -1210,9 +1296,11 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             second_obj = id_to_unit[second["trainUnit"]["id"]]
             problem.set_initial_value(unit_before(first_obj, second_obj), True)
 
-    # Map request names to their problem objects so we don't add duplicates later
+    # Map request names to their problem objects so we don't add duplicates later.
+    # Only `out` requests create departure/coupling machinery and goals; `outStanding`
+    # requests are parking goals only (handled above via number_of_parked_trains).
     request_objs = {}
-    for request in all_train_requests(scenario_object):
+    for request in out_requests:
         # This explicit-coupling variant is intentionally scoped to two-unit requests.
         if len(request["trainUnits"]) > 2:
             raise ValueError(
