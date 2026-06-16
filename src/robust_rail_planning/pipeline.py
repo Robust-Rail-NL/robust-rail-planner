@@ -10,7 +10,7 @@ import re
 from unified_planning.io import PDDLReader
 from unified_planning.shortcuts import OneshotPlanner
 import unified_planning as up
-from .convert_no_switches import create_instance_from_scenario
+from convert.baseline.convert import create_instance_from_scenario
 from .evaluate import evaluate
 
 up.shortcuts.get_environment().credits_stream = None  # silence per-call credits banner
@@ -115,7 +115,7 @@ def read_scenarios(scenarios_dir, n_trains="*", order="*"):
 #     return sorted(glob.glob(pattern), key=natural_key)
 
 def read_example_scenarios(scenarios_dir):
-    pattern = os.path.join(scenarios_dir, "scenario_solver_example2.json")
+    pattern = os.path.join(scenarios_dir, "scenario_solver_example1.json")
     return sorted(glob.glob(pattern), key=natural_key)
 
 
