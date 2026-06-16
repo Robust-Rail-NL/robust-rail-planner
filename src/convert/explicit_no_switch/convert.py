@@ -231,6 +231,10 @@ ENABLE_ARRIVAL_LAYER = False
 # generated model is identical to the non-servicing one even for scenarios that have tasks.
 ENABLE_SERVICING = False
 
+# When True, inbound trains are handled in scheduled arrival order: an in-train's shunting
+# unit cannot move until the previous arrival has been processed (via the arrive_su action).
+ENABLE_ARRIVAL_PRECEDENCE = False
+
 
 # CLI overrides for the model flags above, so they can be toggled per run without editing
 # code. Each defaults to the constant above, so omitting the flag preserves current behaviour.
@@ -242,6 +246,8 @@ parser.add_argument("--coupling-order", action=argparse.BooleanOptionalAction, d
                     help="Require exact-adjacent physical coupling order. Use --no-coupling-order for composition-only coupling. Default: %(default)s")
 parser.add_argument("--servicing", action=argparse.BooleanOptionalAction, default=ENABLE_SERVICING,
                     help="Require trains with service tasks to be serviced at the matching facility before departing/parking. Default: %(default)s")
+parser.add_argument("--arrival-precedence", action=argparse.BooleanOptionalAction, default=ENABLE_ARRIVAL_PRECEDENCE,
+                    help="Handle inbound trains only in scheduled arrival order. Default: %(default)s")
 
 
 def _relevant_corridor_nodes(scenario_object, location_object, known_track_ids, coupling_candidate_track_ids, expand_hops=CORRIDOR_EXPAND_HOPS):
@@ -550,6 +556,10 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     must_depart_su    = problem.add_fluent(up.Fluent("must_depart_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
     # Marks a shunting unit that has been parked (SU-layer parking goal); a parked unit may not move again.
     parked_su         = problem.add_fluent(up.Fluent("parked_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
+    if ENABLE_ARRIVAL_PRECEDENCE:
+        su_has_arrived = problem.add_fluent(up.Fluent("su_has_arrived", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=True)
+        su_previous_arrived = problem.add_fluent(up.Fluent("su_previous_arrived", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
+        su_arrival_immediately_before = problem.add_fluent(up.Fluent("su_arrival_immediately_before", up.BoolType(), first=shunting_unit_type, second=shunting_unit_type), default_initial_value=False)
 
     # --- Servicing subproblem (gated). Trains carrying cleaning/washing/inspection tasks must
     # be serviced at the matching facility before they may depart or park. `serviced` defaults
@@ -581,9 +591,21 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     startMoveSu.add_precondition(concurrent_movements < max_concurrent_movements)
     startMoveSu.add_precondition(su_may_move(startMoveSu.su))
     startMoveSu.add_precondition(up.Not(parked_su(startMoveSu.su)))
+    if ENABLE_ARRIVAL_PRECEDENCE:
+        startMoveSu.add_precondition(su_has_arrived(startMoveSu.su))
     startMoveSu.add_effect(allowed_to_move_su(startMoveSu.su), True)
     startMoveSu.add_effect(concurrent_movements, concurrent_movements + 1)
     problem.add_action(startMoveSu)
+
+    if ENABLE_ARRIVAL_PRECEDENCE:
+        arrive_su = up.InstantaneousAction('arrive_su', su=shunting_unit_type)
+        arrive_su.add_precondition(active_su(arrive_su.su))
+        arrive_su.add_precondition(up.Not(su_has_arrived(arrive_su.su)))
+        arrive_su.add_precondition(su_previous_arrived(arrive_su.su))
+        arrive_su.add_effect(su_has_arrived(arrive_su.su), True)
+        next_su = up.Variable("next_su", shunting_unit_type)
+        arrive_su.add_effect(fluent=su_previous_arrived(next_su), value=True, condition=su_arrival_immediately_before(arrive_su.su, next_su), forall=[next_su])
+        problem.add_action(arrive_su)
 
     # SU-layer parking (replaces the retired arrival-train `park`): a moving shunting unit
     # settles on a parking-allowed track, counts toward that track's parked total, and ends
@@ -1306,6 +1328,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         problem.set_initial_value(bstack_distance(track_obj), up.Real(occupied_length_value))
         problem.set_initial_value(number_of_trains_on_track(track_obj), up.Int(track_train_counts.get(track_id, 0)))
 
+    in_train_sus = []
     for source, index, train in all_trains_with_source(scenario_object):
         # Matching-only runs still need physical train objects for coupling checks.
         preferred_track_keys = ["firstParkingTrackPart", "entryTrackPart"] if source == "inStanding" else ["entryTrackPart", "firstParkingTrackPart"]
@@ -1362,6 +1385,10 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             # Single-unit arrivals do not split, but still move/depart as shunting units.
             problem.set_initial_value(su_may_move(shunting_unit), True)
 
+        if ENABLE_ARRIVAL_PRECEDENCE and source == "in":
+            problem.set_initial_value(su_has_arrived(shunting_unit), False)
+            in_train_sus.append((int(train.get("arrival", 0)), shunting_unit))
+
         for trainunit in train_members:
             unit = trainunit["trainUnit"]
             unit_obj = problem.add_object("unit" + unit["id"], train_unit_type)
@@ -1386,6 +1413,12 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             first_obj = id_to_unit[first["trainUnit"]["id"]]
             second_obj = id_to_unit[second["trainUnit"]["id"]]
             problem.set_initial_value(unit_before(first_obj, second_obj), True)
+
+    if ENABLE_ARRIVAL_PRECEDENCE and in_train_sus:
+        in_train_sus.sort(key=lambda p: p[0])
+        problem.set_initial_value(su_previous_arrived(in_train_sus[0][1]), True)
+        for (_, su_a), (_, su_b) in zip(in_train_sus, in_train_sus[1:]):
+            problem.set_initial_value(su_arrival_immediately_before(su_a, su_b), True)
 
     # Map request names to their problem objects so we don't add duplicates later.
     # Only `out` requests create departure/coupling machinery and goals; `outStanding`
@@ -1462,6 +1495,7 @@ if __name__ == "__main__":
     CORRIDOR_EXPAND_HOPS = args.corridor_hops
     ENFORCE_COUPLING_ORDER = args.coupling_order
     ENABLE_SERVICING = args.servicing
+    ENABLE_ARRIVAL_PRECEDENCE = args.arrival_precedence
 
     # Set the domain file name
     args.domain_file = "domain.pddl" if args.domain_file is None else args.domain_file
