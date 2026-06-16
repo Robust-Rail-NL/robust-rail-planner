@@ -4,7 +4,6 @@ Discover locations and scenarios, then convert to PDDL and/or run the planner.
 """
 import os
 import sys
-import ast
 import subprocess
 import time
 import questionary
@@ -15,27 +14,74 @@ SCENARIO_INPUTS = os.path.join(REPO_ROOT, "scenario-planning-inputs")
 if not os.path.isdir(SCENARIO_INPUTS):
     SCENARIO_INPUTS = os.path.join(os.path.dirname(REPO_ROOT), "Robust-Rail-NL", "scenario-planning-inputs")
 DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
-CONVERT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "convert")
+_CONVERT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "convert")
+CONVERT_SCRIPT = os.path.join(_CONVERT_DIR, "convert.py")
 PLANNER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "plan", "planner.jl")
 PYTHON = sys.executable
 JULIA = "julia"
 
-SUBPROBLEM_CHOICES = {
-    "Parking only": "parking",
-    "Coupling / matching only": "matching",
-    "Parking + coupling / matching": "combined",
-}
 
-COUPLING_MODE_CHOICES = {
-    "Implicit coupling, free uncoupling": "implicit_free_uncoupling",
-    "Implicit coupling, explicit uncoupling": "implicit_explicit_uncoupling",
-    "Explicit coupling and explicit uncoupling": "explicit_coupling",
-}
+def _find_enhsp_jar():
+    """Return path to enhsp.jar, checking the venv-installed up_enhsp package first."""
+    import importlib.util
+    spec = importlib.util.find_spec("up_enhsp")
+    if spec:
+        candidate = os.path.join(os.path.dirname(spec.origin), "ENHSP", "enhsp.jar")
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
+
+def _find_java17():
+    """Return path to a Java 17+ executable, or None if not found."""
+    java_home = os.environ.get("JAVA_HOME", "")
+    candidates = [
+        os.path.join(java_home, "bin", "java") if java_home else None,
+        "/opt/homebrew/opt/openjdk@17/bin/java",
+        "/usr/local/opt/openjdk@17/bin/java",
+    ]
+    for c in candidates:
+        if c and os.path.isfile(c):
+            return c
+    return None
+
+
+
+def discover_converters():
+    """Return an ordered dict of label -> path for all available converters."""
+    converters = {}
+    root_script = os.path.join(_CONVERT_DIR, "convert.py")
+    if os.path.isfile(root_script):
+        converters["convert.py  (root)"] = root_script
+    for name in sorted(os.listdir(_CONVERT_DIR)):
+        subdir = os.path.join(_CONVERT_DIR, name)
+        candidate = os.path.join(subdir, "convert.py")
+        if os.path.isdir(subdir) and os.path.isfile(candidate):
+            converters[name] = candidate
+    return converters
+
 
 PLANNER_BACKEND_CHOICES = {
     "ENHSP via Julia": "enhsp",
     "SymbolicPlanners.jl A* HAdd": "symbolic",
 }
+
+ACTION_COSTS = {
+    "move_aside_empty": 300,
+    "move_aside_occupied": 300,
+    "move_bside_empty": 300,
+    "move_bside_occupied": 300,
+    "wait": 300,
+    "uncouple": 120,
+    "couple_two_units": 180,
+    "couple_two_units_same_train": 180,
+}
+
+
+def _action_cost(step):
+    name = step.split("(")[0].strip().lower()
+    return ACTION_COSTS.get(name, 0)
+
 
 STYLE = Style([
     ("qmark", "fg:#00aabb bold"),
@@ -45,13 +91,6 @@ STYLE = Style([
     ("selected", "fg:#00aabb"),
     ("separator", "fg:#555555"),
 ])
-
-VALIDATOR_SCRIPT = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "src",
-    "plan",
-    "validate_plan.py"
-)
 
 
 # ---------------------------------------------------------------------------
@@ -73,33 +112,6 @@ def discover_scenarios(location):
         f for f in os.listdir(scenario_dir)
         if f.startswith("scenario_solver_") and f.endswith(".json")
     )
-
-
-def discover_convert_scripts():
-    return sorted(
-        f for f in os.listdir(CONVERT_DIR)
-        if f.endswith(".py") and f.startswith("convert")
-    )
-
-
-def discover_convert_script_arguments(convert_script):
-    """Return the long argparse flags declared by a converter script."""
-    try:
-        with open(convert_script, encoding="utf-8") as handle:
-            tree = ast.parse(handle.read(), filename=convert_script)
-    except OSError:
-        return set()
-
-    arguments = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        if not isinstance(node.func, ast.Attribute) or node.func.attr != "add_argument":
-            continue
-        for arg in node.args:
-            if isinstance(arg, ast.Constant) and isinstance(arg.value, str) and arg.value.startswith("--"):
-                arguments.add(arg.value)
-    return arguments
 
 
 def discover_runs(location, scenario_name):
@@ -135,37 +147,38 @@ def next_run_number(location, scenario_name):
 
 
 def run_paths(location, scenario_name, run_num):
-    """Return (problem_pddl, domain_pddl, plan, eval_txt) paths for a given run."""
+    """Return (problem_pddl, domain_pddl, plan) paths for a given run."""
     d = _run_dir(location, scenario_name)
     base = os.path.join(d, f"run{run_num}")
-    return base + ".pddl", base + "_domain.pddl", base + ".plan", base + "_eval.txt"
+    return base + ".pddl", base + "_domain.pddl", base + ".plan"
+
 
 # ---------------------------------------------------------------------------
 # Pipeline steps
 # ---------------------------------------------------------------------------
 
-def run_convert(location, scenario_file, run_num, convert_script, subproblem="parking", coupling_mode="implicit_free_uncoupling"):
+def run_convert(location, scenario_file, run_num, convert_script=None):
+    if convert_script is None:
+        convert_script = CONVERT_SCRIPT
     location_dir = os.path.join(SCENARIO_INPUTS, location)
     scenario_name = scenario_file.replace(".json", "")
     problem_file, domain_file, _ = run_paths(location, scenario_name, run_num)
 
     os.makedirs(os.path.dirname(problem_file), exist_ok=True)
 
-    print(f"\n  Converting  {scenario_file}")
-    if needs_subproblem:
-        print(f"  Subproblem ->  {subproblem}")
-    if needs_coupling_mode and subproblem in ("matching", "combined"):
-        print(f"  Coupling   ->  {coupling_mode}")
+    print(f"\n  Converter   {os.path.relpath(convert_script, os.path.dirname(os.path.abspath(__file__)))}")
+    print(f"  Converting  {scenario_file}")
     print(f"  Problem    ->  {os.path.relpath(problem_file, REPO_ROOT)}")
     print(f"  Domain     ->  {os.path.relpath(domain_file, REPO_ROOT)}")
 
-    command = [PYTHON, convert_script, "-p", location_dir, "-s", scenario_file, "-o", problem_file, "-d", domain_file]
-    if needs_subproblem:
-        command.extend(["--subproblem", subproblem])
-    if needs_coupling_mode and subproblem in ("matching", "combined"):
-        command.extend(["--coupling-mode", coupling_mode])
-
-    result = subprocess.run(command, capture_output=True, text=True)
+    result = subprocess.run(
+        [PYTHON, convert_script,
+         "-p", location_dir,
+         "-s", scenario_file,
+         "-o", problem_file,
+         "-d", domain_file],
+        capture_output=True, text=True,
+    )
     if result.returncode != 0:
         print(f"  [convert ERROR]\n{result.stderr}")
         return False
@@ -173,7 +186,7 @@ def run_convert(location, scenario_file, run_num, convert_script, subproblem="pa
     return True
 
 
-def run_planner(location, scenario_name, run_num):
+def run_planner(location, scenario_name, run_num, planner_backend="enhsp"):
     problem_file, domain_file, plan_file = run_paths(location, scenario_name, run_num)
 
     if not os.path.exists(problem_file):
@@ -189,10 +202,26 @@ def run_planner(location, scenario_name, run_num):
     print(f"  Domain    {os.path.relpath(domain_file, REPO_ROOT)}\n")
     print(f"  Planner   {planner_backend}\n")
 
+    # Stream Julia output line-by-line with elapsed timestamps so slow searches are visible.
+    env = os.environ.copy()
+    if planner_backend == "enhsp":
+        jar = _find_enhsp_jar()
+        jar = False
+        if jar:
+            env["ENHSP_JAR"] = jar
+        else:
+            print("  [WARNING] ENHSP jar not found. Install with: pip install up-enhsp")
+        if "JAVA_EXE" not in env:
+            java = _find_java17()
+            if java:
+                env["JAVA_EXE"] = java
+            else:
+                print("  [WARNING] Java 17 not found. Set JAVA_HOME or install with: brew install openjdk@17")
+
     start = time.monotonic()
     process = subprocess.Popen(
-        [JULIA, PLANNER_SCRIPT, domain_file, problem_file],
-        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+        [JULIA, "--project=" + os.path.dirname(os.path.abspath(__file__)), PLANNER_SCRIPT, domain_file, problem_file, planner_backend],
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=env,
     )
     for line in process.stdout:
         elapsed = time.monotonic() - start
@@ -204,77 +233,18 @@ def run_planner(location, scenario_name, run_num):
         print("  [planner ERROR]")
         return False
 
-    # planner.jl writes to problem_file.replace(".pddl", ".plan") — that is already plan_file
+    # planner.jl writes to problem_file.replace(".pddl", ".plan"); that is already plan_file.
     if os.path.exists(plan_file):
         print(f"\n  Plan written to {os.path.relpath(plan_file, REPO_ROOT)}")
         with open(plan_file) as f:
-            steps = f.read().strip().splitlines()
+            steps = [l for l in f.read().strip().splitlines() if l.strip()]
         print(f"  Plan length: {len(steps)} steps")
+        t = 0
         for i, step in enumerate(steps, 1):
-            print(f"    {i:2}. {step}")
-    return True
-
-
-def run_evaluator(location, scenario_file, run_num):
-    scenario_name = scenario_file.replace(".json", "")
-    _, __, plan_file, eval_txt = run_paths(location, scenario_name, run_num)
-
-    scenario_path = os.path.abspath(
-        os.path.join(SCENARIO_INPUTS, location, "scenarios", scenario_file)
-    )
-    location_folder = os.path.abspath(
-        os.path.join(SCENARIO_INPUTS, location)
-    )
-    plan_file = os.path.abspath(plan_file)
-    eval_txt = os.path.abspath(eval_txt)
-
-    if not os.path.exists(plan_file):
-        print(f"  Plan file not found: {os.path.relpath(plan_file, REPO_ROOT)}")
-        print("  Run the planner first.")
-        return False
-
-    if not os.path.isdir(location_folder):
-        print(f"  Location folder not found: {location_folder}")
-        return False
-
-    if not os.path.exists(os.path.join(location_folder, "location.json")):
-        print(f"  location.json not found in: {location_folder}")
-        print("  --path_location must point to the folder containing location.json")
-        return False
-
-    if not os.path.exists(scenario_path):
-        print(f"  Scenario file not found: {scenario_path}")
-        return False
-
-    os.makedirs(os.path.dirname(eval_txt), exist_ok=True)
-
-    print(f"\n  Evaluating  {os.path.relpath(plan_file, REPO_ROOT)}")
-    print(f"  Location    {location_folder}")
-    print(f"  Scenario    {scenario_path}")
-    print(f"  Result   →  {os.path.relpath(eval_txt, REPO_ROOT)}\n")
-
-    env = os.environ.copy()
-
-
-    if eval_proc.returncode != 0:
-        print(f"  [evaluator ERROR] exit code {eval_proc.returncode}")
-
-        if eval_proc.stdout:
-            print("\n  [stdout]")
-            print(eval_proc.stdout)
-
-        if eval_proc.stderr:
-            print("\n  [stderr]")
-            print(eval_proc.stderr)
-
-        return False
-
-    print("  Evaluation passed.")
-
-    if eval_proc.stdout:
-        print(eval_proc.stdout)
-
-    print(f"  Result written to {os.path.relpath(eval_txt, REPO_ROOT)}")
+            cost = _action_cost(step)
+            t += cost
+            suffix = f"  [t={t}s]" if cost > 0 else ""
+            print(f"    {i:2}. {step}{suffix}")
     return True
 
 
@@ -314,14 +284,38 @@ def main():
     scenario_name = scenario.replace(".json", "")
     print()
 
+    planner_backend = "enhsp"
+    if action in ("Run planner", "Convert then plan"):
+        selected_planner_backend = questionary.select(
+            "Planner backend:",
+            choices=list(PLANNER_BACKEND_CHOICES.keys()),
+            style=STYLE,
+        ).ask()
+        if selected_planner_backend is None:
+            return
+        planner_backend = PLANNER_BACKEND_CHOICES[selected_planner_backend]
+
     if action in ("Convert to PDDL", "Convert then plan"):
+        converters = discover_converters()
+        if not converters:
+            print("  No converter scripts found under src/convert/")
+            return
+        selected_converter = questionary.select(
+            "Converter:",
+            choices=list(converters.keys()),
+            style=STYLE,
+        ).ask()
+        if selected_converter is None:
+            return
+        convert_script = converters[selected_converter]
+
         run_num = next_run_number(location, scenario_name)
-        ok = run_convert(location, scenario, run_num)
+        ok = run_convert(location, scenario, run_num, convert_script=convert_script)
         if not ok and action == "Convert then plan":
             print()
             return
         if action == "Convert then plan":
-            run_planner(location, scenario_name, run_num)
+            run_planner(location, scenario_name, run_num, planner_backend=planner_backend)
 
     elif action == "Run planner":
         existing = discover_runs(location, scenario_name)
@@ -330,31 +324,12 @@ def main():
             print("  Run 'Convert to PDDL' first.")
             print()
             return
-        chosen = questionary.select("Run:", choices=[f"run{n}" for n in existing], style=STYLE).ask()
-        if chosen is None:
-            return
-        run_planner(location, scenario_name, int(chosen[3:]))
-
-    elif action == "Evaluate plan":
-        existing = discover_runs(location, scenario_name)
-        if not existing:
-            print(f"  No existing runs found for {scenario_name}.")
-            print("  Run 'Convert to PDDL' and the planner first.")
-            print()
-            return
-        chosen = questionary.select("Run:", choices=[f"run{n}" for n in existing], style=STYLE).ask()
+        choices = [f"run{n}" for n in existing]
+        chosen = questionary.select("Run:", choices=choices, style=STYLE).ask()
         if chosen is None:
             return
         run_num = int(chosen[3:])
-        run_planner(location, scenario_name, run_num)
-
-    elif action == "Convert, plan, then evaluate":
-        run_num = next_run_number(location, scenario_name)
-        ok = run_convert(location, scenario, run_num)
-        if ok:
-            ok = run_planner(location, scenario_name, run_num)
-        if ok:
-            run_evaluator(location, scenario, run_num)
+        run_planner(location, scenario_name, run_num, planner_backend=planner_backend)
 
     print()
 

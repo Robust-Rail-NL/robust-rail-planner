@@ -7,13 +7,9 @@ from datetime import datetime
 import csv, time
 import subprocess
 import re
-from unified_planning.io import PDDLReader
-from unified_planning.shortcuts import OneshotPlanner
-import unified_planning as up
+import shutil
 from convert.baseline.convert import create_instance_from_scenario
 from .evaluate import evaluate
-
-up.shortcuts.get_environment().credits_stream = None  # silence per-call credits banner
 
 # PATHS
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # planning-approach
@@ -163,6 +159,23 @@ def debug_problem(problem):
             logger.info("  eff: %s", e)
             
 # PLAN INSTANCE
+def _find_enhsp_jar():
+    candidate = os.path.join(TOOLS_DIR, "planners", "enhsp", "enhsp.jar")
+    if os.path.isfile(candidate):
+        return os.path.abspath(candidate)
+    return None
+
+def _find_java():
+    java = shutil.which("java")
+    if java:
+        return java
+    java_home = os.environ.get("JAVA_HOME")
+    if java_home:
+        candidate = os.path.join(java_home, "bin", "java.exe")
+        if os.path.isfile(candidate):
+            return candidate
+    return None
+
 def plan(pddl_path, timeout=None):
     """
     Solve one PDDL instance with ENHSP.
@@ -174,28 +187,50 @@ def plan(pddl_path, timeout=None):
     plan_path = os.path.join(PLANS_DIR, os.path.splitext(rel)[0] + ".plan")
     os.makedirs(os.path.dirname(plan_path), exist_ok=True)
 
-    problem = PDDLReader().parse_problem(DOMAIN_FILE, pddl_path)
-    logger.debug("Problem kind for %s: %s", rel, problem.kind)
+    enhsp_jar = _find_enhsp_jar()
+    if not enhsp_jar:
+        logger.error("ENHSP jar not found in tools/planners/enhsp/")
+        return False, None, 0, "NO_JAR"
 
-    with OneshotPlanner(name="enhsp") as planner:
-        result = planner.solve(problem, timeout=timeout)
+    java = _find_java()
+    if not java:
+        logger.error("Java executable not found (set JAVA_HOME or add java to PATH)")
+        return False, None, 0, "NO_JAVA"
 
-    planner_status = str(result.status)
-    logger.debug("ENHSP status for %s: %s", rel, planner_status)
+    cmd = [java, "-jar", enhsp_jar, "-sp", plan_path, "-h", "hadd", "-s", "wa_star_4",
+           "-o", DOMAIN_FILE, "-f", pddl_path]
+    logger.debug("Running: %s", " ".join(cmd))
 
-    if result.plan is None:
-        logger.warning("  no plan found by ENHSP: %s", planner_status)
-        return False, None, 0, planner_status
+    timeout_sec = timeout if timeout else 300
 
-    plan_actions = list(result.plan.actions)
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True, text=True,
+            timeout=timeout_sec,
+        )
+    except subprocess.TimeoutExpired:
+        logger.warning("  ENHSP timed out for %s", rel)
+        return False, None, 0, "TIMEOUT"
 
-    with open(plan_path, "w") as f:
-        f.write("\n".join(str(a) for a in plan_actions))
+    stdout_lower = proc.stdout.lower()
 
-    logger.info("      solved by ENHSP: %d actions", len(plan_actions))
-    logger.debug("Plan written to %s", plan_path)
-
-    return True, plan_path, len(plan_actions), planner_status
+    if os.path.isfile(plan_path):
+        with open(plan_path) as f:
+            plan_lines = [l.strip() for l in f if l.strip()]
+        plan_length = len(plan_lines)
+        logger.info("      solved by ENHSP: %d actions", plan_length)
+        logger.debug("Plan written to %s", plan_path)
+        return True, plan_path, plan_length, "SOLVED"
+    elif "unsolvable" in stdout_lower:
+        logger.warning("  problem unsolvable: %s", rel)
+        return False, None, 0, "UNSOLVABLE"
+    elif "no plan" in stdout_lower or "no solution" in stdout_lower:
+        logger.warning("  no plan found: %s", rel)
+        return False, None, 0, "NO_PLAN"
+    else:
+        logger.warning("  no plan found by ENHSP (unknown reason)")
+        return False, None, 0, "UNKNOWN"
 
 def plan_with_julia(pddl_path, timeout=300):
     """Solve one PDDL instance with SymbolicPlanners.jl. Returns the plan path."""
