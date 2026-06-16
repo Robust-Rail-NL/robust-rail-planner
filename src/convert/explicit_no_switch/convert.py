@@ -240,8 +240,6 @@ parser.add_argument("--corridor-hops", type=int, default=CORRIDOR_EXPAND_HOPS,
                     help="Hops of maneuvering room around the corridor's core routes (only used with --corridor). Default: %(default)s")
 parser.add_argument("--coupling-order", action=argparse.BooleanOptionalAction, default=ENFORCE_COUPLING_ORDER,
                     help="Require exact-adjacent physical coupling order. Use --no-coupling-order for composition-only coupling. Default: %(default)s")
-parser.add_argument("--arrival-layer", action=argparse.BooleanOptionalAction, default=ENABLE_ARRIVAL_LAYER,
-                    help="Also emit the legacy arrival-train movement layer. Default: %(default)s")
 parser.add_argument("--servicing", action=argparse.BooleanOptionalAction, default=ENABLE_SERVICING,
                     help="Require trains with service tasks to be serviced at the matching facility before departing/parking. Default: %(default)s")
 
@@ -1463,7 +1461,6 @@ if __name__ == "__main__":
     ENABLE_CORRIDOR = args.corridor
     CORRIDOR_EXPAND_HOPS = args.corridor_hops
     ENFORCE_COUPLING_ORDER = args.coupling_order
-    ENABLE_ARRIVAL_LAYER = args.arrival_layer
     ENABLE_SERVICING = args.servicing
 
     # Set the domain file name
