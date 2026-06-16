@@ -1,4 +1,5 @@
 import os
+import sys
 import glob
 import logging
 import importlib.util
@@ -26,8 +27,8 @@ PLANNER_LOCATION = os.path.abspath(os.path.join(BASE_DIR, "src", "plan", "planne
 
 LOCATION_FILE = os.path.join(GENERATE_DIR, "location_solver.json")
 DOMAIN_FILE = os.path.join(BASE_DIR, "domain", "domain.pddl")
-
-# TORS_BIN = ["docker", "run", "-it", "--rm", "--mount", "type=bind,source=/Users/maytesteeghs/DSAIT/Robust-Rail-NL/planning-approach/data,target=/data", "ghcr.io/robust-rail-nl/tors:latest"]
+TOOLS_DIR = os.path.join(BASE_DIR, "tools")
+CONVERTER_SCRIPT = os.path.join(TOOLS_DIR, "convert_plan_for_tors", "converter.py")
 
 logger = logging.getLogger(__name__)
 
@@ -322,7 +323,20 @@ def run_pipeline(do_generate=False, use_examples=False):
             plan_found, plan_path, plan_length, planner_status = plan(pddl_path)
 
             if plan_found:
-                evaluation = evaluate(scenario_path, plan_path)
+                # Convert plan to TORS JSON format
+                json_path = plan_path.replace(".plan", ".json")
+                tors_scenario_path = scenario_path.replace(".json", "_tors.json")
+                logger.info("      converting plan to TORS JSON")
+                subprocess.run(
+                    [sys.executable, CONVERTER_SCRIPT,
+                     "--plan", plan_path,
+                     "--scenario", scenario_path,
+                     "--location", LOCATION_FILE,
+                     "--output", json_path,
+                     "--output-scenario", tors_scenario_path],
+                    check=True, capture_output=True, text=True
+                )
+                evaluation = evaluate(tors_scenario_path, json_path)
             else:
                 logger.warning("  skipping evaluation because no plan was found")
 
