@@ -633,6 +633,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     depart_aside_su.add_effect(astack_distance(depart_aside_su.l), astack_distance(depart_aside_su.l) + su_length(depart_aside_su.su))
     depart_aside_su.add_effect(concurrent_movements, concurrent_movements - 1)
     depart_aside_su.add_effect(allowed_to_move_su(depart_aside_su.su), False)
+    depart_aside_su.add_effect(num_of_departed_trains(), num_of_departed_trains() + 1)
     problem.add_action(depart_aside_su)
 
     depart_bside_su = up.InstantaneousAction('depart_bside_su', su=shunting_unit_type, l=track_part_type)
@@ -650,6 +651,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     depart_bside_su.add_effect(bstack_distance(depart_bside_su.l), bstack_distance(depart_bside_su.l) - su_length(depart_bside_su.su))
     depart_bside_su.add_effect(concurrent_movements, concurrent_movements - 1)
     depart_bside_su.add_effect(allowed_to_move_su(depart_bside_su.su), False)
+    depart_bside_su.add_effect(num_of_departed_trains(), num_of_departed_trains() + 1)
     problem.add_action(depart_bside_su)
 
     park = up.InstantaneousAction('park', t=arrival_train_type, l=track_part_type)
@@ -1043,6 +1045,10 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         # Initial shunting units mirror each arriving train before any split/couple action.
         shunting_unit = problem.add_object("su_" + _train_object_name(source, index, train), shunting_unit_type)
         problem.set_initial_value(active_su(shunting_unit), True)
+        # InStanding single-unit SUs must be moveable to reach the coupling track.
+        # Arrival-train SUs stay locked (su_may_move=False) to prevent wasteful exploration.
+        if source == "inStanding" and len(train["members"]) == 1:
+            problem.set_initial_value(su_may_move(shunting_unit), True)
         train_total_length = _train_total_length(train)
         problem.set_initial_value(su_length(shunting_unit), up.Real(train_total_length))
         if initial_track_id in id_to_track_part:
