@@ -12,17 +12,18 @@
 | v0.7    | 2026-05-31 | Merged routing direction model with shunting-unit split, coupling, movement, and departure |
 | v0.8    | 2026-05-27 | Cost metric: `total_cost` (seconds), move cost = 300s, `(:metric minimize (total_cost))`. Arrival timing: `has_arrived`, `entry_track_of`, `arrive`, and `wait` actions; inbound trains deferred from init |
 | v0.9    | 2026-05-27 | Coupling costs added: `uncouple` = 120s, `couple_two_units` / `couple_two_units_same_train` = 180s (from NS scenario `splitDuration`/`combineDuration`) |
+| v0.10   | 2026-06-16 | Unified shunting-unit converter: arrival-train movement layer retired; dead `couple_two_units` / `couple_two_units_same_train` removed; `outStanding` requests are parking-only; per-scenario movement corridor; servicing subproblem (`service_su`); arrival precedence (`arrive_su`); SU-layer parking (`park_su`) and `must_depart_su`; fix: `depart_aside_su` / `depart_bside_su` increment `num_of_departed_trains`. Feature flags + per-combination converter folders. See "Unified Shunting-Unit Converter" below. |
 
 ---
 
 ## Subproblems
 > Which subproblems are currently modelled
 
-- [ ] Subproblem 1 — Parking
-- [ ] Subproblem 2 — Routing
-- [ ] Subproblem 3 — Service Scheduling
-- [x] Subproblem 4 — Matching / Arrivals / Departures (partial: matching + arrival timing)
-- [ ] Subproblem 5 — Combining & Splitting
+- [x] Subproblem 1 — Parking
+- [x] Subproblem 2 — Routing
+- [x] Subproblem 3 — Service Scheduling (v0.10, opt-in via `--servicing`)
+- [x] Subproblem 4 — Matching / Arrivals / Departures (matching + arrival precedence)
+- [x] Subproblem 5 — Combining & Splitting
 
 ---
 
@@ -231,6 +232,68 @@
 
 ---
 
+## Unified Shunting-Unit Converter (v0.10)
+> Applies to `src/convert/explicit_no_switch` and `src/convert/explicit_switch`. All movement, parking, coupling, splitting, servicing and departure happen on the shunting-unit (`shuntingunit`) layer. The legacy arrival-train movement layer is retired (see flags). The `explicit_switch` variant keeps switch track parts; `explicit_no_switch` removes them and reconnects boundaries.
+
+### Feature flags
+> Each is a module constant with a matching CLI override on `convert.py` (default in parentheses). Per-combination folders set these directly.
+
+| Flag | CLI | Effect |
+|------|-----|--------|
+| `ENABLE_CORRIDOR` (True) | `--corridor` / `--no-corridor` | Restrict movement connectivity to a per-scenario corridor of relevant routes; off = full graph |
+| `CORRIDOR_EXPAND_HOPS` (2) | `--corridor-hops N` | Hops of maneuvering room kept around the corridor's core routes |
+| `CORRIDOR_EDGE_LEVEL` (False, `explicit_switch` only) | `--corridor-edges` | Keep only route edges plus maneuver edges, not every edge between corridor nodes |
+| `ENFORCE_COUPLING_ORDER` (False) | `--coupling-order` / `--no-coupling-order` | Require exact-adjacent physical coupling order; off = composition-only |
+| `ENABLE_SERVICING` (False) | `--servicing` / `--no-servicing` | Require trains with service tasks to be serviced before departing/parking |
+| `ENABLE_ARRIVAL_PRECEDENCE` (False) | `--arrival-precedence` / `--no-arrival-precedence` | Inbound trains move only in scheduled arrival order |
+| `ENABLE_ARRIVAL_LAYER` (False, locked off) | — | The redundant arrival-train movement layer is not emitted (bug fix; not a flag) |
+
+### Per-combination folders
+`src/convert/` contains a generated folder per combination of corridor / coupling-order / servicing / arrival-precedence across `no_switch` and `switch` (32 folders, e.g. `corridor_no_switch_explicit_servicing_timing`), plus a `baseline` folder (no_switch with corridor + servicing + arrival-precedence on, coupling-order off). Each folder is a copy of the base converter with the flags hardcoded; `run.py` auto-discovers them.
+
+### Shunting-unit fluents
+| Fluent | Signature | Type | Description |
+|--------|-----------|------|-------------|
+| `active_su` | `(shuntingunit)` | Bool | Whether a shunting unit currently exists physically |
+| `at_su` | `(shuntingunit, trackpart)` | Bool | Physical location of a shunting unit |
+| `su_length` | `(shuntingunit)` | Real | Total length of the shunting unit |
+| `su_aside_distance` | `(shuntingunit)` | Real | Stack position of the SU's a-side |
+| `allowed_to_move_su` | `(shuntingunit)` | Bool | Movement-session token (set by `start_move_su`, cleared by `end_move_su`/depart) |
+| `su_may_move` | `(shuntingunit)` | Bool | Whether the SU is permitted to start moving (set after split/couple; inStanding single units movable) |
+| `parked_su` | `(shuntingunit)` | Bool | SU has been parked (SU-layer parking goal); cannot move again |
+| `must_depart_su` | `(shuntingunit)` | Bool | Assembled request SU: may only depart, never re-park |
+| `contains_su` | `(shuntingunit, trainunit)` | Bool | Membership of units in a shunting unit |
+| `single_unit_su` | `(shuntingunit, trainunit)` | Bool | Marks shunting units containing exactly one unit |
+| `request_su_for_request` | `(shuntingunit, departurerequest)` | Bool | Links an assembled request SU to its outgoing request |
+| `departed_su` | `(shuntingunit)` | Bool | Marks that the SU has left the yard |
+| `coupled_to_request` | `(trainunit, departurerequest)` | Bool | Records a unit assembled into a request |
+| `serviced` | `(shuntingunit)` | Bool | Service complete (default true; false for units with tasks). `ENABLE_SERVICING` |
+| `service_allowed` | `(trackpart)` | Bool | Track has a service facility. `ENABLE_SERVICING` |
+| `facility_type` | `(trackpart, facilitytype)` | Bool | Which facility type a track provides. `ENABLE_SERVICING` |
+| `requires_facility` | `(shuntingunit, facilitytype)` | Bool | Which facility type a unit needs. `ENABLE_SERVICING` |
+| `su_has_arrived` | `(shuntingunit)` | Bool | Whether the SU's train has arrived (default true; false for in-trains). `ENABLE_ARRIVAL_PRECEDENCE` |
+| `su_previous_arrived` | `(shuntingunit)` | Bool | Whether the previous train in the arrival order has arrived. `ENABLE_ARRIVAL_PRECEDENCE` |
+| `su_arrival_immediately_before` | `(shuntingunit, shuntingunit)` | Bool | Arrival-order chain between consecutive in-trains. `ENABLE_ARRIVAL_PRECEDENCE` |
+
+### Shunting-unit actions
+- `start_move_su` / `end_move_su` — bracket a movement session (mirror of arrival-layer brackets).
+- `move_aside_empty_su` / `move_aside_occupied_su` / `move_bside_empty_su` / `move_bside_occupied_su` — SU movement.
+- `depart_aside_su` / `depart_bside_su` — depart an assembled SU; both increment `num_of_departed_trains` (v0.10 fix).
+- `depart_aside_su_for_request` / `depart_bside_su_for_request` — depart a single-unit SU for a one-unit request.
+- `park_su` — settle an SU on a parking-allowed track; counts toward `number_of_parked_trains`; blocked for `must_depart_su`.
+- `split_two_unit_su` / `split_three_unit_su` — split a multi-unit SU into single-unit SUs.
+- `couple_two_sus` — couple two single-unit SUs into a request SU; sets `must_depart_su`; physical order gated by `ENFORCE_COUPLING_ORDER`.
+- `service_su` — service an SU at a matching facility (`ENABLE_SERVICING`); `serviced` gates depart/park/couple/split.
+- `arrive_su` — admit an in-train in arrival order, unlocking the next (`ENABLE_ARRIVAL_PRECEDENCE`).
+- `match`, `uncouple` — unchanged.
+
+### Removed / retired
+- `couple_two_units` and `couple_two_units_same_train` removed: they set `request_assembled` but never activated the request SU, leaving `departed_su(request_su)` unreachable (dead-end search traps).
+- Arrival-train movement actions (`start_move`, `move_*`, `park`, `turn_*`, `depart_*`) are no longer emitted (`ENABLE_ARRIVAL_LAYER` locked off); their definitions remain as dead code for reference.
+- `outStanding` requests are parking goals only — no longer counted as departures.
+
+---
+
 ## Known Gaps / TODOs
 
 ### Gap 1 — `free` fluent is declared but never maintained
@@ -250,10 +313,9 @@
 
 ---
 
-### Gap 4 — No service subproblem (Subproblem 3)
-**What's missing:** No `service_allowed(trackpart)`, `serviced(arrivaltrain)`, or `needs_service(arrivaltrain)` fluents. No `service` action. The goal only requires `parked`, with no dependency on servicing first.
-**Impact:** Trains that require cleaning, washing, or inspection are not routed to service tracks. The planner can park them directly without any service detour.
-**Fix:** Add `service_allowed` and `serviced` fluents and a `service` action with precondition `at(t, l) ∧ service_allowed(l)` and effect `serviced(t) = true`. Add `serviced(t)` as a precondition of `park`.
+### ~~Gap 4~~ — Service subproblem (resolved in v0.10, opt-in)
+**Status:** Resolved on the shunting-unit layer behind `ENABLE_SERVICING` (`--servicing`). `service_allowed`, `facility_type`, `requires_facility`, and `serviced` fluents plus a `service_su(su, l, f)` action are added; `serviced` gates `depart_*_su`, `park_su`, `couple_two_sus`, and `split_*_su`. Facilities are read from `location_solver.json → facilities[]` (Reinigingsperron / Wasmachine / Monteur); a unit needs service when any `members[].tasks` is present.
+**Remaining:** Facility capacity (`simultaneousUsageCount`) is not yet enforced — a facility can service unlimited units at once.
 
 ---
 
