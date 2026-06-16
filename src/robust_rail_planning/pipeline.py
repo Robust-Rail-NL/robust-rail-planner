@@ -270,6 +270,7 @@ def append_result(results_file, row):
         writer = csv.DictWriter(
             f,
             fieldnames=[
+                "run_id",
                 "scenario",
                 "pddl_file",
                 "plan_file",

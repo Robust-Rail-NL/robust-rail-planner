@@ -5,4 +5,5 @@ src/generate/scenarios/
 uv.lock
 domain/
 results/
-log/
+logs/
+data/
