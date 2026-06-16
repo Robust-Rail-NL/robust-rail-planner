@@ -1,6 +1,36 @@
 using PDDL, SymbolicPlanners
 
-function plan(domain_file::String, problem_file::String, planner_backend::String, plan_file::String)
+function workspace_root()
+    return dirname(dirname(dirname(dirname(dirname(@__FILE__)))))
+end
+
+function default_enhsp_jar()
+    return joinpath(
+        workspace_root(),
+        "public",
+        "tusp-pddl-experiments-setups",
+        "ENHSP-Public",
+        "enhsp-dist",
+        "enhsp.jar",
+    )
+end
+
+function default_java()
+    microsoft_java = raw"C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot\bin\java.exe"
+    return isfile(microsoft_java) ? microsoft_java : "java"
+end
+
+function parse_args()
+    data_dir = joinpath(dirname(dirname(dirname(@__FILE__))), "data")
+    domain_file = length(ARGS) > 0 ? ARGS[1] : joinpath(data_dir, "domain.pddl")
+    problem_file = length(ARGS) > 1 ? ARGS[2] : joinpath(data_dir, "scenario_solver_example1.pddl")
+    backend = length(ARGS) > 2 ? lowercase(ARGS[3]) : "symbolic"
+    return domain_file, problem_file, backend
+end
+
+function run_symbolic_planner(domain_file, problem_file)
+    println("Planner backend: SymbolicPlanners.jl AStarPlanner(HAdd())")
+    println("Loading domain from: ", domain_file)
     domain = load_domain(domain_file)
     problem = load_problem(problem_file)
 
@@ -20,26 +50,10 @@ function plan(domain_file::String, problem_file::String, planner_backend::String
         open(plan_file, "w") do file
             write(file, join(sol.plan, '\n'))
         end
-
-        println("Plan written to: ", plan_file)
-        exit(0)
+        println("Plan written to: ", out_file)
     else
-        println("Failed to solve $(problem.name): $(sol.status)")
-        exit(2)
+        println("Failed to find a solution.")
     end
-end
-
-function run_planner()
-    if length(ARGS) < 2
-        error("Usage: julia planner.jl <domain_file> <problem_file> [planner_backend] [plan_file]")
-    end
-
-    domain_file = ARGS[1]
-    problem_file = ARGS[2]
-    planner_backend = length(ARGS) >= 3 ? ARGS[3] : "symbolic"
-    plan_file = length(ARGS) >= 4 ? ARGS[4] : replace(problem_file, ".pddl" => ".plan")
-
-    plan(domain_file, problem_file, planner_backend, plan_file)
 end
 
 run_planner()
