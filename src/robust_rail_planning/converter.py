@@ -1107,178 +1107,16 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
 
 
 # =====================================================
-# SCENARIO CONVERTER (HIP → TORS)
-# =====================================================
-
-def make_type_name(type_obj):
-    """Build a compound display name like 'SLT-4' from a type object."""
-    display = type_obj.get("displayName", "Unknown")
-    carriages = type_obj.get("carriages", "")
-    return f"{display}-{carriages}"
-
-
-def collect_type_from_member(member, type_registry):
-    """Extract type info from a HIP-format member and register it."""
-    tu = member if "trainUnit" not in member else member["trainUnit"]
-    t = tu.get("type", {})
-    type_name = make_type_name(t)
-    if type_name not in type_registry:
-        entry = {
-            "displayName": type_name,
-            "carriages": t.get("carriages", 0),
-            "length": t.get("length", 0.0),
-            "combineDuration": str(t.get("combineDuration", "180")),
-            "splitDuration": str(t.get("splitDuration", "120")),
-            "backNormTime": t.get("backNormTime", "0"),
-            "backAdditionTime": t.get("backAdditionTime", "0"),
-            "travelSpeed": "10",
-            "typePrefix": t.get("displayName", ""),
-            "needsElectricity": True,
-            "startUpTime": "0",
-            "needsLoco": False,
-            "isLoco": False,
-            "idPrefix": 0,
-        }
-        type_registry[type_name] = entry
-
-
-def convert_member_to_tors(member):
-    """Convert a HIP-format train member to TORS-format TrainUnit."""
-    tu = member if "trainUnit" not in member else member["trainUnit"]
-    tasks = member.get("tasks", [])
-    # Convert tasks to TORS format if needed
-    tors_tasks = []
-    for task in tasks:
-        tors_task = {
-            "type": task["type"],
-            "priority": task.get("priority", 1),
-            "duration": task.get("duration", "0"),
-        }
-        if "requiredSkills" in task:
-            tors_task["requiredSkills"] = task["requiredSkills"]
-        tors_tasks.append(tors_task)
-
-    return {
-        "id": str(tu.get("id", "")),
-        "typeDisplayName": make_type_name(tu.get("type", {})),
-        "tasks": tors_tasks,
-    }
-
-
-def convert_incoming_train(hip_train, type_registry):
-    """Convert a HIP-format incoming train to TORS-format train."""
-    for m in hip_train.get("members", []):
-        collect_type_from_member(m, type_registry)
-    return {
-        "time": str(hip_train.get("arrival", "0")),
-        "id": str(hip_train.get("id", "")),
-        "sideTrackPart": str(hip_train.get("entryTrackPart", "")),
-        "parkingTrackPart": str(hip_train.get("firstParkingTrackPart", "")),
-        "members": [convert_member_to_tors(m) for m in hip_train.get("members", [])],
-        "canDepartFromAnyTrack": True,
-        "standingIndex": 1.0,
-        "minimumDuration": "60",
-    }
-
-
-def convert_outgoing_train(hip_request, type_registry):
-    """Convert a HIP-format outgoing request to TORS-format train."""
-    for tu in hip_request.get("trainUnits", []):
-        collect_type_from_member({"trainUnit": {"id": tu.get("id", ""), "type": tu.get("type", {})}}, type_registry)
-    return {
-        "time": str(hip_request.get("departure", "0")),
-        "id": str(hip_request.get("displayName", "")),
-        "sideTrackPart": str(hip_request.get("leaveTrackPart", "")),
-        "parkingTrackPart": str(hip_request.get("lastParkingTrackPart", "")),
-        "members": [
-            {
-                "id": str(tu["id"]) if tu.get("id") else "****",
-                "typeDisplayName": make_type_name(tu.get("type", {})),
-                "tasks": [],
-            }
-            for tu in hip_request.get("trainUnits", [])
-        ],
-        "canDepartFromAnyTrack": False,
-        "standingIndex": 0.0,
-        "minimumDuration": "60",
-    }
-
-
-def convert_scenario_for_tors(scenario_file, location_file):
-    """Convert a HIP/Solver-format scenario to TORS-format scenario."""
-    with open(scenario_file) as f:
-        hip = json.load(f)
-
-    type_registry = {}
-
-    tors = {}
-
-    # Convert in (arriving trains)
-    in_data = hip.get("in", {})
-    if isinstance(in_data, dict):
-        tors["in"] = [convert_incoming_train(t, type_registry) for t in in_data.get("trains", [])]
-    elif isinstance(in_data, list):
-        tors["in"] = in_data  # Already in TORS format
-
-    # Convert out (departing requests)
-    out_data = hip.get("out", {})
-    if isinstance(out_data, dict):
-        tors["out"] = [convert_outgoing_train(t, type_registry) for t in out_data.get("trainRequests", [])]
-    elif isinstance(out_data, list):
-        tors["out"] = out_data  # Already in TORS format
-
-    # Convert inStanding
-    inst_data = hip.get("inStanding", {})
-    if isinstance(inst_data, dict):
-        tors["inStanding"] = [convert_incoming_train(t, type_registry) for t in inst_data.get("trains", [])]
-        # Override time to 0 for standing trains
-        for t in tors["inStanding"]:
-            t["time"] = "0"
-    elif isinstance(inst_data, list):
-        tors["inStanding"] = inst_data  # Already in TORS format
-    else:
-        tors["inStanding"] = []
-
-    # Convert outStanding
-    outst_data = hip.get("outStanding", {})
-    if isinstance(outst_data, dict):
-        tors["outStanding"] = [convert_outgoing_train(t, type_registry) for t in outst_data.get("trainRequests", [])]
-        # Override time to 0 for standing trains
-        for t in tors["outStanding"]:
-            t["time"] = "0"
-    elif isinstance(outst_data, list):
-        tors["outStanding"] = outst_data  # Already in TORS format
-    else:
-        tors["outStanding"] = []
-
-    # Build trainUnitTypes from collected type registry
-    tors["trainUnitTypes"] = list(type_registry.values())
-
-    # Top-level fields
-    tors["startTime"] = str(hip.get("startTime", "0"))
-    tors["endTime"] = str(hip.get("endTime", "0"))
-
-    # Optional fields with empty defaults
-    tors["nonServiceTraffic"] = hip.get("nonServiceTraffic", [])
-    tors["disabledTrackPart"] = hip.get("disabledTrackPart", [])
-    tors["workers"] = hip.get("workers", [])
-
-    return tors
-
-
-# =====================================================
 # MAIN
 # =====================================================
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Convert PDDL plans and scenarios to TORS JSON format")
+    parser = argparse.ArgumentParser(description="Convert PDDL plans to TORS JSON format")
     parser.add_argument("--plan", required=True, help="Path to the .plan file")
     parser.add_argument("--scenario", required=True, help="Path to the scenario JSON file")
     parser.add_argument("--location", required=True, help="Path to the location JSON file")
     parser.add_argument("--output", required=True, help="Path to write the output plan JSON")
-    parser.add_argument("--output-scenario", required=False, default=None,
-                        help="Path to write the TORS-format scenario JSON (optional)")
     args = parser.parse_args()
 
     result = convert_plan(args.plan, args.scenario, args.location)
@@ -1287,9 +1125,3 @@ if __name__ == "__main__":
         json.dump(result, f, indent=4)
 
     print("Plan JSON generated:", args.output)
-
-    if args.output_scenario:
-        tors_scenario = convert_scenario_for_tors(args.scenario, args.location)
-        with open(args.output_scenario, "w") as f:
-            json.dump(tors_scenario, f, indent=4)
-        print("Scenario JSON generated:", args.output_scenario)
