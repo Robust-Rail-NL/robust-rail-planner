@@ -3,9 +3,11 @@ Manifest.toml
 .idea/
 src/generate/scenarios/
 uv.lock
-domain/
-results/
-logs/
-data/
+/domain
+/results
+/logs
+/data
 tools/planners/
 src/robust_rail_planning.egg-info
+/data
+/data
