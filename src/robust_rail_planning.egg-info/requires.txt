@@ -1,0 +1,4 @@
+unified-planning[enhsp]==1.3.0
+questionary
+protobuf<4.0
+setuptools<82

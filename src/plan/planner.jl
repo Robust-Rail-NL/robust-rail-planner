@@ -7,17 +7,29 @@ end
 function default_enhsp_jar()
     return joinpath(
         workspace_root(),
-        "public",
-        "tusp-pddl-experiments-setups",
-        "ENHSP-Public",
-        "enhsp-dist",
+        "Robust-Rail-NL",
+        "planning-approach",
+        "tools",
+        "planners",
+        "enhsp",
         "enhsp.jar",
     )
 end
 
 function default_java()
-    microsoft_java = raw"C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot\bin\java.exe"
-    return isfile(microsoft_java) ? microsoft_java : "java"
+    # Standard cross-platform mechanism
+    if haskey(ENV, "JAVA_HOME")
+        exe = Sys.iswindows() ? "java.exe" : "java"
+        candidate = joinpath(ENV["JAVA_HOME"], "bin", exe)
+        isfile(candidate) && return candidate
+    end
+    # Known hardcoded paths for common setups
+    for path in [raw"C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot\bin\java.exe",
+                 "/opt/homebrew/opt/openjdk@17/bin/java",
+                 "/usr/local/opt/openjdk@17/bin/java"]
+        isfile(path) && return path
+    end
+    return "java"
 end
 
 function parse_args()
@@ -64,7 +76,7 @@ function run_enhsp_planner(domain_file, problem_file)
         error("ENHSP jar not found: $(enhsp_jar)")
     end
 
-    command = `$(java) -jar $(enhsp_jar) -sp $(plan_file) -h hmax -s wa_star_4 -o $(domain_file) -f $(problem_file)`
+    command = `$(java) -jar $(enhsp_jar) -sp $(plan_file) -h hadd -s wa_star_4 -o $(domain_file) -f $(problem_file)`
     println("Running: ", command)
     run(command)
 

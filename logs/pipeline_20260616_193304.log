@@ -1,0 +1,36 @@
+2026-06-16 19:33:04,941 INFO    robust_rail_planning.pipeline:85: Log file: C:\Users\Tycho\Desktop\SchoolTU\Year4\q4\Robust-Rail-NL\planning-approach\logs\pipeline_20260616_193304.log
+2026-06-16 19:33:04,944 INFO    robust_rail_planning.pipeline:299: Found 1 scenarios
+2026-06-16 19:33:04,944 INFO    robust_rail_planning.pipeline:300: Appending results to C:\Users\Tycho\Desktop\SchoolTU\Year4\q4\Robust-Rail-NL\planning-approach\results\plans.csv
+2026-06-16 19:33:04,945 INFO    robust_rail_planning.pipeline:308: 
+2026-06-16 19:33:04,945 INFO    robust_rail_planning.pipeline:309: [1/1] scenario_solver_example2.json
+2026-06-16 19:33:05,079 DEBUG   root:585: Problem file written to: C:\Users\Tycho\Desktop\SchoolTU\Year4\q4\Robust-Rail-NL\planning-approach\data\examples\scenario_solver_example2.pddl
+2026-06-16 19:33:05,102 DEBUG   root:596: Domain file written to: C:\Users\Tycho\Desktop\SchoolTU\Year4\q4\Robust-Rail-NL\planning-approach\domain\domain.pddl
+2026-06-16 19:33:05,102 INFO    root:140:       converted scenario to PDDL
+2026-06-16 19:33:05,726 DEBUG   robust_rail_planning.pipeline:177: Problem kind for examples\scenario_solver_example2.pddl: PROBLEM_CLASS: ['ACTION_BASED']
+PROBLEM_TYPE: ['GENERAL_NUMERIC_PLANNING']
+CONDITIONS_KIND: ['EQUALITIES', 'NEGATIVE_CONDITIONS']
+EFFECTS_KIND: ['FLUENTS_IN_NUMERIC_ASSIGNMENTS']
+TYPING: ['FLAT_TYPING']
+FLUENTS_TYPE: ['REAL_FLUENTS']
+2026-06-16 19:33:08,017 DEBUG   robust_rail_planning.pipeline:183: ENHSP status for examples\scenario_solver_example2.pddl: PlanGenerationResultStatus.SOLVED_SATISFICING
+2026-06-16 19:33:08,018 INFO    robust_rail_planning.pipeline:194:       solved by ENHSP: 8 actions
+2026-06-16 19:33:08,019 DEBUG   robust_rail_planning.pipeline:195: Plan written to C:\Users\Tycho\Desktop\SchoolTU\Year4\q4\Robust-Rail-NL\scenario-planning-inputs\Location_KleineBinckhorst\plans\examples\scenario_solver_example2.plan
+2026-06-16 19:33:08,019 INFO    robust_rail_planning.evaluate:82:       evaluating plan with TORS and storing result
+2026-06-16 19:33:08,020 DEBUG   robust_rail_planning.evaluate:83: TORS command: docker run --rm --mount type=bind,source=C:\Users\Tycho\Desktop\SchoolTU\Year4\q4\Robust-Rail-NL,target=/data ghcr.io/robust-rail-nl/tors:latest --mode EVAL_AND_STORE --path_location /data/scenario-planning-inputs/Location_KleineBinckhorst --path_scenario /data/scenario-planning-inputs/Location_KleineBinckhorst/scenarios/scenario_solver_example2.json --path_plan /data/scenario-planning-inputs/Location_KleineBinckhorst/plans/examples/scenario_solver_example2.plan --path_eval_result /data/planning-approach/data/tors_eval_results/scenario_solver_example2__scenario_solver_example2__evaluation_results.txt --plan_type Solver
+2026-06-16 19:33:08,188 INFO    robust_rail_planning.evaluate:94: TORS output:
+failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine; check if the path is correct and if the daemon is running: open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.
+
+2026-06-16 19:33:08,189 ERROR   robust_rail_planning.pipeline:330:   failed unexpectedly
+Traceback (most recent call last):
+  File "C:\Users\Tycho\Desktop\SchoolTU\Year4\q4\Robust-Rail-NL\planning-approach\src\robust_rail_planning\pipeline.py", line 324, in run_pipeline
+    evaluation = evaluate(scenario_path, plan_path)
+  File "C:\Users\Tycho\Desktop\SchoolTU\Year4\q4\Robust-Rail-NL\planning-approach\src\robust_rail_planning\evaluate.py", line 97, in evaluate
+    raise RuntimeError(
+RuntimeError: TORS evaluation failed with exit code 1
+
+Command was:
+docker run --rm --mount type=bind,source=C:\Users\Tycho\Desktop\SchoolTU\Year4\q4\Robust-Rail-NL,target=/data ghcr.io/robust-rail-nl/tors:latest --mode EVAL_AND_STORE --path_location /data/scenario-planning-inputs/Location_KleineBinckhorst --path_scenario /data/scenario-planning-inputs/Location_KleineBinckhorst/scenarios/scenario_solver_example2.json --path_plan /data/scenario-planning-inputs/Location_KleineBinckhorst/plans/examples/scenario_solver_example2.plan --path_eval_result /data/planning-approach/data/tors_eval_results/scenario_solver_example2__scenario_solver_example2__evaluation_results.txt --plan_type Solver
+
+Output was:
+failed to connect to the docker API at npipe:////./pipe/dockerDesktopLinuxEngine; check if the path is correct and if the daemon is running: open //./pipe/dockerDesktopLinuxEngine: The system cannot find the file specified.
+
