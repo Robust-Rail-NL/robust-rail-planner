@@ -8,3 +8,4 @@ results/
 logs/
 data/
 tools/planners/
+src/robust_rail_planning.egg-info
