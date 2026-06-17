@@ -745,7 +745,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                 track_lookup,
                 unit_lookup
             )
-            exit_action["shuntingUnit"]["standingType"] = "OutStanding"
+            exit_action["shuntingUnit"]["standingType"] = ""
             actions.append(exit_action)
             continue
 
@@ -964,7 +964,7 @@ def convert_plan(plan_file, scenario_file, location_file):
             su.pop("parentIDs", None)
         if not su.get("childIDs", []):
             su.pop("childIDs", None)
-        if not su.get("standingType", ""):
+        if su.get("standingType") is None:
             su.pop("standingType", None)
         if not a.get("trainUnitIds", []):
             a.pop("trainUnitIds", None)

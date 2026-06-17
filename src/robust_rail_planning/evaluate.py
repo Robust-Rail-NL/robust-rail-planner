@@ -76,6 +76,7 @@ def evaluate(scenario_path, plan_path):
         "--path_scenario", to_container_path(scenario_path),
         "--path_plan", to_container_path(plan_path),
         "--path_eval_result", to_container_path(eval_result_path),
+        "--departure_delay", "100000",
         "--plan_type", "Solver",
     ]
 
