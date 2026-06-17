@@ -24,7 +24,7 @@ PLANNER_LOCATION = os.path.abspath(os.path.join(BASE_DIR, "src", "plan", "planne
 LOCATION_FILE = os.path.join(GENERATE_DIR, "location_solver.json")
 DOMAIN_FILE = os.path.join(BASE_DIR, "domain", "domain.pddl")
 TOOLS_DIR = os.path.join(BASE_DIR, "tools")
-CONVERTER_SCRIPT = os.path.join(TOOLS_DIR, "convert_plan_for_tors", "converter.py")
+CONVERTER_SCRIPT = os.path.join(os.path.dirname(__file__), "converter.py")
 
 logger = logging.getLogger(__name__)
 
@@ -179,6 +179,7 @@ def _find_java():
 def plan(pddl_path, timeout=None):
     """
     Solve one PDDL instance with ENHSP.
+    Tries the local ENHSP jar first, falls back to unified-planning OneshotPlanner.
 
     Returns:
         tuple: (plan_found, plan_path, plan_length, planner_status)
@@ -188,49 +189,73 @@ def plan(pddl_path, timeout=None):
     os.makedirs(os.path.dirname(plan_path), exist_ok=True)
 
     enhsp_jar = _find_enhsp_jar()
-    if not enhsp_jar:
-        logger.error("ENHSP jar not found in tools/planners/enhsp/")
-        return False, None, 0, "NO_JAR"
-
     java = _find_java()
-    if not java:
-        logger.error("Java executable not found (set JAVA_HOME or add java to PATH)")
-        return False, None, 0, "NO_JAVA"
 
-    cmd = [java, "-jar", enhsp_jar, "-sp", plan_path, "-h", "hadd", "-s", "wa_star_4",
-           "-o", DOMAIN_FILE, "-f", pddl_path]
-    logger.debug("Running: %s", " ".join(cmd))
+    if enhsp_jar and java:
+        cmd = [java, "-jar", enhsp_jar, "-sp", plan_path, "-h", "hadd", "-s", "wa_star_4",
+               "-o", DOMAIN_FILE, "-f", pddl_path]
+        logger.debug("Running: %s", " ".join(cmd))
 
-    timeout_sec = timeout if timeout else 300
+        timeout_sec = timeout if timeout else 300
 
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True, text=True,
+                timeout=timeout_sec,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("  ENHSP timed out for %s", rel)
+            return False, None, 0, "TIMEOUT"
+
+        stdout_lower = proc.stdout.lower()
+
+        if os.path.isfile(plan_path):
+            with open(plan_path) as f:
+                plan_lines = [l.strip() for l in f if l.strip()]
+            plan_length = len(plan_lines)
+            logger.info("      solved by ENHSP: %d actions", plan_length)
+            logger.debug("Plan written to %s", plan_path)
+            return True, plan_path, plan_length, "SOLVED"
+        elif "unsolvable" in stdout_lower:
+            logger.warning("  problem unsolvable: %s", rel)
+            return False, None, 0, "UNSOLVABLE"
+        elif "no plan" in stdout_lower or "no solution" in stdout_lower:
+            logger.warning("  no plan found: %s", rel)
+            return False, None, 0, "NO_PLAN"
+        else:
+            logger.warning("  no plan found by ENHSP (unknown reason)")
+            return False, None, 0, "UNKNOWN"
+
+    # Fallback: use unified-planning's OneshotPlanner
+    logger.info("  local ENHSP jar not available, falling back to OneshotPlanner")
     try:
-        proc = subprocess.run(
-            cmd,
-            capture_output=True, text=True,
-            timeout=timeout_sec,
-        )
-    except subprocess.TimeoutExpired:
-        logger.warning("  ENHSP timed out for %s", rel)
-        return False, None, 0, "TIMEOUT"
+        from unified_planning.io import PDDLReader
+        from unified_planning.shortcuts import OneshotPlanner
 
-    stdout_lower = proc.stdout.lower()
+        reader = PDDLReader()
+        problem = reader.parse_problem(DOMAIN_FILE, pddl_path)
+        timeout_sec = timeout if timeout else 300
 
-    if os.path.isfile(plan_path):
-        with open(plan_path) as f:
-            plan_lines = [l.strip() for l in f if l.strip()]
-        plan_length = len(plan_lines)
-        logger.info("      solved by ENHSP: %d actions", plan_length)
-        logger.debug("Plan written to %s", plan_path)
-        return True, plan_path, plan_length, "SOLVED"
-    elif "unsolvable" in stdout_lower:
-        logger.warning("  problem unsolvable: %s", rel)
-        return False, None, 0, "UNSOLVABLE"
-    elif "no plan" in stdout_lower or "no solution" in stdout_lower:
-        logger.warning("  no plan found: %s", rel)
-        return False, None, 0, "NO_PLAN"
-    else:
-        logger.warning("  no plan found by ENHSP (unknown reason)")
-        return False, None, 0, "UNKNOWN"
+        with OneshotPlanner(name="enhsp") as planner:
+            result = planner.solve(problem, timeout=timeout_sec)
+
+        if result.plan:
+            os.makedirs(os.path.dirname(plan_path), exist_ok=True)
+            with open(plan_path, "w") as f:
+                f.write(str(result.plan))
+            plan_lines = str(result.plan).strip().split("\n")
+            plan_length = len([l for l in plan_lines if l.strip()])
+            logger.info("      solved by OneshotPlanner: %d actions", plan_length)
+            logger.debug("Plan written to %s", plan_path)
+            return True, plan_path, plan_length, "SOLVED"
+        else:
+            logger.warning("  no plan found by OneshotPlanner: %s", rel)
+            return False, None, 0, "UNSOLVABLE" if result.status == "UNSOLVABLE" else "NO_PLAN"
+
+    except Exception as exc:
+        logger.error("  OneshotPlanner failed: %s", exc)
+        return False, None, 0, "NO_PLANNER"
 
 def plan_with_julia(pddl_path, timeout=300):
     """Solve one PDDL instance with SymbolicPlanners.jl. Returns the plan path."""
@@ -360,15 +385,14 @@ def run_pipeline(do_generate=False, use_examples=False):
             if plan_found:
                 # Convert plan to TORS JSON format
                 json_path = plan_path.replace(".plan", ".json")
-                tors_scenario_path = scenario_path.replace(".json", "_tors.json")
+                tors_scenario_path = scenario_path.replace("scenario_solver_", "scenario_")
                 logger.info("      converting plan to TORS JSON")
                 subprocess.run(
                     [sys.executable, CONVERTER_SCRIPT,
                      "--plan", plan_path,
                      "--scenario", scenario_path,
                      "--location", LOCATION_FILE,
-                     "--output", json_path,
-                     "--output-scenario", tors_scenario_path],
+                     "--output", json_path],
                     check=True, capture_output=True, text=True
                 )
                 evaluation = evaluate(tors_scenario_path, json_path)
