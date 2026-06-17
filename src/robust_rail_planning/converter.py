@@ -9,38 +9,36 @@ from pathlib import Path
 # REGEX
 # =====================================================
 
-START_RE = re.compile(r"start_move\(([^)]+)\)")
-START_MOVE_SU_RE = re.compile(r"start_move_su\(([^)]+)\)")
-END_RE = re.compile(r"end_move\(([^,]+),\s*([^)]+)\)")
-END_MOVE_SU_RE = re.compile(r"end_move_su\(([^,]+),\s*([^)]+)\)")
-MOVE_RE = re.compile(
-    r"move_(?:aside|bside)_(?:empty|occupied)\(([^,]+),\s*([^,]+),\s*([^)]+)\)"
-)
+# PDDL plan format: (action_name arg1 arg2 ...)
+SINGLE_ARG = r"\(([\w_]+) ([^)]+)\)"
+DOUBLE_ARG = r"\(([\w_]+) ([^ ]+) ([^)]+)\)"
+TRIPLE_ARG = r"\(([\w_]+) ([^ ]+) ([^ ]+) ([^)]+)\)"
+
+START_MOVE_SU_RE = re.compile(r"\(start_move_su ([^)]+)\)")
+END_MOVE_SU_RE = re.compile(r"\(end_move_su ([^ ]+) ([^)]+)\)")
 MOVE_SU_RE = re.compile(
-    r"move_(?:aside|bside)_(?:empty|occupied)_su\(([^,]+),\s*([^,]+),\s*([^)]+)\)"
+    r"\(move_(?:aside|bside)_(?:empty|occupied)_su ([^ ]+) ([^ ]+) ([^)]+)\)"
 )
-PARK_RE = re.compile(r"park\(([^,]+),\s*([^)]+)\)")
-PARK_SU_RE = re.compile(r"park_su\(([^,]+),\s*([^)]+)\)")
-DEPART_RE = re.compile(r"depart_(?:aside|bside)\(([^,]+),\s*([^)]+)\)")
-DEPART_SU_RE = re.compile(r"depart_(?:aside|bside)_su\(([^,]+),\s*([^)]+)\)")
+PARK_SU_RE = re.compile(r"\(park_su ([^ ]+) ([^)]+)\)")
+DEPART_SU_RE = re.compile(r"\(depart_(?:aside|bside)_su ([^ ]+) ([^)]+)\)")
 DEPART_SU_FOR_REQUEST_RE = re.compile(
-    r"depart_(?:aside|bside)_su_for_request\(([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^)]+)\)"
+    r"\(depart_(?:aside|bside)_su_for_request ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^)]+)\)"
 )
 
-# New regex patterns for coupling/uncoupling/service actions
+# Coupling / splitting / service / match
 COUPLE_RE = re.compile(
-    r"couple_two_sus\(([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^)]+)\)"
+    r"\(couple_two_sus ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^)]+)\)"
 )
 SPLIT_TWO_RE = re.compile(
-    r"split_two_unit_su\(([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^)]+)\)"
+    r"\(split_two_unit_su ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^)]+)\)"
 )
 SPLIT_THREE_RE = re.compile(
-    r"split_three_unit_su\(([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^,]+),\s*([^)]+)\)"
+    r"\(split_three_unit_su ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^)]+)\)"
 )
-SERVICE_RE = re.compile(r"service_su\(([^,]+),\s*([^,]+),\s*([^)]+)\)")
-MATCH_RE = re.compile(r"match\(([^,]+),\s*([^)]+)\)")
-ARRIVE_SU_RE = re.compile(r"arrive_su\(([^)]+)\)")
-UNCOUPLE_RE = re.compile(r"uncouple\(([^,]+),\s*([^)]+)\)")
+SERVICE_RE = re.compile(r"\(service_su ([^ ]+) ([^ ]+) ([^)]+)\)")
+MATCH_RE = re.compile(r"\(match ([^ ]+) ([^)]+)\)")
+ARRIVE_SU_RE = re.compile(r"\(arrive_su ([^)]+)\)")
+UNCOUPLE_RE = re.compile(r"\(uncouple ([^ ]+) ([^)]+)\)")
 
 
 MOVE_DURATION = 600
@@ -387,7 +385,7 @@ def create_split_action(train_id, child_ids, start, end, location,
 
 
 def create_service_action(train_id, start, end, location, facility_id,
-                          train_lookup, unit_lookup=None):
+                          facility_type, train_lookup, unit_lookup=None):
     """Create a Service action"""
     shunting_unit = make_shunting_unit(train_id, train_lookup, unit_lookup)
 
@@ -395,7 +393,7 @@ def create_service_action(train_id, start, end, location, facility_id,
         "startTime": str(start),
         "endTime": str(end),
         "taskType": {
-            "other": "Reinigingsperron"  # You might want to make this dynamic
+            "other": facility_type
         },
         "shuntingUnit": shunting_unit,
         "location": location,
@@ -567,7 +565,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         # --------------------------------
         # START MOVE / START MOVE SU
         # --------------------------------
-        m = START_RE.match(line) or START_MOVE_SU_RE.match(line)
+        m = START_MOVE_SU_RE.match(line)
         if m:
             train = m.group(1)
             active_trains[train] = {
@@ -604,7 +602,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         # --------------------------------
         # MOVE / MOVE SU
         # --------------------------------
-        m = MOVE_RE.match(line) or MOVE_SU_RE.match(line)
+        m = MOVE_SU_RE.match(line)
         if m:
             train, from_track, to_track = m.groups()
             
@@ -628,7 +626,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         # --------------------------------
         # END MOVE / END MOVE SU
         # --------------------------------
-        m = END_RE.match(line) or END_MOVE_SU_RE.match(line)
+        m = END_MOVE_SU_RE.match(line)
         if m:
             train, track = m.groups()
             
@@ -662,7 +660,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         # --------------------------------
         # PARK / PARK SU
         # --------------------------------
-        m = PARK_RE.match(line) or PARK_SU_RE.match(line)
+        m = PARK_SU_RE.match(line)
         if m:
             train, track = m.groups()
             track_id = convert_track(track, track_lookup)["trackPartId"]
@@ -708,7 +706,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         # --------------------------------
         # DEPART / DEPART SU / DEPART SU FOR REQUEST
         # --------------------------------
-        m = DEPART_RE.match(line) or DEPART_SU_RE.match(line) or DEPART_SU_FOR_REQUEST_RE.match(line)
+        m = DEPART_SU_RE.match(line) or DEPART_SU_FOR_REQUEST_RE.match(line)
         if m:
             groups = m.groups()
             train = groups[0]
@@ -836,7 +834,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         # --------------------------------
         m = SERVICE_RE.match(line)
         if m:
-            su_id, track, facility = m.groups()
+            su_id, track, pddl_facility = m.groups()
             
             track_id = convert_track(track, track_lookup)["trackPartId"]
             
@@ -860,12 +858,17 @@ def convert_plan(plan_file, scenario_file, location_file):
                 train_locations[su_id] = track_id
                 del active_trains[su_id]
             
-            # Find facility ID from location
-            facility_id = "72"  # Default Reinigingsperron ID
-            
-            # Look up facility ID from location data
+            # Look up facility by track part AND PDDL facility type name
+            pddl_facility_lower = pddl_facility.lower()
+            facility_type_task = pddl_facility  # fallback: use PDDL name as-is
+            facility_id = ""
             for fac in location.get("facilities", []):
-                if track_id in [str(tp) for tp in fac.get("relatedTrackParts", [])]:
+                fac_type_lower = fac["type"].lower()
+                is_type_match = fac_type_lower == pddl_facility_lower
+                is_track_match = track_id in [str(tp) for tp in fac.get("relatedTrackParts", [])]
+                if is_type_match or is_track_match:
+                    if fac.get("taskTypes"):
+                        facility_type_task = fac["taskTypes"][0].get("other", pddl_facility)
                     facility_id = fac["id"]
                     break
             
@@ -882,6 +885,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                 end_time,
                 track_id,
                 facility_id,
+                facility_type_task,
                 train_lookup,
                 unit_lookup
             )
