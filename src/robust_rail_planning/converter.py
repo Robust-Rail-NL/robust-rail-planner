@@ -154,7 +154,7 @@ def build_track_lookup(location):
         planner_key = "o_" + track_name.lower()
         
         lookup[planner_key] = {
-            "name": track_name,
+            "name": track["id"],
             "trackPartId": track["id"]
         }
         
@@ -162,7 +162,7 @@ def build_track_lookup(location):
         if "sein" in track_name.lower():
             planner_key = track_name.lower()
             lookup[planner_key] = {
-                "name": track_name,
+                "name": track["id"],
                 "trackPartId": track["id"]
             }
 
@@ -172,7 +172,7 @@ def build_track_lookup(location):
 def build_track_id_lookup(location):
     """Build reverse lookup from track ID to track info"""
     return {
-        tp["id"]: {"name": tp["name"], "trackPartId": tp["id"]}
+        tp["id"]: {"name": tp["id"], "trackPartId": tp["id"]}
         for tp in location["trackParts"]
     }
 
@@ -227,7 +227,11 @@ def make_shunting_unit(train_id, train_lookup, unit_lookup=None, members=None):
 def convert_track(track_name, track_lookup):
     """Convert track name to track info"""
     if track_name in track_lookup:
-        return track_lookup[track_name]
+        info = track_lookup[track_name]
+        return {
+            "name": info["trackPartId"],
+            "trackPartId": info["trackPartId"]
+        }
 
     cleaned = track_name.replace("o_", "")
     return {
@@ -246,7 +250,9 @@ def create_move_action(train_id, start, end, path,
             "trackPartId": p
         }))
 
-    location = resources[-1]["trackPartId"]
+    location = resources[0]["trackPartId"]
+    # Remove start track from resources (it's already captured in location)
+    resources = resources[1:]
     shunting_unit = make_shunting_unit(train_id, train_lookup, unit_lookup)
 
     return {
@@ -434,6 +440,7 @@ def build_switch_sets(location):
 def get_all_aside(track_part, switch_like_ids, id_to_tp):
     neighbors = set()
     for nb_id in track_part.get("aSide", []):
+        nb_id = str(nb_id)
         if nb_id in switch_like_ids:
             neighbors.update(
                 get_all_aside(id_to_tp[nb_id], switch_like_ids, id_to_tp)
@@ -446,6 +453,7 @@ def get_all_aside(track_part, switch_like_ids, id_to_tp):
 def get_all_bside(track_part, switch_like_ids, id_to_tp):
     neighbors = set()
     for nb_id in track_part.get("bSide", []):
+        nb_id = str(nb_id)
         if nb_id in switch_like_ids:
             neighbors.update(
                 get_all_bside(id_to_tp[nb_id], switch_like_ids, id_to_tp)
