@@ -151,20 +151,18 @@ def build_track_lookup(location):
 
     for track in location["trackParts"]:
         track_name = track["name"]
-        planner_key = "o_" + track_name.lower()
+        name_lower = track_name.lower()
         
-        lookup[planner_key] = {
+        lookup["o_" + name_lower] = {
             "name": track["id"],
             "trackPartId": track["id"]
         }
         
-        # Handle special names like Sein70
-        if "sein" in track_name.lower():
-            planner_key = track_name.lower()
-            lookup[planner_key] = {
-                "name": track["id"],
-                "trackPartId": track["id"]
-            }
+        # Also add bare name for tracks referenced without "o_" prefix (e.g. stootblok906b)
+        lookup[name_lower] = {
+            "name": track["id"],
+            "trackPartId": track["id"]
+        }
 
     return lookup
 
@@ -965,22 +963,21 @@ def convert_plan(plan_file, scenario_file, location_file):
             if not su.get("childIDs", []):
                 su["childIDs"] = su_fill[sid]["childIDs"]
 
-    # Clean up empty fields that TORS protobuf parser may choke on
+    # Ensure empty array fields are present for protobuf parser
     for a in actions:
         su = a["shuntingUnit"]
-        if not su.get("parentIDs", []):
-            su.pop("parentIDs", None)
-        if not su.get("childIDs", []):
-            su.pop("childIDs", None)
-        if su.get("standingType") is None:
-            su.pop("standingType", None)
-        if not a.get("trainUnitIds", []):
-            a.pop("trainUnitIds", None)
-        if not a.get("resources", []):
-            a.pop("resources", None)
+        if not su.get("parentIDs"):
+            su["parentIDs"] = []
+        if not su.get("childIDs"):
+            su["childIDs"] = []
+        if a.get("trainUnitIds") is None:
+            a["trainUnitIds"] = []
+        if a.get("resources") is None:
+            a["resources"] = []
 
     return {
         "actions": actions,
+        "trackParts": [],
     }
 
 
