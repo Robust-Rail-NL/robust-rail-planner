@@ -37,7 +37,7 @@ SPLIT_THREE_RE = re.compile(
 )
 SERVICE_RE = re.compile(r"\(service_su ([^ ]+) ([^ ]+) ([^)]+)\)")
 MATCH_RE = re.compile(r"\(match ([^ ]+) ([^)]+)\)")
-ARRIVE_SU_RE = re.compile(r"\(arrive_su ([^)]+)\)")
+ARRIVE_SU_RE = re.compile(r"\(arrive_su ([^ ]+) ([^)]+)\)")
 UNCOUPLE_RE = re.compile(r"\(uncouple ([^ ]+) ([^)]+)\)")
 
 
@@ -569,15 +569,9 @@ def convert_plan(plan_file, scenario_file, location_file):
         m = ARRIVE_SU_RE.match(line)
         if m:
             su_id = m.group(1)
+            track = m.group(2)
             train_arrival_times[su_id] = current_time
-            
-            # Look up entry track from scenario if not already known
-            if su_id not in train_locations:
-                stripped_id = su_id[3:] if su_id.startswith("su_") else su_id
-                for train in scenario.get("in", {}).get("trains", []):
-                    if str(train.get("id")) == stripped_id and "entryTrackPart" in train:
-                        train_locations[su_id] = str(train["entryTrackPart"])
-                        break
+            train_locations[su_id] = track
             continue
 
         # --------------------------------

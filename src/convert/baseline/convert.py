@@ -560,6 +560,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         su_has_arrived = problem.add_fluent(up.Fluent("su_has_arrived", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=True)
         su_previous_arrived = problem.add_fluent(up.Fluent("su_previous_arrived", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
         su_arrival_immediately_before = problem.add_fluent(up.Fluent("su_arrival_immediately_before", up.BoolType(), first=shunting_unit_type, second=shunting_unit_type), default_initial_value=False)
+        su_arrival_track = problem.add_fluent(up.Fluent("su_arrival_track", up.BoolType(), shunting_unit=shunting_unit_type, trackpart=track_part_type), default_initial_value=False)
 
     # --- Servicing subproblem (gated). Trains carrying cleaning/washing/inspection tasks must
     # be serviced at the matching facility before they may depart or park. `serviced` defaults
@@ -598,11 +599,20 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     problem.add_action(startMoveSu)
 
     if ENABLE_ARRIVAL_PRECEDENCE:
-        arrive_su = up.InstantaneousAction('arrive_su', su=shunting_unit_type)
+        arrive_su = up.InstantaneousAction('arrive_su', su=shunting_unit_type, l=track_part_type)
         arrive_su.add_precondition(active_su(arrive_su.su))
         arrive_su.add_precondition(up.Not(su_has_arrived(arrive_su.su)))
         arrive_su.add_precondition(su_previous_arrived(arrive_su.su))
+        arrive_su.add_precondition(su_arrival_track(arrive_su.su, arrive_su.l))
+        arrive_su.add_precondition(up.Equals(number_of_trains_on_track(arrive_su.l), 0))
+        arrive_su.add_precondition(up.Equals(concurrent_movements, 0))
+        arrive_su.add_precondition(su_length(arrive_su.su) <= track_length(arrive_su.l))
         arrive_su.add_effect(su_has_arrived(arrive_su.su), True)
+        arrive_su.add_effect(at_su(arrive_su.su, arrive_su.l), True)
+        arrive_su.add_effect(number_of_trains_on_track(arrive_su.l), 1)
+        arrive_su.add_effect(bstack_distance(arrive_su.l), su_length(arrive_su.su))
+        arrive_su.add_effect(astack_distance(arrive_su.l), 0)
+        arrive_su.add_effect(su_aside_distance(arrive_su.su), 0)
         next_su = up.Variable("next_su", shunting_unit_type)
         arrive_su.add_effect(fluent=su_previous_arrived(next_su), value=True, condition=su_arrival_immediately_before(arrive_su.su, next_su), forall=[next_su])
         problem.add_action(arrive_su)
@@ -1286,8 +1296,9 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         previous_length_on_track = track_occupancies.get(initial_track_id, Fraction(0))
         problem.set_initial_value(aside_distance(arrival_train), up.Real(previous_length_on_track))
         train_initial_aside[_train_object_name("in", index, train)] = previous_length_on_track
-        track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
-        track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
+        if not ENABLE_ARRIVAL_PRECEDENCE:
+            track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
+            track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
         problem.set_initial_value(direction_train(arrival_train), determine_initial_direction(train, location_object, initial_track_id))
 
     for index, train in enumerate(in_standing_trains):
@@ -1376,9 +1387,12 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         train_total_length = _train_total_length(train)
         problem.set_initial_value(su_length(shunting_unit), up.Real(train_total_length))
         if initial_track_id in id_to_track_part:
-            problem.set_initial_value(at_su(shunting_unit, id_to_track_part[initial_track_id]), True)
-            su_aside = train_initial_aside.get(_train_object_name(source, index, train), Fraction(0))
-            problem.set_initial_value(su_aside_distance(shunting_unit), up.Real(su_aside))
+            if ENABLE_ARRIVAL_PRECEDENCE and source == "in":
+                problem.set_initial_value(su_arrival_track(shunting_unit, id_to_track_part[initial_track_id]), True)
+            else:
+                problem.set_initial_value(at_su(shunting_unit, id_to_track_part[initial_track_id]), True)
+                su_aside = train_initial_aside.get(_train_object_name(source, index, train), Fraction(0))
+                problem.set_initial_value(su_aside_distance(shunting_unit), up.Real(su_aside))
         composition_obj = None
         if len(train_members) > 1:
             composition_obj = problem.add_object("composition" + train["id"], arrival_composition_type)
