@@ -396,10 +396,10 @@ def run_pipeline(do_generate=False, use_examples=False):
                     check=True, capture_output=True, text=True
                 )
 
-                tors_scenario_path = r"C:\Users\Tycho\Desktop\SchoolTU\Year4\q4\Robust-Rail-NL\scenario-planning-inputs\Location_KleineBinckhorst\scenarios\scenario_example1.json"
+                # tors_scenario_path = r"C:\Users\Tycho\Desktop\SchoolTU\Year4\q4\Robust-Rail-NL\scenario-planning-inputs\Location_KleineBinckhorst\scenarios\scenario_example1.json"
 
                 # json_path = r"C:\Users\Tycho\Desktop\SchoolTU\Year4\q4\Robust-Rail-NL\scenario-planning-inputs\Location_KleineBinckhorst\plans\plan_example2.json"
-                json_path = r"C:\Users\Tycho\Desktop\SchoolTU\Year4\q4\Robust-Rail-NL\planning-approach\data\KleineBinckhorst\scenario_solver_example1\run71.json"
+                # json_path = r"C:\Users\Tycho\Desktop\SchoolTU\Year4\q4\Robust-Rail-NL\planning-approach\data\KleineBinckhorst\scenario_solver_example1\run71.json"
 
 
                 evaluation = evaluate(tors_scenario_path, json_path)

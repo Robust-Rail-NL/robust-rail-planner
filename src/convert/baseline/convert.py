@@ -497,6 +497,11 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     arrival_composition_type = up.UserType("arrivalcomposition")
     shunting_unit_type = up.UserType("shuntingunit")
 
+    # Phantom track for not-yet-arrived trains: they exist here until arrive_su
+    # moves them to the real arrival track. The phantom track has no physical
+    # connections and does not allow parking.
+    phantom_track_obj = problem.add_object("phantom", track_part_type)
+
     # free           = problem.add_fluent(up.Fluent("free",           up.BoolType(), trackpart=track_part_type),                          default_initial_value=True)
     arrival        = problem.add_fluent(up.Fluent("arrival",        up.IntType(),  train=arrival_train_type))
     at             = problem.add_fluent(up.Fluent("at",             up.BoolType(), unit=arrival_train_type, trackpart=track_part_type),  default_initial_value=False)
@@ -561,6 +566,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         su_previous_arrived = problem.add_fluent(up.Fluent("su_previous_arrived", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
         su_arrival_immediately_before = problem.add_fluent(up.Fluent("su_arrival_immediately_before", up.BoolType(), first=shunting_unit_type, second=shunting_unit_type), default_initial_value=False)
         su_arrival_track = problem.add_fluent(up.Fluent("su_arrival_track", up.BoolType(), shunting_unit=shunting_unit_type, trackpart=track_part_type), default_initial_value=False)
+        is_on_phantom = problem.add_fluent(up.Fluent("is_on_phantom", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
 
     # --- Servicing subproblem (gated). Trains carrying cleaning/washing/inspection tasks must
     # be serviced at the matching facility before they may depart or park. `serviced` defaults
@@ -604,11 +610,15 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         arrive_su.add_precondition(up.Not(su_has_arrived(arrive_su.su)))
         arrive_su.add_precondition(su_previous_arrived(arrive_su.su))
         arrive_su.add_precondition(su_arrival_track(arrive_su.su, arrive_su.l))
+        arrive_su.add_precondition(is_on_phantom(arrive_su.su))
         arrive_su.add_precondition(up.Equals(number_of_trains_on_track(arrive_su.l), 0))
         arrive_su.add_precondition(up.Equals(concurrent_movements, 0))
         arrive_su.add_precondition(su_length(arrive_su.su) <= track_length(arrive_su.l))
         arrive_su.add_effect(su_has_arrived(arrive_su.su), True)
+        arrive_su.add_effect(is_on_phantom(arrive_su.su), False)
         arrive_su.add_effect(at_su(arrive_su.su, arrive_su.l), True)
+        arrive_su.add_effect(allowed_to_move_su(arrive_su.su), True)
+        arrive_su.add_effect(concurrent_movements, concurrent_movements + 1)
         arrive_su.add_effect(number_of_trains_on_track(arrive_su.l), 1)
         arrive_su.add_effect(bstack_distance(arrive_su.l), su_length(arrive_su.su))
         arrive_su.add_effect(astack_distance(arrive_su.l), 0)
@@ -1245,6 +1255,10 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         if not track_part.get("parkingAllowed", False):
             problem.set_initial_value(track_length(obj), up.Real(Fraction(10**9)))
 
+    # Phantom track properties: no parking, no connections, effectively infinite length
+    problem.set_initial_value(parking_allowed(phantom_track_obj), False)
+    problem.set_initial_value(track_length(phantom_track_obj), up.Real(Fraction(10**9)))
+
     # Restrict movement connectivity to the per-scenario corridor of relevant tracks.
     # When None (no relevant routes found) the full no-switch graph is kept as a fallback.
     corridor_nodes = _relevant_corridor_nodes(scenario_object, location_object, id_to_track_part.keys(), coupling_candidate_track_ids, expand_hops=CORRIDOR_EXPAND_HOPS) if ENABLE_CORRIDOR else None
@@ -1389,6 +1403,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         if initial_track_id in id_to_track_part:
             if ENABLE_ARRIVAL_PRECEDENCE and source == "in":
                 problem.set_initial_value(su_arrival_track(shunting_unit, id_to_track_part[initial_track_id]), True)
+                problem.set_initial_value(is_on_phantom(shunting_unit), True)
             else:
                 problem.set_initial_value(at_su(shunting_unit, id_to_track_part[initial_track_id]), True)
                 su_aside = train_initial_aside.get(_train_object_name(source, index, train), Fraction(0))
