@@ -41,9 +41,8 @@ ARRIVE_SU_RE = re.compile(r"\(arrive_su ([^)]+)\)")
 UNCOUPLE_RE = re.compile(r"\(uncouple ([^ ]+) ([^)]+)\)")
 
 
-MOVE_DURATION = 600
-COMBINE_DURATION = 180  # Default, will be overridden by train type data
-SPLIT_DURATION = 120    # Default, will be overridden by train type data
+COMBINE_DURATION = 180
+SPLIT_DURATION = 120
 
 
 # =====================================================
@@ -139,7 +138,8 @@ def build_request_lookup(scenario):
             "id": request["displayName"],
             "trainUnits": request.get("trainUnits", []),
             "leaveTrackPart": request.get("leaveTrackPart"),
-            "lastParkingTrackPart": request.get("lastParkingTrackPart")
+            "lastParkingTrackPart": request.get("lastParkingTrackPart"),
+            "arrival": request.get("arrival")  # departure time (confusingly named)
         }
     
     return lookup
@@ -500,6 +500,13 @@ def expand_path(path, graph):
     return expanded
 
 
+MOVE_DURATION = 600
+
+def compute_move_duration(expanded_path, switch_ids):
+    """Compute move duration (60s per PDDL move step)"""
+    return MOVE_DURATION
+
+
 # =====================================================
 # CONVERTER
 # =====================================================
@@ -519,6 +526,8 @@ def convert_plan(plan_file, scenario_file, location_file):
     track_lookup = build_track_lookup(location)
     track_id_lookup = build_track_id_lookup(location)
     graph = build_graph(location)
+    switch_ids = build_switch_sets(location)
+    scenario_end_time = int(scenario.get("endTime", 0))
 
     current_time = 0
     active_trains = {}
@@ -530,6 +539,9 @@ def convert_plan(plan_file, scenario_file, location_file):
     # SU ID mapping: internal name -> sequential integer ID
     su_name_to_int = {}
     next_su_id = 0
+    
+    # Map from SU name (e.g. su_request4000) to departure time from scenario
+    su_departure_time = {}
     
     def get_su_id(name):
         nonlocal next_su_id
@@ -589,7 +601,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                         if name == stripped or name == train:
                             if "firstParkingTrackPart" in standing:
                                 train_locations[train] = standing["firstParkingTrackPart"]
-                            train_arrival_times[train] = current_time
+                            train_arrival_times[train] = int(standing.get("arrival", 0))
                             found = True
                             break
                     if found:
@@ -600,7 +612,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                         if stripped == f"train{incoming['id']}" or train == f"su_train{incoming['id']}":
                             if "entryTrackPart" in incoming:
                                 train_locations[train] = incoming["entryTrackPart"]
-                            train_arrival_times[train] = current_time
+                            train_arrival_times[train] = int(incoming.get("arrival", current_time))
                             break
             
             continue
@@ -638,13 +650,14 @@ def convert_plan(plan_file, scenario_file, location_file):
             
             if train in active_trains:
                 state = active_trains[train]
-                end_time = current_time + MOVE_DURATION
                 dest_track = convert_track(track, track_lookup)["trackPartId"]
                 
                 if not state["path"] and train in train_locations:
                     state["path"] = [train_locations[train], dest_track]
                 
                 expanded_path = expand_path(state["path"], graph)
+                duration = compute_move_duration(expanded_path, switch_ids)
+                end_time = current_time + duration
                 if len(expanded_path) > 1:
                     actions.append(
                         create_move_action(
@@ -673,12 +686,13 @@ def convert_plan(plan_file, scenario_file, location_file):
             
             if train in active_trains:
                 state = active_trains[train]
-                current_time += MOVE_DURATION
                 
                 if not state["path"] and train in train_locations:
                     state["path"] = [train_locations[train], track_id]
                 
                 expanded_path = expand_path(state["path"], graph)
+                duration = compute_move_duration(expanded_path, switch_ids)
+                current_time += duration
                 if len(expanded_path) > 1:
                     actions.append(
                         create_move_action(
@@ -695,9 +709,11 @@ def convert_plan(plan_file, scenario_file, location_file):
                 train_locations[train] = track_id
                 del active_trains[train]
             
+            # OutStanding trains exit at scenario endTime (per robust-rail-solver convention)
+            exit_time = scenario_end_time
             exit_action = create_exit_action(
                 train,
-                current_time,
+                exit_time,
                 track,
                 train_lookup,
                 track_lookup,
@@ -720,7 +736,6 @@ def convert_plan(plan_file, scenario_file, location_file):
             
             if train in active_trains:
                 state = active_trains[train]
-                current_time += MOVE_DURATION
                 
                 dest_track = convert_track(track, track_lookup)["trackPartId"]
                 if not state["path"] and train in train_locations:
@@ -728,6 +743,8 @@ def convert_plan(plan_file, scenario_file, location_file):
                 
                 if state["path"]:
                     expanded_path = expand_path(state["path"], graph)
+                    duration = compute_move_duration(expanded_path, switch_ids)
+                    current_time += duration
                     if len(expanded_path) > 1:
                         actions.append(
                             create_move_action(
@@ -743,9 +760,22 @@ def convert_plan(plan_file, scenario_file, location_file):
                 
                 del active_trains[train]
             
+            # Determine departure time: look up from request or use current_time
+            exit_time = current_time
+            if train in su_departure_time:
+                exit_time = su_departure_time[train]
+            else:
+                # Try to infer request name from SU name (e.g. su_request4000 -> request4000)
+                if train.startswith("su_request"):
+                    req_name = "request" + train[10:]  # strip "su_request" prefix
+                    if req_name in request_lookup:
+                        dep = request_lookup[req_name].get("arrival")
+                        if dep is not None:
+                            exit_time = int(dep)
+            
             exit_action = create_exit_action(
                 train,
-                current_time,
+                exit_time,
                 track,
                 train_lookup,
                 track_lookup,
@@ -792,6 +822,13 @@ def convert_plan(plan_file, scenario_file, location_file):
                 "members": combined_members,
                 "parentIDs": [su_a, su_b]
             }
+            
+            # If this combined SU is for an outgoing request, store its departure time
+            req_name = request  # the last capture group is the request name
+            if req_name in request_lookup:
+                dep_time = request_lookup[req_name].get("arrival")
+                if dep_time is not None:
+                    su_departure_time[su_result] = int(dep_time)
             
             train_locations[su_result] = action_loc
             current_time = end_time
@@ -847,19 +884,22 @@ def convert_plan(plan_file, scenario_file, location_file):
             # End active move if the train is currently moving
             if su_id in active_trains:
                 state = active_trains[su_id]
-                current_time += MOVE_DURATION
+                expanded_path = expand_path(state["path"], graph)
+                duration = compute_move_duration(expanded_path, switch_ids)
+                current_time += duration
                 
-                actions.append(
-                    create_move_action(
-                        su_id,
-                        state["start_time"],
-                        current_time,
-                        expand_path(state["path"], graph),
-                        train_lookup,
-                        track_id_lookup,
-                        unit_lookup
+                if len(expanded_path) > 1:
+                    actions.append(
+                        create_move_action(
+                            su_id,
+                            state["start_time"],
+                            current_time,
+                            expanded_path,
+                            train_lookup,
+                            track_id_lookup,
+                            unit_lookup
+                        )
                     )
-                )
                 
                 train_locations[su_id] = track_id
                 del active_trains[su_id]
