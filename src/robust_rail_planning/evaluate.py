@@ -87,7 +87,7 @@ def to_container_path(host_path):
     """
     return "/data/" + os.path.relpath(host_path, WORKSPACE_DIR).replace(os.sep, "/")
 
-
+TORS_BIN = []
 if FOR_WINDOWS_FLAG:
     TORS_BIN = [
         "docker", "run", "--rm",
@@ -115,8 +115,9 @@ def evaluate(scenario_path, plan_path):
         f"{scenario_name}__{plan_name}__evaluation_results.txt",
     )
 
+    cmd = TORS_BIN
     if FOR_WINDOWS_FLAG:
-        cmd = TORS_BIN + [
+         cmd = cmd + [
             "--mode", "EVAL_AND_STORE",
             "--path_location", to_container_path(TORS_LOCATION_DIR),
             "--path_scenario", to_container_path(scenario_path),
@@ -126,7 +127,7 @@ def evaluate(scenario_path, plan_path):
             "--plan_type", "Solver",
         ]
     else:
-        cmd = TORS_BIN + [
+        cmd = cmd + [
         "--mode", "EVAL_AND_STORE",
         "--path_location", to_container_path(GENERATE_DIR),
         "--path_scenario", to_container_path(scenario_path),
