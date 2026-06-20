@@ -750,6 +750,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     )
     couple_two_sus.add_precondition(active_su(couple_two_sus.su_a))
     couple_two_sus.add_precondition(active_su(couple_two_sus.su_b))
+    couple_two_sus.add_precondition(up.Not(parked_su(couple_two_sus.su_a)))
+    couple_two_sus.add_precondition(up.Not(parked_su(couple_two_sus.su_b)))
     couple_two_sus.add_precondition(up.Not(active_su(couple_two_sus.su_result)))
     couple_two_sus.add_precondition(up.Not(up.Equals(couple_two_sus.su_a, couple_two_sus.su_b)))
     couple_two_sus.add_precondition(contains_su(couple_two_sus.su_a, couple_two_sus.unit_a))
