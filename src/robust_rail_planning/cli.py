@@ -15,7 +15,12 @@ def main():
     parser.add_argument("--planner", choices=["astar", "enhsp"],
                         default="astar",
                         help="Planner backend to use (default: astar)")
+    
+    parser.add_argument("--solve", action="store_true",
+                        help="Run the local search solver on each plan")
+    
     args = parser.parse_args()
+
 
     setup_logging(getattr(logging, args.log_level.upper()))
 
@@ -23,6 +28,7 @@ def main():
         do_generate=args.generate,
         use_examples=args.examples,
         planner=args.planner,
+        do_local_search=args.solve,
     )
 
 

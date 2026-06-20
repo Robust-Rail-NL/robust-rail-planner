@@ -76,7 +76,7 @@ def evaluate(scenario_path, plan_path):
         "--path_scenario", to_container_path(scenario_path),
         "--path_plan", to_container_path(plan_path),
         "--path_eval_result", to_container_path(eval_result_path),
-        "--departure_delay", "60000",
+        "--departure_delay", "86400",
         "--plan_type", "Solver",
     ]
 
@@ -92,19 +92,15 @@ def evaluate(scenario_path, plan_path):
     )
 
     if result.stdout:
-        logger.info("TORS output:\n%s", result.stdout)
+        logger.debug("TORS output:\n%s", result.stdout)
 
     if result.returncode != 0:
-        raise RuntimeError(
-            f"TORS evaluation failed with exit code {result.returncode}\n\n"
-            f"Command was:\n{' '.join(cmd)}\n\n"
-            f"Output was:\n{result.stdout}"
-        )
+        raise RuntimeError(f"TORS evaluation failed with exit code {result.returncode}")
 
     if os.path.exists(eval_result_path):
         with open(eval_result_path, "r", encoding="utf-8") as f:
             stored_result = f.read()
-        logger.info("Stored TORS evaluation result from %s:\n%s", eval_result_path, stored_result)
+        logger.debug("Stored TORS evaluation result from %s:\n%s", eval_result_path, stored_result)
     else:
         logger.warning("Expected eval result file was not created: %s", eval_result_path)
 

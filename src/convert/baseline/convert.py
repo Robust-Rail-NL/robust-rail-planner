@@ -1107,7 +1107,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     writer = PDDLWriter(problem)
     writer.write_problem(output_file)
 
-    print(f"Problem file written to: {output_file}")
+    logging.debug(f"Problem file written to: {output_file}")
 
     if domain_file is not None:
         if os.sep not in domain_file:

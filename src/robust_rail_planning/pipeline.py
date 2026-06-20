@@ -10,6 +10,8 @@ import re
 import shutil
 from convert.baseline.convert import create_instance_from_scenario
 from .evaluate import evaluate
+from .generate import generate
+from local_search.solve import solve
 
 # PATHS
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # planning-approach
@@ -17,6 +19,10 @@ GENERATE_DIR = os.path.join(os.path.dirname(BASE_DIR), "scenario-planning-inputs
 SCENARIOS_DIR = os.path.join(GENERATE_DIR, "scenarios")
 RESULTS_FILE = os.path.join(BASE_DIR, "results", "plans.csv")
 PLANS_DIR = os.path.join(GENERATE_DIR, "plans")
+
+LOCAL_SEARCH_PLANS_DIR = os.path.join(GENERATE_DIR, "plans_local_search")
+LOCAL_SEARCH_RESULTS_FILE = os.path.join(BASE_DIR, "results", "plans_local_search.csv")
+
 DATA_DIR = os.path.join(BASE_DIR, "data")
 LOG_DIR = os.path.join(BASE_DIR, "logs")
 PLANNER_LOCATION = os.path.abspath(os.path.join(BASE_DIR, "src", "plan", "planner.jl"))
@@ -26,18 +32,17 @@ DOMAIN_FILE = os.path.join(BASE_DIR, "domain", "domain.pddl")
 TOOLS_DIR = os.path.join(BASE_DIR, "tools")
 CONVERTER_SCRIPT = os.path.join(os.path.dirname(__file__), "converter.py")
 
+RESULTS_FIELDNAMES = [
+    "run_id", "scenario", "pddl_file", "plan_file", "runtime_seconds",
+    "plan_found", "plan_length", "planner_status", "error",
+]
+
+LOCAL_SEARCH_FIELDNAMES = [
+    "run_id", "scenario", "plan_file", "runtime_seconds",
+    "solver_status", "eval_result_path", "error",
+]
+
 logger = logging.getLogger(__name__)
-
-# SCENARIO SETTINGS
-number_trains = [1, 2, 3, 4, 5, 10]
-number_instances = 10
-matching = {0: "FIFO", 1: "random", 2: "LIFO"}
-default_seed = 42
-time_window_per_train = [700]
-mixed_traffic = False
-min_gap_on_gateway = 180
-perform_servicing = False
-
 
 # LOGGING
 class ConsoleFormatter(logging.Formatter):
@@ -80,19 +85,6 @@ def setup_logging(level=logging.INFO):
     logging.getLogger("unified_planning").setLevel(logging.WARNING)
 
     logger.info("Log file: %s", log_file)
-
-# GENERATE SCENARIOS
-def generate():
-    spec = importlib.util.spec_from_file_location("generate", os.path.join(GENERATE_DIR, "generate.py"))
-    generate_module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(generate_module)
-    generate_module.generate_scenarios(
-        number_trains=number_trains, number_instances=number_instances, matching=matching,
-        default_seed=default_seed, time_window_per_train=time_window_per_train,
-        mixed_traffic=mixed_traffic, min_gap_on_gateway=min_gap_on_gateway,
-        perform_servicing=perform_servicing,
-    )
-    
     
 def natural_key(path):
     return [
@@ -114,7 +106,23 @@ def read_example_scenarios(scenarios_dir):
 #     pattern = os.path.join(scenarios_dir, "scenario_solver_example2.json")
 #     return sorted(glob.glob(pattern), key=natural_key)
 
+def init_results_file(results_file, fieldnames=RESULTS_FIELDNAMES):
+    os.makedirs(os.path.dirname(results_file), exist_ok=True)
 
+    file_exists = os.path.isfile(results_file)
+    file_is_empty = not file_exists or os.path.getsize(results_file) == 0
+
+    if file_is_empty:
+        with open(results_file, "w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+
+
+def append_result(results_file, row, fieldnames=RESULTS_FIELDNAMES):
+    with open(results_file, "a", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writerow(row)
+        
 # CONVERT SCENARIO TO PDDL
 def convert(scenario_path, use_examples=False):
     """Convert a single scenario to PDDL. Returns the output .pddl path."""
@@ -264,7 +272,7 @@ def plan_with_julia(pddl_path, timeout=300):
 
     plan_path = os.path.join(PLANS_DIR, os.path.splitext(rel)[0] + ".plan")
     os.makedirs(os.path.dirname(plan_path), exist_ok=True)
-    logger.info("Solving %s with SymbolicPlanners.jl", rel)
+    logger.info("      solving %s with Julia ENHSP", rel)
 
     cmd = [
         "julia",
@@ -284,17 +292,17 @@ def plan_with_julia(pddl_path, timeout=300):
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
-        logger.warning("  Julia planner timed out for %s", rel)
+        logger.warning("      Julia planner timed out for %s", rel)
         return False, None, 0, "TIMEOUT"
 
     if proc.returncode != 0:
-        logger.warning("  Julia planner failed for %s (exit %d)", rel, proc.returncode)
+        logger.warning("      Julia planner failed for %s (exit %d)", rel, proc.returncode)
         if proc.stdout:
-            logger.debug("Julia stdout:\n%s", proc.stdout)
+            logger.debug("      Julia stdout:\n%s", proc.stdout)
         return False, None, 0, "FAILED"
 
     if not os.path.isfile(plan_path):
-        logger.warning("  Julia planner did not produce a plan file for %s", rel)
+        logger.warning("      Julia planner did not produce a plan file for %s", rel)
         return False, None, 0, "NO_PLAN"
 
     with open(plan_path) as f:
@@ -303,51 +311,7 @@ def plan_with_julia(pddl_path, timeout=300):
     logger.info("      solved by SymbolicPlanners.jl: %d actions", plan_length)
     return True, plan_path, plan_length, "SOLVED"
 
-def init_results_file(results_file):
-    os.makedirs(os.path.dirname(results_file), exist_ok=True)
-
-    file_exists = os.path.isfile(results_file)
-    file_is_empty = not file_exists or os.path.getsize(results_file) == 0
-
-    if file_is_empty:
-        with open(results_file, "w", newline="") as f:
-            writer = csv.DictWriter(
-                f,
-                fieldnames=[
-                    "run_id",
-                    "scenario",
-                    "pddl_file",
-                    "plan_file",
-                    "runtime_seconds",
-                    "plan_found",
-                    "plan_length",
-                    "planner_status",
-                    "error",
-                ],
-            )
-            writer.writeheader()
-
-def append_result(results_file, row):
-    with open(results_file, "a", newline="") as f:
-        writer = csv.DictWriter(
-            f,
-            fieldnames=[
-                "run_id",
-                "scenario",
-                "pddl_file",
-                "plan_file",
-                "runtime_seconds",
-                "plan_found",
-                "plan_length",
-                "planner_status",
-                "error",
-            ],
-        )
-        writer.writerow(row)
-
-def run_pipeline(do_generate=False, use_examples=False, planner="astar"):
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
-
+def run_pipeline(do_generate=False, use_examples=False, planner="astar", do_local_search=False):
     if do_generate:
         logger.info("Generating scenarios...")
         generate()
@@ -358,6 +322,11 @@ def run_pipeline(do_generate=False, use_examples=False, planner="astar"):
         else read_scenarios(SCENARIOS_DIR)
     )
 
+    if do_local_search:
+        run_pipeline_local_search(scenario_paths)
+        return
+
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     total = len(scenario_paths)
     logger.info("Found %d scenarios", total)
     logger.info("Appending results to %s", RESULTS_FILE)
@@ -367,7 +336,6 @@ def run_pipeline(do_generate=False, use_examples=False, planner="astar"):
     for i, scenario_path in enumerate(scenario_paths, start=1):
         started = time.perf_counter()
         rel_scenario = os.path.relpath(scenario_path, SCENARIOS_DIR)
-
         logger.info("")
         logger.info("[%d/%d] %s", i, total, rel_scenario)
 
@@ -387,9 +355,9 @@ def run_pipeline(do_generate=False, use_examples=False, planner="astar"):
                 plan_found, plan_path, plan_length, planner_status = plan_with_julia(pddl_path)
 
             if plan_found:
-                # Convert plan to TORS JSON format
                 json_path = plan_path.replace(".plan", ".json")
                 tors_scenario_path = scenario_path.replace("scenario_solver_", "scenario_")
+
                 logger.info("      converting plan to TORS JSON")
                 subprocess.run(
                     [sys.executable, CONVERTER_SCRIPT,
@@ -397,22 +365,18 @@ def run_pipeline(do_generate=False, use_examples=False, planner="astar"):
                      "--scenario", scenario_path,
                      "--location", LOCATION_FILE,
                      "--output", json_path],
-                    check=True, capture_output=True, text=True
+                    check=True, capture_output=True, text=True,
                 )
 
-                # tors_scenario_path = r"C:\Users\Tycho\Desktop\SchoolTU\Year4\q4\Robust-Rail-NL\scenario-planning-inputs\Location_KleineBinckhorst\scenarios\scenario_example1.json"
-
-                # json_path = r"C:\Users\Tycho\Desktop\SchoolTU\Year4\q4\Robust-Rail-NL\scenario-planning-inputs\Location_KleineBinckhorst\plans\plan_example2.json"
-                # json_path = r"C:\Users\Tycho\Desktop\SchoolTU\Year4\q4\Robust-Rail-NL\planning-approach\data\KleineBinckhorst\scenario_solver_example1\run71.json"
-
-
-                evaluation = evaluate(tors_scenario_path, json_path)
+                evaluate(tors_scenario_path, json_path)
             else:
                 logger.warning("  skipping evaluation because no plan was found")
-
+        
         except Exception as exc:
             error = repr(exc)
-            logger.exception("  failed unexpectedly")
+            solver_status = solver_status or "FAILED"
+            logger.error("  local search / evaluation failed: %s", exc)
+            logger.debug("  traceback:", exc_info=True)
 
         elapsed = time.perf_counter() - started
 
@@ -437,7 +401,80 @@ def run_pipeline(do_generate=False, use_examples=False, planner="astar"):
             logger.warning("  recorded no-plan result after %.2fs", elapsed)
         else:
             logger.info("  done in %.2fs", elapsed)
-        
+            
+def local_search_plan_path(scenario_path):
+    """
+    Mirror a scenario's path (relative to SCENARIOS_DIR) into the local-search
+    plans dir with a .json extension — same naming convention as the regular
+    plan jsons, just in a sibling directory.
+    """
+    rel = os.path.relpath(scenario_path, SCENARIOS_DIR)
+    return os.path.join(LOCAL_SEARCH_PLANS_DIR, os.path.splitext(rel)[0] + ".json")
+
+
+def run_pipeline_local_search(scenario_paths):
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    total = len(scenario_paths)
+    logger.info("Found %d scenarios", total)
+    logger.info("Writing local-search plans to %s", LOCAL_SEARCH_PLANS_DIR)
+    logger.info("Appending results to %s", LOCAL_SEARCH_RESULTS_FILE)
+
+    init_results_file(LOCAL_SEARCH_RESULTS_FILE, LOCAL_SEARCH_FIELDNAMES)
+
+    for i, scenario_path in enumerate(scenario_paths, start=1):
+        started = time.perf_counter()
+        rel_scenario = os.path.relpath(scenario_path, SCENARIOS_DIR)
+        logger.info("")
+        logger.info("[%d/%d] %s", i, total, rel_scenario)
+
+        plan_path = local_search_plan_path(scenario_path)
+        os.makedirs(os.path.dirname(plan_path), exist_ok=True)
+
+        # Empty plan JSON for the generated config's PlanPath to point at.
+        with open(plan_path, "w", encoding="utf-8") as f:
+            f.write("{}")
+
+        solver_status = ""
+        eval_result_path = ""
+        error = ""
+
+        try:
+            solve(scenario_path, plan_path)
+            solver_status = "SOLVED"
+
+            # Evaluate the plan the solver produced, using TORS.
+            tors_scenario_path = scenario_path.replace("scenario_solver_", "scenario_")
+            logger.info("      evaluating local search plan")
+            evaluation = evaluate(tors_scenario_path, plan_path)
+            eval_result_path = evaluation.get("eval_result_path", "")
+
+        except Exception as exc:
+            error = repr(exc)
+            logger.error("  failed unexpectedly: %s", exc)
+            logger.debug("  traceback:", exc_info=True)
+
+        elapsed = time.perf_counter() - started
+
+        append_result(
+            LOCAL_SEARCH_RESULTS_FILE,
+            {
+                "run_id": run_id,
+                "scenario": rel_scenario,
+                "plan_file": os.path.relpath(plan_path, LOCAL_SEARCH_PLANS_DIR),
+                "runtime_seconds": f"{elapsed:.4f}",
+                "solver_status": solver_status,
+                "eval_result_path": eval_result_path,
+                "error": error,
+            },
+            LOCAL_SEARCH_FIELDNAMES,
+        )
+
+        if error:
+            logger.error("  recorded failure after %.2fs", elapsed)
+        else:
+            logger.info("  done in %.2fs", elapsed)
+            
 if __name__ == "__main__":
     setup_logging(logging.INFO)
     run_pipeline()
