@@ -31,6 +31,7 @@ LOCATION_FILE = os.path.join(GENERATE_DIR, "location_solver.json")
 DOMAIN_FILE = os.path.join(BASE_DIR, "domain", "domain.pddl")
 TOOLS_DIR = os.path.join(BASE_DIR, "tools")
 CONVERTER_SCRIPT = os.path.join(os.path.dirname(__file__), "converter.py")
+ENHSP_HEURISTIC = "hadd"
 
 RESULTS_FIELDNAMES = [
     "run_id", "scenario", "pddl_file", "plan_file", "runtime_seconds",
@@ -134,6 +135,7 @@ def convert(scenario_path, use_examples=False):
 
     pddl_path = os.path.join(DATA_DIR, os.path.splitext(rel)[0] + ".pddl")
     os.makedirs(os.path.dirname(pddl_path), exist_ok=True)
+    os.makedirs(os.path.dirname(DOMAIN_FILE), exist_ok=True)
 
     create_instance_from_scenario(
         scenario_file=scenario_path,
@@ -200,7 +202,7 @@ def plan(pddl_path, timeout=None):
     java = _find_java()
 
     if enhsp_jar and java:
-        cmd = [java, "-jar", enhsp_jar, "-sp", plan_path, "-h", "hadd", "-s", "wa_star_4",
+        cmd = [java, "-jar", enhsp_jar, "-sp", plan_path, "-h", ENHSP_HEURISTIC, "-s", "wa_star_4",
                "-o", DOMAIN_FILE, "-f", pddl_path]
         logger.debug("Running: %s", " ".join(cmd))
 
