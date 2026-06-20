@@ -8,7 +8,7 @@ import csv, time
 import subprocess
 import re
 import shutil
-from convert.baseline.convert import create_instance_from_scenario
+from convert.baseline_no_parameters.convert import create_instance_from_scenario
 from .evaluate import evaluate
 from .generate import generate
 from local_search.solve import solve
