@@ -374,7 +374,6 @@ def run_pipeline(do_generate=False, use_examples=False, planner="astar", do_loca
         
         except Exception as exc:
             error = repr(exc)
-            solver_status = solver_status or "FAILED"
             logger.error("  local search / evaluation failed: %s", exc)
             logger.debug("  traceback:", exc_info=True)
 
