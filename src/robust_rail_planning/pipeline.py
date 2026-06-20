@@ -106,13 +106,13 @@ def read_scenarios(scenarios_dir, n_trains="*", order="*"):
     return sorted(glob.glob(pattern), key=natural_key)
 
 
-# def read_example_scenarios(scenarios_dir):
-#     pattern = os.path.join(scenarios_dir, "scenario_solver_example*.json")
-#     return sorted(glob.glob(pattern), key=natural_key)
-
 def read_example_scenarios(scenarios_dir):
-    pattern = os.path.join(scenarios_dir, "scenario_solver_example1.json")
+    pattern = os.path.join(scenarios_dir, "scenario_solver_example*.json")
     return sorted(glob.glob(pattern), key=natural_key)
+
+# def read_example_scenarios(scenarios_dir):
+#     pattern = os.path.join(scenarios_dir, "scenario_solver_example2.json")
+#     return sorted(glob.glob(pattern), key=natural_key)
 
 
 # CONVERT SCENARIO TO PDDL
@@ -258,15 +258,15 @@ def plan(pddl_path, timeout=None):
         return False, None, 0, "NO_PLANNER"
 
 def plan_with_julia(pddl_path, timeout=300):
-    """Solve one PDDL instance with SymbolicPlanners.jl. Returns the plan path."""
+    """Solve one PDDL instance with SymbolicPlanners.jl."""
 
     rel = os.path.relpath(pddl_path, DATA_DIR)
 
     plan_path = os.path.join(PLANS_DIR, os.path.splitext(rel)[0] + ".plan")
     os.makedirs(os.path.dirname(plan_path), exist_ok=True)
     logger.info("Solving %s with SymbolicPlanners.jl", rel)
-    process = subprocess.Popen(
-    [
+
+    cmd = [
         "julia",
         f"--project={BASE_DIR}",
         PLANNER_LOCATION,
@@ -274,33 +274,34 @@ def plan_with_julia(pddl_path, timeout=300):
         pddl_path,
         "symbolic",
         plan_path,
-    ],
-    stdout=subprocess.PIPE,
-    stderr=subprocess.STDOUT,
-    text=True,
-)
+    ]
+    logger.debug("Running: %s", " ".join(cmd))
 
     try:
-        stdout, _ = process.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        stdout, _ = process.communicate()
-        raise RuntimeError(f"Julia planner timed out for {rel}")
-
-    if stdout:
-        logger.info("Julia stdout for %s:\n%s", rel, stdout)
-
-    if process.returncode != 0:
-        raise RuntimeError(
-            f"Julia planner failed for {rel} with exit code {process.returncode}"
+        proc = subprocess.run(
+            cmd,
+            capture_output=True, text=True,
+            timeout=timeout,
         )
+    except subprocess.TimeoutExpired:
+        logger.warning("  Julia planner timed out for %s", rel)
+        return False, None, 0, "TIMEOUT"
+
+    if proc.returncode != 0:
+        logger.warning("  Julia planner failed for %s (exit %d)", rel, proc.returncode)
+        if proc.stdout:
+            logger.debug("Julia stdout:\n%s", proc.stdout)
+        return False, None, 0, "FAILED"
 
     if not os.path.isfile(plan_path):
-        raise RuntimeError(f"Julia planner did not create a plan file for {rel}")
+        logger.warning("  Julia planner did not produce a plan file for %s", rel)
+        return False, None, 0, "NO_PLAN"
 
-    logger.info("SymbolicPlanners solved %s -> %s", rel, plan_path)
-
-    return plan_path
+    with open(plan_path) as f:
+        plan_lines = [l.strip() for l in f if l.strip()]
+    plan_length = len(plan_lines)
+    logger.info("      solved by SymbolicPlanners.jl: %d actions", plan_length)
+    return True, plan_path, plan_length, "SOLVED"
 
 def init_results_file(results_file):
     os.makedirs(os.path.dirname(results_file), exist_ok=True)
@@ -344,7 +345,7 @@ def append_result(results_file, row):
         )
         writer.writerow(row)
 
-def run_pipeline(do_generate=False, use_examples=False):
+def run_pipeline(do_generate=False, use_examples=False, planner="astar"):
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
 
     if do_generate:
@@ -380,7 +381,10 @@ def run_pipeline(do_generate=False, use_examples=False):
         try:
             pddl_path = convert(scenario_path, use_examples=use_examples)
 
-            plan_found, plan_path, plan_length, planner_status = plan(pddl_path)
+            if planner == "enhsp":
+                plan_found, plan_path, plan_length, planner_status = plan(pddl_path)
+            else:
+                plan_found, plan_path, plan_length, planner_status = plan_with_julia(pddl_path)
 
             if plan_found:
                 # Convert plan to TORS JSON format

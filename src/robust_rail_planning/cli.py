@@ -10,16 +10,20 @@ def main():
     parser.add_argument("--subproblem", choices=["parking", "matching", "combined"],
                         default="parking")
     parser.add_argument("--log-level", default="INFO")
-    parser.add_argument("--examples", action="store_true", help="Run only scenario_solver_example*.json files in the scenario directory.",
-)
+    parser.add_argument("--examples", action="store_true",
+                        help="Run only scenario_solver_example*.json files")
+    parser.add_argument("--planner", choices=["astar", "enhsp"],
+                        default="astar",
+                        help="Planner backend to use (default: astar)")
     args = parser.parse_args()
 
     setup_logging(getattr(logging, args.log_level.upper()))
 
     run_pipeline(
-    do_generate=args.generate,
-    use_examples=args.examples,
-)
+        do_generate=args.generate,
+        use_examples=args.examples,
+        planner=args.planner,
+    )
 
 
 if __name__ == "__main__":

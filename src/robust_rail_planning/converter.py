@@ -551,10 +551,20 @@ def convert_plan(plan_file, scenario_file, location_file):
             next_su_id += 1
         return su_name_to_int[name]
 
+    def _normalize_plan_line(plan_line):
+        """Convert SymbolicPlanners `action(arg1, arg2)` to PDDL `(action arg1 arg2)` format."""
+        m = re.match(r"(\w[\w_]*)\((.+)\)$", plan_line)
+        if m:
+            action = m.group(1)
+            args = re.split(r",\s*", m.group(2))
+            return "(" + action + " " + " ".join(args) + ")"
+        return plan_line
+
     with open(plan_file) as f:
         lines = [line.strip() for line in f if line.strip()]
 
     for line in lines:
+        line = _normalize_plan_line(line)
         # --------------------------------
         # MATCH
         # --------------------------------
