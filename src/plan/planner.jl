@@ -50,7 +50,7 @@ function run_symbolic_planner(domain_file, problem_file, plan_file=nothing)
     problem = load_problem(problem_file)
 
     println("Planning...")
-    planner = AStarPlanner(HAdd())
+    planner = WeightedAStarPlanner(HAdd(), 4)
     sol = planner(domain, problem)
 
     if sol.status == :success

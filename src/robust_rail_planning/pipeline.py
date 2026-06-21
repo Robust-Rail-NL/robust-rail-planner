@@ -274,7 +274,7 @@ def plan_with_julia(pddl_path, timeout=300):
 
     plan_path = os.path.join(PLANS_DIR, os.path.splitext(rel)[0] + ".plan")
     os.makedirs(os.path.dirname(plan_path), exist_ok=True)
-    logger.info("      solving %s with Julia ENHSP", rel)
+    logger.info("      solving %s with Julia A-star", rel)
 
     cmd = [
         "julia",
