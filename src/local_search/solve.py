@@ -56,6 +56,56 @@ SimulatedAnnealing:
   IntensifyOnImprovement: false
 """
 
+class UnsolvableScenarioError(RuntimeError):
+    """The solver could not construct a feasible plan for this scenario."""
+
+    def __init__(self, reason, output="", returncode=None, config_path=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.output = output
+        self.returncode = returncode
+        self.config_path = config_path
+        
+        
+def classify_unsolvable_solver_output(output):
+    """
+    Return a human-readable reason if this solver failure should be counted
+    as an unsolvable scenario. Otherwise return None.
+    """
+    if "No feasible matching possible" in output:
+        return "no feasible matching possible"
+
+    if (
+        "System.ArgumentException: Value does not fall within the expected range" in output
+        and "TrackOccupation.Depart" in output
+        and "Deque`1.Remove" in output
+    ):
+        return (
+            "solver failed while removing a train from track occupation; "
+            "likely an infeasible or physically invalid generated scenario "
+            "(for example train too long for assigned track, invalid standing train, "
+            "or impossible departure routing)"
+        )
+
+    return None
+    
+def is_unsolvable_solver_output(output):
+    """
+    Detect solver failures that should be counted as unsolvable instances,
+    not pipeline crashes.
+    """
+    if "No feasible matching possible" in output:
+        return True
+
+    if (
+        "System.ArgumentException: Value does not fall within the expected range" in output
+        and "TrackOccupation.Depart" in output
+        and "Deque`1.Remove" in output
+    ):
+        return True
+
+    return False
+
 
 def generate_config(scenario_path, plan_path, mode="Standard", debug_level=1):
     """Write a config for one scenario+plan pair and return its host path."""
@@ -98,18 +148,29 @@ def solve(scenario_path, plan_path, mode="Standard", debug_level=1):
     logger.info("      running local search solver")
     logger.debug("solver command: %s", " ".join(cmd))
 
-    result = subprocess.run(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        check=False,
-    )
+    result = subprocess.run(cmd, capture_output=True, text=True)
 
-    if result.stdout:
-        logger.debug("solver output:\n%s", result.stdout)
+    output = "\n".join(filter(None, [result.stdout, result.stderr]))
+    logger.debug("solver output:\n%s", output)
 
     if result.returncode != 0:
-        raise RuntimeError(f"local search solver failed with exit code {result.returncode}")
+        unsolvable_reason = classify_unsolvable_solver_output(output)
 
-    return {"stdout": result.stdout, "config_path": config_path}
+        if unsolvable_reason is not None:
+            raise UnsolvableScenarioError(
+                reason=unsolvable_reason,
+                output=output,
+                returncode=result.returncode,
+                config_path=config_path,
+            )
+
+        raise RuntimeError(
+            f"local search solver failed with exit code {result.returncode}\n{output}"
+        )
+
+    return {
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "output": output,
+        "config_path": config_path,
+    }

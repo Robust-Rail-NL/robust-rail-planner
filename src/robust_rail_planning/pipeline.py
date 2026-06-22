@@ -13,7 +13,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from convert.baseline_no_parameters.convert import create_instance_from_scenario
 from .evaluate import evaluate
 from .generate import generate
-from local_search.solve import solve
+from local_search.solve import solve, UnsolvableScenarioError
 
 # PATHS
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # planning-approach
@@ -241,47 +241,48 @@ def plan(pddl_path, timeout=None):
     enhsp_jar = _find_enhsp_jar()
     java = _find_java()
 
-    if enhsp_jar and java:
-        cmd = [java, "-jar", enhsp_jar, "-sp", plan_path, "-h", ENHSP_HEURISTIC, "-s", "wa_star_4",
-               "-o", DOMAIN_FILE, "-f", pddl_path]
-        logger.debug("Running: %s", " ".join(cmd))
+    # if enhsp_jar and java:
+    #     cmd = [java, "-jar", enhsp_jar, "-sp", plan_path, "-h", ENHSP_HEURISTIC, "-s", "wa_star_4",
+    #            "-o", DOMAIN_FILE, "-f", pddl_path]
+    #     logger.debug("Running: %s", " ".join(cmd))
 
-        timeout_sec = timeout if timeout else 300
+    #     timeout_sec = timeout if timeout else 300
 
-        try:
-            proc = subprocess.run(
-                cmd,
-                capture_output=True, text=True,
-                timeout=timeout_sec,
-            )
-        except subprocess.TimeoutExpired:
-            logger.warning("  ENHSP timed out for %s", rel)
-            return False, None, 0, "TIMEOUT"
+    #     try:
+    #         proc = subprocess.run(
+    #             cmd,
+    #             capture_output=True, text=True,
+    #             timeout=timeout_sec,
+    #         )
+    #     except subprocess.TimeoutExpired:
+    #         logger.warning("  ENHSP timed out for %s", rel)
+    #         return False, None, 0, "TIMEOUT"
 
-        stdout_lower = proc.stdout.lower()
+    #     stdout_lower = proc.stdout.lower()
 
-        if os.path.isfile(plan_path):
-            with open(plan_path) as f:
-                plan_lines = [l.strip() for l in f if l.strip()]
-            plan_length = len(plan_lines)
-            logger.info("      solved by ENHSP: %d actions", plan_length)
-            logger.debug("Plan written to %s", plan_path)
-            return True, plan_path, plan_length, "SOLVED"
-        elif "unsolvable" in stdout_lower:
-            logger.warning("  problem unsolvable: %s", rel)
-            return False, None, 0, "UNSOLVABLE"
-        elif "no plan" in stdout_lower or "no solution" in stdout_lower:
-            logger.warning("  no plan found: %s", rel)
-            return False, None, 0, "NO_PLAN"
-        else:
-            logger.warning("  no plan found by ENHSP (unknown reason)")
-            return False, None, 0, "UNKNOWN"
+    #     if os.path.isfile(plan_path):
+    #         with open(plan_path) as f:
+    #             plan_lines = [l.strip() for l in f if l.strip()]
+    #         plan_length = len(plan_lines)
+    #         logger.info("      solved by ENHSP: %d actions", plan_length)
+    #         logger.debug("Plan written to %s", plan_path)
+    #         return True, plan_path, plan_length, "SOLVED"
+    #     elif "unsolvable" in stdout_lower:
+    #         logger.warning("  problem unsolvable: %s", rel)
+    #         return False, None, 0, "UNSOLVABLE"
+    #     elif "no plan" in stdout_lower or "no solution" in stdout_lower:
+    #         logger.warning("  no plan found: %s", rel)
+    #         return False, None, 0, "NO_PLAN"
+    #     else:
+    #         logger.warning("  no plan found by ENHSP (unknown reason)")
+    #         return False, None, 0, "UNKNOWN"
 
     # Fallback: use unified-planning's OneshotPlanner
     logger.info("  local ENHSP jar not available, falling back to OneshotPlanner")
     try:
         from unified_planning.io import PDDLReader
         from unified_planning.shortcuts import OneshotPlanner
+        from unified_planning.engines import PlanGenerationResultStatus
 
         reader = PDDLReader()
         problem = reader.parse_problem(DOMAIN_FILE, pddl_path)
@@ -290,22 +291,32 @@ def plan(pddl_path, timeout=None):
         with OneshotPlanner(name="enhsp") as planner:
             result = planner.solve(problem, timeout=timeout_sec)
 
-        if result.plan:
+        status = result.status
+        status_name = status.name  # actual UP code, e.g. "SOLVED_SATISFICING"
+
+        SUCCESS = (
+            PlanGenerationResultStatus.SOLVED_SATISFICING,
+            PlanGenerationResultStatus.SOLVED_OPTIMALLY,
+        )
+
+        if status in SUCCESS and result.plan is not None:
             os.makedirs(os.path.dirname(plan_path), exist_ok=True)
             with open(plan_path, "w") as f:
                 f.write(str(result.plan))
             plan_lines = str(result.plan).strip().split("\n")
             plan_length = len([l for l in plan_lines if l.strip()])
-            logger.info("      solved by OneshotPlanner: %d actions", plan_length)
+            logger.info("      solved by OneshotPlanner (%s): %d actions",
+                        status_name, plan_length)
             logger.debug("Plan written to %s", plan_path)
-            return True, plan_path, plan_length, "SOLVED"
+            return True, plan_path, plan_length, status_name
         else:
-            logger.warning("  no plan found by OneshotPlanner: %s", rel)
-            return False, None, 0, "UNSOLVABLE" if result.status == "UNSOLVABLE" else "NO_PLAN"
+            logger.warning("  no plan from OneshotPlanner: %s (status=%s)",
+                        rel, status_name)
+            return False, None, 0, status_name
 
-    except Exception as exc:
-        logger.error("  OneshotPlanner failed: %s", exc)
-        return False, None, 0, "NO_PLANNER"
+    except Exception as e:
+        logger.exception("  OneshotPlanner fallback failed for %s: %s", rel, e)
+        return False, None, 0, "ERROR"
 
 def plan_with_julia(pddl_path, timeout=300):
     """Solve one PDDL instance with SymbolicPlanners.jl."""
@@ -393,7 +404,7 @@ def process_scenario(scenario_path, idx, total, run_id, use_examples, planner):
         pddl_path = convert(scenario_path, use_examples=use_examples, write_domain=False)
 
         if planner == "enhsp":
-            plan_found, plan_path, plan_length, planner_status = plan(pddl_path, timeout = 1800)
+            plan_found, plan_path, plan_length, planner_status = plan(pddl_path, timeout = 600)
         else:
             plan_found, plan_path, plan_length, planner_status = plan_with_julia(pddl_path)
 
@@ -405,16 +416,16 @@ def process_scenario(scenario_path, idx, total, run_id, use_examples, planner):
             logger.info("      saved raw plan to %s", os.path.relpath(archived_plan, BASE_DIR))
 
             logger.info("      converting plan to TORS JSON")
-            subprocess.run(
-                [sys.executable, CONVERTER_SCRIPT,
-                 "--plan", plan_path,
-                 "--scenario", scenario_path,
-                 "--location", LOCATION_FILE,
-                 "--output", json_path],
-                check=True, capture_output=True, text=True,
-            )
+            # subprocess.run(
+            #     [sys.executable, CONVERTER_SCRIPT,
+            #      "--plan", plan_path,
+            #      "--scenario", scenario_path,
+            #      "--location", LOCATION_FILE,
+            #      "--output", json_path],
+            #     check=True, capture_output=True, text=True,
+            # )
 
-            evaluate(tors_scenario_path, json_path)
+            # evaluate(tors_scenario_path, json_path)
         else:
             logger.warning("  skipping evaluation because no plan was found")
 
@@ -450,7 +461,7 @@ def process_scenario(scenario_path, idx, total, run_id, use_examples, planner):
 
 
 def run_pipeline(do_generate=False, use_examples=False, planner="astar",
-                 do_local_search=False, max_workers=4):
+                 do_local_search=False, max_workers=10):
     if do_generate:
         logger.info("Generating scenarios...")
         generate()
@@ -462,7 +473,7 @@ def run_pipeline(do_generate=False, use_examples=False, planner="astar",
     )
 
     if do_local_search:
-        run_pipeline_local_search(scenario_paths)
+        run_pipeline_local_search(scenario_paths, max_workers=max_workers)
         return
 
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -518,68 +529,151 @@ def local_search_plan_path(scenario_path):
     return os.path.join(LOCAL_SEARCH_PLANS_DIR, os.path.splitext(rel)[0] + ".json")
 
 
-def run_pipeline_local_search(scenario_paths):
-    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+def _is_unsolvable_exc(exc):
+    """True if an exception from `solve` represents provable infeasibility
+    (no feasible arrival/departure matching) rather than an unexpected crash.
+    Checks the message and any captured subprocess output, since a
+    CalledProcessError keeps the C# message in stderr/output, not in str(exc).
+    """
+    parts = [str(exc)]
+    for attr in ("stderr", "output", "stdout"):
+        val = getattr(exc, attr, None)
+        if val:
+            parts.append(val if isinstance(val, str) else val.decode("utf-8", "replace"))
+    text = "\n".join(parts).lower()
+    return "no feasible matching possible" in text or "unsolvable" in text
 
+
+def process_scenario_local_search(scenario_path, idx, total, run_id):
+    """Run the full per-scenario local-search pipeline (solve -> evaluate) for
+    one scenario.
+
+    Returns (row, records): the local-search results-CSV row dict, plus this
+    worker's buffered console log records to be flushed in order on the main
+    thread. Each scenario writes its own plan_path (mirrored from the scenario
+    path), so workers never collide and no locking is required.
+    """
+    _thread_local.buffer = []
+    started = time.perf_counter()
+    rel_scenario = os.path.relpath(scenario_path, SCENARIOS_DIR)
+    logger.info("")
+    logger.info("[%d/%d] %s", idx, total, rel_scenario)
+
+    plan_path = local_search_plan_path(scenario_path)
+    os.makedirs(os.path.dirname(plan_path), exist_ok=True)
+
+    # Empty plan JSON for the generated config's PlanPath to point at.
+    with open(plan_path, "w", encoding="utf-8") as f:
+        f.write("{}")
+
+    solver_status = ""
+    eval_result_path = ""
+    error = ""
+
+    try:
+        solve(scenario_path, plan_path)
+        solver_status = "SOLVED"
+
+        # Evaluate the plan the solver produced, using TORS.
+        tors_scenario_path = scenario_path.replace("scenario_solver_", "scenario_")
+        logger.info("      evaluating local search plan")
+        # evaluation = evaluate(tors_scenario_path, plan_path)
+        # eval_result_path = evaluation.get("eval_result_path", "")
+
+    except UnsolvableScenarioError as exc:
+        solver_status = "UNSOLVABLE"
+
+        logger.warning(
+            "      scenario marked UNSOLVABLE: %s",
+            exc.reason,
+        )
+        logger.info(
+            "      unsolvable scenario path: %s",
+            scenario_path,
+        )
+
+        if exc.config_path:
+            logger.info(
+                "      solver config path: %s",
+                exc.config_path,
+            )
+
+        if exc.returncode is not None:
+            logger.info(
+                "      solver exit code: %s",
+                exc.returncode,
+            )
+
+        # Helpful when debugging, but not too noisy for normal runs.
+        logger.debug(
+            "solver output for unsolvable scenario:\n%s",
+            exc.output,
+        )
+    
+    except Exception as exc:
+        error = repr(exc)
+        logger.error("  failed unexpectedly: %s", exc)
+        logger.debug("  traceback:", exc_info=True)
+
+    elapsed = time.perf_counter() - started
+
+    if error:
+        logger.error("  recorded failure after %.2fs", elapsed)
+    elif solver_status == "UNSOLVABLE":
+        logger.warning("  recorded unsolvable result after %.2fs", elapsed)
+    else:
+        logger.info("  done in %.2fs", elapsed)
+
+    row = {
+        "run_id": run_id,
+        "scenario": rel_scenario,
+        "plan_file": os.path.relpath(plan_path, LOCAL_SEARCH_PLANS_DIR),
+        "runtime_seconds": f"{elapsed:.4f}",
+        "solver_status": solver_status,
+        "eval_result_path": eval_result_path,
+        "error": error,
+    }
+
+    records = _thread_local.buffer
+    _thread_local.buffer = None
+    return row, records
+
+
+def run_pipeline_local_search(scenario_paths, max_workers=10):
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     total = len(scenario_paths)
     logger.info("Found %d scenarios", total)
+
+    if total == 0:
+        logger.warning("No scenarios found, nothing to do")
+        return
+
+    if max_workers is None:
+        max_workers = max(1, min(total, os.cpu_count() or 2))
+
     logger.info("Writing local-search plans to %s", LOCAL_SEARCH_PLANS_DIR)
+    logger.info("Running local search with up to %d parallel workers", max_workers)
     logger.info("Appending results to %s", LOCAL_SEARCH_RESULTS_FILE)
 
     init_results_file(LOCAL_SEARCH_RESULTS_FILE, LOCAL_SEARCH_FIELDNAMES)
 
-    for i, scenario_path in enumerate(scenario_paths, start=1):
-        started = time.perf_counter()
-        rel_scenario = os.path.relpath(scenario_path, SCENARIOS_DIR)
-        logger.info("")
-        logger.info("[%d/%d] %s", i, total, rel_scenario)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        futures = {
+            executor.submit(process_scenario_local_search, scenario_path, i,
+                            total, run_id): scenario_path
+            for i, scenario_path in enumerate(scenario_paths, start=1)
+        }
 
-        plan_path = local_search_plan_path(scenario_path)
-        os.makedirs(os.path.dirname(plan_path), exist_ok=True)
+        # Results stream in as workers finish. Only the main thread writes the
+        # CSV and flushes console logs, so no locking is required and each
+        # scenario's log block stays intact.
+        for future in as_completed(futures):
+            row, records = future.result()
+            _flush_records(records)
+            append_result(LOCAL_SEARCH_RESULTS_FILE, row, LOCAL_SEARCH_FIELDNAMES)
 
-        # Empty plan JSON for the generated config's PlanPath to point at.
-        with open(plan_path, "w", encoding="utf-8") as f:
-            f.write("{}")
-
-        solver_status = ""
-        eval_result_path = ""
-        error = ""
-
-        try:
-            solve(scenario_path, plan_path)
-            solver_status = "SOLVED"
-
-            # Evaluate the plan the solver produced, using TORS.
-            tors_scenario_path = scenario_path.replace("scenario_solver_", "scenario_")
-            logger.info("      evaluating local search plan")
-            evaluation = evaluate(tors_scenario_path, plan_path)
-            eval_result_path = evaluation.get("eval_result_path", "")
-
-        except Exception as exc:
-            error = repr(exc)
-            logger.error("  failed unexpectedly: %s", exc)
-            logger.debug("  traceback:", exc_info=True)
-
-        elapsed = time.perf_counter() - started
-
-        append_result(
-            LOCAL_SEARCH_RESULTS_FILE,
-            {
-                "run_id": run_id,
-                "scenario": rel_scenario,
-                "plan_file": os.path.relpath(plan_path, LOCAL_SEARCH_PLANS_DIR),
-                "runtime_seconds": f"{elapsed:.4f}",
-                "solver_status": solver_status,
-                "eval_result_path": eval_result_path,
-                "error": error,
-            },
-            LOCAL_SEARCH_FIELDNAMES,
-        )
-
-        if error:
-            logger.error("  recorded failure after %.2fs", elapsed)
-        else:
-            logger.info("  done in %.2fs", elapsed)
+    logger.info("")
+    logger.info("All %d scenarios processed", total)
 
 
 if __name__ == "__main__":
