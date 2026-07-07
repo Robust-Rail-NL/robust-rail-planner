@@ -52,11 +52,13 @@ Examples
 
 ```robust-rail-plan --examples```
 
-```robust-rail-plan --subproblem parking```
+```robust-rail-plan --simple```
 
-```robust-rail-plan --subproblem matching```
+<!-- ```robust-rail-plan --subproblem parking``` -->
 
-```robust-rail-plan --subproblem combined```
+<!-- ```robust-rail-plan --subproblem matching``` -->
+
+<!-- ```robust-rail-plan --subproblem combined``` -->
 
 ```robust-rail-plan --log-level DEBUG```
 

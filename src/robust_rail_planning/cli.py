@@ -18,7 +18,9 @@ def main():
     
     parser.add_argument("--solve", action="store_true",
                         help="Run the local search solver on each plan")
-    
+    parser.add_argument("--simple", action="store_true",
+                        help="Run the pipeline on the simple scenario and evaluate with TORS")
+
     args = parser.parse_args()
 
 
@@ -29,6 +31,7 @@ def main():
         use_examples=args.examples,
         planner=args.planner,
         do_local_search=args.solve,
+        simple_scenario=args.simple,
     )
 
 

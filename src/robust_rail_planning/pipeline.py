@@ -1,6 +1,7 @@
 import os
 import sys
 import glob
+import json
 import logging
 import importlib.util
 from datetime import datetime
@@ -13,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from convert.baseline_no_parameters.convert import create_instance_from_scenario
 from .evaluate import evaluate
 from .generate import generate
+from . import converter
 from local_search.solve import solve, UnsolvableScenarioError
 
 # PATHS
@@ -241,41 +243,41 @@ def plan(pddl_path, timeout=None):
     enhsp_jar = _find_enhsp_jar()
     java = _find_java()
 
-    # if enhsp_jar and java:
-    #     cmd = [java, "-jar", enhsp_jar, "-sp", plan_path, "-h", ENHSP_HEURISTIC, "-s", "wa_star_4",
-    #            "-o", DOMAIN_FILE, "-f", pddl_path]
-    #     logger.debug("Running: %s", " ".join(cmd))
+    if enhsp_jar and java:
+        cmd = [java, "-jar", enhsp_jar, "-sp", plan_path, "-h", ENHSP_HEURISTIC, "-s", "wa_star_4",
+               "-o", DOMAIN_FILE, "-f", pddl_path]
+        logger.debug("Running: %s", " ".join(cmd))
 
-    #     timeout_sec = timeout if timeout else 300
+        timeout_sec = timeout if timeout else 300
 
-    #     try:
-    #         proc = subprocess.run(
-    #             cmd,
-    #             capture_output=True, text=True,
-    #             timeout=timeout_sec,
-    #         )
-    #     except subprocess.TimeoutExpired:
-    #         logger.warning("  ENHSP timed out for %s", rel)
-    #         return False, None, 0, "TIMEOUT"
+        try:
+            proc = subprocess.run(
+                cmd,
+                capture_output=True, text=True,
+                timeout=timeout_sec,
+            )
+        except subprocess.TimeoutExpired:
+            logger.warning("  ENHSP timed out for %s", rel)
+            return False, None, 0, "TIMEOUT"
 
-    #     stdout_lower = proc.stdout.lower()
+        stdout_lower = proc.stdout.lower()
 
-    #     if os.path.isfile(plan_path):
-    #         with open(plan_path) as f:
-    #             plan_lines = [l.strip() for l in f if l.strip()]
-    #         plan_length = len(plan_lines)
-    #         logger.info("      solved by ENHSP: %d actions", plan_length)
-    #         logger.debug("Plan written to %s", plan_path)
-    #         return True, plan_path, plan_length, "SOLVED"
-    #     elif "unsolvable" in stdout_lower:
-    #         logger.warning("  problem unsolvable: %s", rel)
-    #         return False, None, 0, "UNSOLVABLE"
-    #     elif "no plan" in stdout_lower or "no solution" in stdout_lower:
-    #         logger.warning("  no plan found: %s", rel)
-    #         return False, None, 0, "NO_PLAN"
-    #     else:
-    #         logger.warning("  no plan found by ENHSP (unknown reason)")
-    #         return False, None, 0, "UNKNOWN"
+        if os.path.isfile(plan_path):
+            with open(plan_path) as f:
+                plan_lines = [l.strip() for l in f if l.strip()]
+            plan_length = len(plan_lines)
+            logger.info("      solved by ENHSP: %d actions", plan_length)
+            logger.debug("Plan written to %s", plan_path)
+            return True, plan_path, plan_length, "SOLVED"
+        elif "unsolvable" in stdout_lower:
+            logger.warning("  problem unsolvable: %s", rel)
+            return False, None, 0, "UNSOLVABLE"
+        elif "no plan" in stdout_lower or "no solution" in stdout_lower:
+            logger.warning("  no plan found: %s", rel)
+            return False, None, 0, "NO_PLAN"
+        else:
+            logger.warning("  no plan found by ENHSP (unknown reason)")
+            return False, None, 0, "UNKNOWN"
 
     # Fallback: use unified-planning's OneshotPlanner
     logger.info("  local ENHSP jar not available, falling back to OneshotPlanner")
@@ -460,8 +462,59 @@ def process_scenario(scenario_path, idx, total, run_id, use_examples, planner):
     return row, records
 
 
+def process_simple_scenario():
+    """Convert, plan, and evaluate the simple scenario using TORS."""
+    solver_scenario_path = os.path.join(SCENARIOS_DIR, "scenario_solver_simple.json")
+    tors_scenario_path = os.path.join(SCENARIOS_DIR, "scenario_simple.json")
+    location_path = LOCATION_FILE
+
+    # Step 1: Convert to PDDL
+    logger.info("Converting simple scenario to PDDL")
+    pddl_path = os.path.join(DATA_DIR, "scenario_solver_simple.pddl")
+    os.makedirs(os.path.dirname(pddl_path), exist_ok=True)
+
+    create_instance_from_scenario(
+        scenario_file=solver_scenario_path,
+        output_file=pddl_path,
+        location_file=location_path,
+        domain_file=DOMAIN_FILE,
+    )
+    logger.info("      PDDL written to %s", os.path.relpath(pddl_path, BASE_DIR))
+
+    # Step 2: Plan
+    logger.info("Planning simple scenario")
+    plan_found, plan_path, plan_length, planner_status = plan(pddl_path, timeout=600)
+
+    if not plan_found:
+        logger.error("  no plan found for simple scenario (status=%s)", planner_status)
+        return
+
+    logger.info("      plan found: %d actions", plan_length)
+    logger.info("      raw plan: %s", os.path.relpath(plan_path, BASE_DIR))
+
+    # Step 3: Convert plan to TORS JSON
+    json_path = plan_path.replace(".plan", ".json")
+    logger.info("Converting plan to TORS JSON: %s", os.path.relpath(json_path, BASE_DIR))
+
+    result = converter.convert_plan(plan_path, solver_scenario_path, location_path)
+    with open(json_path, "w") as f:
+        json.dump(result, f, indent=4)
+
+    # Step 4: Evaluate with TORS
+    logger.info("Evaluating plan with TORS")
+    try:
+        eval_result = evaluate(tors_scenario_path, json_path)
+        eval_result_path = eval_result.get("eval_result_path", "")
+        if eval_result_path:
+            logger.info("      TORS evaluation result written to: %s",
+                        os.path.relpath(eval_result_path, BASE_DIR))
+        logger.info("Simple scenario pipeline complete")
+    except Exception as exc:
+        logger.error("  TORS evaluation failed: %s", exc)
+
+
 def run_pipeline(do_generate=False, use_examples=False, planner="astar",
-                 do_local_search=False, max_workers=10):
+                 do_local_search=False, max_workers=10, simple_scenario=False):
     if do_generate:
         logger.info("Generating scenarios...")
         generate()
@@ -471,6 +524,10 @@ def run_pipeline(do_generate=False, use_examples=False, planner="astar",
         if use_examples
         else read_scenarios(SCENARIOS_DIR)
     )
+
+    if simple_scenario:
+        process_simple_scenario()
+        return
 
     if do_local_search:
         run_pipeline_local_search(scenario_paths, max_workers=max_workers)

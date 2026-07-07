@@ -844,15 +844,21 @@ def convert_plan(plan_file, scenario_file, location_file):
             
             # Determine departure time: look up from request, but never before the move finishes
             exit_time = current_time
-            if train in su_departure_time:
+            if len(groups) > 4 and not train.startswith("su_request"):
+                # depart_*_for_request: group[3] is the request name
+                req_name_from_action = groups[3] if len(groups) > 3 else ""
+                if req_name_from_action in request_lookup:
+                    dep = request_lookup[req_name_from_action].get("arrival")
+                    if dep is not None:
+                        exit_time = max(int(dep), current_time)
+            elif train in su_departure_time:
                 exit_time = max(su_departure_time[train], current_time)
-            else:
-                if train.startswith("su_request"):
-                    req_name = "request" + train[10:]
-                    if req_name in request_lookup:
-                        dep = request_lookup[req_name].get("arrival")
-                        if dep is not None:
-                            exit_time = max(int(dep), current_time)
+            elif train.startswith("su_request"):
+                req_name = "request" + train[10:]
+                if req_name in request_lookup:
+                    dep = request_lookup[req_name].get("arrival")
+                    if dep is not None:
+                        exit_time = max(int(dep), current_time)
             
             exit_action = create_exit_action(
                 train,
