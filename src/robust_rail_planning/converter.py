@@ -586,7 +586,22 @@ def convert_plan(plan_file, scenario_file, location_file):
     graph = build_graph(location)
     switch_ids = build_switch_sets(location)
     parkable_tracks = {tp["id"] for tp in location["trackParts"] if tp.get("parkingAllowed")}
+    zero_length_tracks = {tp["id"] for tp in location["trackParts"] if tp.get("length", 0) == 0}
     scenario_end_time = int(scenario.get("endTime", 0))
+
+    def _strip_trailing_zero_length(path):
+        """Remove trailing zero-length tracks (bumpers/signals) from path.
+        These are points like Sein70 that trains cannot physically occupy."""
+        while len(path) > 1 and path[-1] in zero_length_tracks:
+            path = path[:-1]
+        return path
+
+    def _strip_for_departure(path):
+        """Strip trailing non-parkable tracks for a departing train.
+        The train needs to wait on a parkable track before departing."""
+        while len(path) > 1 and path[-1] not in parkable_tracks:
+            path = path[:-1]
+        return path
 
     current_time = 0
     active_trains = {}
@@ -646,6 +661,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                     arrival = int(incoming.get("arrival", current_time))
                     break
             train_arrival_times[su_id] = arrival
+            train_arrival_times[su_id] = current_time
             train_locations[su_id] = track
             continue
 
@@ -728,7 +744,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                 if not state["path"] and train in train_locations:
                     state["path"] = [train_locations[train], dest_track]
                 
-                expanded_path = expand_path(state["path"], graph)
+                expanded_path = _strip_trailing_zero_length(expand_path(state["path"], graph))
                 duration = compute_move_duration(expanded_path, switch_ids)
                 end_time = current_time + duration
                 if len(expanded_path) > 1:
@@ -763,7 +779,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                 if not state["path"] and train in train_locations:
                     state["path"] = [train_locations[train], track_id]
                 
-                expanded_path = expand_path(state["path"], graph)
+                expanded_path = _strip_trailing_zero_length(expand_path(state["path"], graph))
                 duration = compute_move_duration(expanded_path, switch_ids)
                 end_time = current_time + duration
                 if len(expanded_path) > 1:
@@ -822,8 +838,9 @@ def convert_plan(plan_file, scenario_file, location_file):
                 if not state["path"] and train in train_locations:
                     state["path"] = [train_locations[train], dest_track]
                 
+                expanded_path = []
                 if state["path"]:
-                    expanded_path = expand_path(state["path"], graph)
+                    expanded_path = _strip_for_departure(expand_path(state["path"], graph))
                     duration = compute_move_duration(expanded_path, switch_ids)
                     end_time = current_time + duration
                     if len(expanded_path) > 1:
@@ -860,10 +877,12 @@ def convert_plan(plan_file, scenario_file, location_file):
                     if dep is not None:
                         exit_time = max(int(dep), current_time)
             
+            # Use the stripped path's last track for exit location
+            exit_track = expanded_path[-1] if len(expanded_path) > 0 else track
             exit_action = create_exit_action(
                 train,
                 exit_time,
-                track,
+                exit_track,
                 train_lookup,
                 track_lookup,
                 unit_lookup
@@ -1117,10 +1136,10 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
     if su_id_fn:
         for train in scenario.get("in", {}).get("trains", []):
             for name in [f"train{train['id']}", f"su_train{train['id']}"]:
-                if "firstParkingTrackPart" in train:
-                    initial_positions[su_id_fn(name)] = train["firstParkingTrackPart"]
-                elif "entryTrackPart" in train:
+                if "entryTrackPart" in train:
                     initial_positions[su_id_fn(name)] = train["entryTrackPart"]
+                elif "firstParkingTrackPart" in train:
+                    initial_positions[su_id_fn(name)] = train["firstParkingTrackPart"]
         
         for i, train in enumerate(scenario.get("inStanding", {}).get("trains", [])):
             for name in [f"train_in_standing_{i}", f"su_train_in_standing_{i}"]:
@@ -1230,6 +1249,14 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
                     su_last_position[child_id] = (action["location"], int(action["endTime"]))
         
         processed_actions.append(action)
+    
+    # Sort actions chronologically by startTime.
+    # Arrive actions come first at the same time (logical ordering).
+    processed_actions.sort(key=lambda a: (
+        int(a["startTime"]),
+        0 if a["taskType"].get("predefined") == "Arrive" else 1,
+        int(a.get("endTime", "0"))
+    ))
     
     return processed_actions
 
