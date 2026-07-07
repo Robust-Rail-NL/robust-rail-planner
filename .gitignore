@@ -11,3 +11,4 @@ tools/planners/
 src/robust_rail_planning.egg-info
 /data
 /data
+.vscode/

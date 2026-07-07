@@ -21,6 +21,7 @@ CORRIDOR_EXPAND_HOPS = 3
 
 
 def _build_adjacency(location_object):
+    # Undirected graph: each trackpart id maps to the set of ids it shares an aSide/bSide connection with.
     adjacency = {tp["id"]: set() for tp in location_object["trackParts"]}
     for tp in location_object["trackParts"]:
         for nb_id in tp.get("aSide", []) + tp.get("bSide", []):
@@ -31,6 +32,7 @@ def _build_adjacency(location_object):
 
 
 def _bfs_from(adjacency, start_ids):
+    # Returns hop-distance from any of the start nodes to every reachable node.
     dist = {}
     queue = deque()
     for t_id in start_ids:
@@ -47,6 +49,8 @@ def _bfs_from(adjacency, start_ids):
 
 
 def _departure_exit_ids(scenario_object, location_object):
+    # The departure track is where outbound trains leave the yard — the BFS root for entry_distance.
+    # Falls back to inbound entry tracks if no outbound requests are present in the scenario.
     ids = [req["leaveTrackPart"] for req in scenario_object.get("out", {}).get("trainRequests", []) if "leaveTrackPart" in req]
     if not ids:
         ids = [t["entryTrackPart"] for t in scenario_object.get("in", {}).get("trains", []) if "entryTrackPart" in t]
@@ -59,6 +63,7 @@ def _departure_exit_ids(scenario_object, location_object):
 
 
 def train_unit_type_key(train_unit):
+    # Normalized train-unit identity used to match available units to request slots.
     unit_type = train_unit["type"]
     return (
         unit_type.get("displayName"),
@@ -68,6 +73,7 @@ def train_unit_type_key(train_unit):
 
 
 def all_trains_with_source(scenario_object):
+    # Keep source/index so train units can be linked back to their physical train.
     for index, train in enumerate(scenario_object.get("in", {}).get("trains", [])):
         yield "in", index, train
     for index, train in enumerate(scenario_object.get("inStanding", {}).get("trains", [])):
@@ -75,6 +81,7 @@ def all_trains_with_source(scenario_object):
 
 
 def _coupling_track_ids_for_request(request, location_object, candidate_track_ids):
+    # Prefer request-specific parking/departure information, otherwise use nearby coupling tracks.
     candidate_track_ids = {str(track_id) for track_id in candidate_track_ids}
     preferred_ids = [request.get("lastParkingTrackPart"), request.get("leaveTrackPart")]
     preferred_ids = [str(track_id) for track_id in preferred_ids if track_id is not None and str(track_id) in candidate_track_ids]
@@ -96,6 +103,7 @@ def _coupling_track_ids_for_request(request, location_object, candidate_track_id
 
 
 def _shortest_path(adjacency, start_id, goal_id):
+    # BFS shortest path (inclusive list of node ids) over the undirected track graph.
     if start_id is None or goal_id is None:
         return []
     if start_id == goal_id:
@@ -123,6 +131,7 @@ def _request_type_keys(request):
 
 
 def _build_service_track_ids(location_object):
+    # Service tracks come from facilities[].relatedTrackParts for facilities with taskTypes.
     service_tracks = {}
     for facility in location_object.get("facilities", []):
         if facility.get("taskTypes"):
@@ -135,6 +144,9 @@ def _build_service_track_ids(location_object):
 
 
 def _relevant_corridor_nodes(scenario_object, location_object, known_track_ids, coupling_candidate_track_ids, expand_hops=CORRIDOR_EXPAND_HOPS):
+    # Restrict movement connectivity to the tracks that matter for this scenario: the nodes
+    # on each type-compatible train's start -> coupling track -> exit/parking route, plus an
+    # `expand_hops` neighborhood for maneuvering.
     raw_adj = _build_adjacency(location_object)
     adjacency = {str(k): {str(n) for n in v} for k, v in raw_adj.items()}
     path_nodes = set()
@@ -190,6 +202,7 @@ def _relevant_corridor_nodes(scenario_object, location_object, known_track_ids, 
 
 
 def _train_total_length(train):
+    # Sum the physical length of every unit in an arriving composition or outgoing request.
     total_length = Fraction(0)
     if "members" in train:
         for member in train.get("members", []):
@@ -201,10 +214,12 @@ def _train_total_length(train):
 
 
 def _train_unit_length(train_unit):
+    # Physical length of one atomic train unit, used for single-unit shunting units.
     return Fraction(str(train_unit["type"]["length"]))
 
 
 def _train_initial_track_id(train, preferred_keys):
+    # Pick the first available track field for trains whose JSON shape differs by scenario block.
     for key in preferred_keys:
         if train.get(key) is not None:
             return train.get(key)
@@ -212,6 +227,7 @@ def _train_initial_track_id(train, preferred_keys):
 
 
 def _track_part_neighbors(track_part):
+    # Return neighboring track-part ids from both sides in input order.
     neighbors = []
     seen = set()
     for side_key in ("aSide", "bSide"):
@@ -223,6 +239,7 @@ def _track_part_neighbors(track_part):
 
 
 def _is_switch_like_track_part(track_part):
+    # No-switch modelling removes zero-length connector nodes and reconnects their boundaries.
     if track_part.get("parkingAllowed", False):
         return False
     try:
@@ -264,6 +281,7 @@ def _switch_like_components(location_object, switch_like_track_ids):
 
 
 def _reconnect_switch_like_components(location_object, switch_like_track_ids, id_to_track_part, problem, connected_pairs, connected_aside, connected_bside, allowed_track_ids=None):
+    # Collapse each switch-like component into direct boundary-to-boundary links.
     components = _switch_like_components(location_object, switch_like_track_ids)
     original_lookup = {tp["id"]: tp for tp in location_object["trackParts"]}
 
@@ -302,6 +320,7 @@ def _reconnect_switch_like_components(location_object, switch_like_track_ids, id
 
 
 def _train_object_name(source, index, train):
+    # Reuse the routing branch's standing-train naming convention.
     if source == "inStanding":
         return f"train_in_standing_{index}"
     return "train" + train["id"]
@@ -830,6 +849,12 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     parking_fulfill.add_effect(parked_unit_used(parking_fulfill.unit), True)
     problem.add_action(parking_fulfill)
 
+
+    # --- Initialise yard topology ---
+    # Build the track graph, locate departure exits, and compute BFS distances
+    # from the yard exit to every track part. These distances serve as the
+    # `entry_distance` fluents that guide the planner's cost heuristic.
+
     adjacency = _build_adjacency(location_object)
     exit_ids_a, exit_ids_b = _departure_exit_ids(scenario_object, location_object)
     exit_ids = exit_ids_a.union(exit_ids_b)
@@ -838,6 +863,11 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     parking_ids = {tp["id"] for tp in location_object["trackParts"] if tp.get("parkingAllowed")}
     parking_bfs_values = sorted({bfs_dist[pid] for pid in parking_ids if pid in bfs_dist})
     bfs_to_entry_dist = {d: i + 1 for i, d in enumerate(parking_bfs_values)}
+
+    # --- Determine which track parts to model ---
+    # Identify switch-like (zero-length connector) nodes to collapse them out,
+    # then compute a corridor of relevant tracks so the planner only reasons
+    # about the sub-graph that matters for this scenario.
 
     in_standing_trains = scenario_object.get("inStanding", {}).get("trains", [])
     out_standing_trains = scenario_object.get("outStanding", {}).get("trainRequests", [])
@@ -854,6 +884,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     corridor_nodes = _relevant_corridor_nodes(scenario_object, location_object, all_non_switch_ids, coupling_candidate_track_ids, expand_hops=CORRIDOR_EXPAND_HOPS)
 
+    # Augment the corridor with explicit start/parking/exit/facility track ids
+    # so they are never pruned away even if the corridor heuristic misses them.
     corridor_or_required = None
     required_track_ids = all_non_switch_ids
     if corridor_nodes is not None:
@@ -899,6 +931,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     def _in_corridor(*ids):
         return corridor_or_required is None or all(str(i) in corridor_or_required for i in ids)
 
+    # Create PDDL objects for every non-switch track part in the corridor
+    # and set its static fluents (exit flags, parking/turning permission, service facilities, length).
     for track_part in location_object["trackParts"]:
         if track_part["id"] in switch_like_track_ids:
             continue
@@ -928,6 +962,9 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         if not track_part.get("parkingAllowed", False):
             problem.set_initial_value(track_length(obj), up.Real(Fraction(10**9)))
 
+    # Wire up direct aSide/bSide connections between adjacent non-switch track parts,
+    # filtering through the corridor check. Switch-like components are handled separately
+    # by reconnecting their boundary neighbours directly.
     connected_pairs = set()
     for track_part in location_object["trackParts"]:
         src_id = track_part["id"]
@@ -953,6 +990,10 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     _reconnect_switch_like_components(location_object, switch_like_track_ids, id_to_track_part, problem, connected_pairs, connected_aside, connected_bside, corridor_or_required)
 
+    # --- Compute initial occupancies ---
+    # Standing trains already occupy their tracks at time zero. Record their
+    # position and update the track's occupied length / train count.
+
     id_to_unit = {}
     unit_type_by_id = {}
 
@@ -965,13 +1006,20 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
             track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
 
+    # All out requests must be fulfilled (one departure per request).
     problem.add_goal(up.Equals(num_of_departed_trains(), up.Int(len(out_requests))))
 
+    # Write back initial stacking distances for tracks that start occupied.
     for track_id, occupied_length_value in track_occupancies.items():
         track_obj = id_to_track_part[track_id]
         problem.set_initial_value(astack_distance(track_obj), up.Real(Fraction(0)))
         problem.set_initial_value(bstack_distance(track_obj), up.Real(occupied_length_value))
         problem.set_initial_value(number_of_trains_on_track(track_obj), up.Int(track_train_counts.get(track_id, 0)))
+
+    # --- Create shunting units for all trains ---
+    # Every incoming or standing train becomes a shunting unit (SU) that can be
+    # split, moved, coupled, and departed. Multi-unit compositions also get pre-allocated
+    # single-unit SUs for the split action to activate.
 
     in_train_sus = []
     for source, index, train in all_trains_with_source(scenario_object):
@@ -1038,12 +1086,17 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             second_obj = id_to_unit[second["trainUnit"]["id"]]
             problem.set_initial_value(unit_before(first_obj, second_obj), True)
 
+    # Enforce arrival order: sort inbound trains by arrival time and chain the
+    # arrival-precedence fluents so each train can only arrive after the previous one.
     if in_train_sus:
         in_train_sus.sort(key=lambda p: p[0])
         problem.set_initial_value(su_previous_arrived(in_train_sus[0][1]), True)
         for (_, su_a), (_, su_b) in zip(in_train_sus, in_train_sus[1:]):
             problem.set_initial_value(su_arrival_immediately_before(su_a, su_b), True)
 
+    # --- Parking goals for outStanding requests ---
+    # Each standing-out request defines slots on a specific track; matching units
+    # must park there and then be marked as used via parking_fulfill.
     for request in out_standing_trains:
         track_id = request.get("lastParkingTrackPart")
         if track_id not in id_to_track_part:
@@ -1062,6 +1115,10 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                     problem.set_initial_value(parking_compatible(unit_obj, slot_obj), True)
             problem.add_goal(parking_slot_fulfilled(slot_obj))
 
+    # --- Departure requests for out trains ---
+    # Create request objects with their coupling tracks, unit slots, and goals.
+    # Single-unit requests require a departure action; two-unit requests require
+    # assembly (couple) followed by departure of the assembled SU.
     request_objs = {}
     for request in out_requests:
         if len(request["trainUnits"]) > 2:
@@ -1106,6 +1163,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     if output_file is None:
         output_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", f"{scenario_name}.pddl")
 
+    # Serialise the unified-planning Problem to PDDL.
     writer = PDDLWriter(problem)
     writer.write_problem(output_file)
 

@@ -48,9 +48,9 @@ robust-rail-plan
 
 Examples
 
-```robust-rail-plan --generate``` 
+```robust-rail-plan --generate```
 
-```robust-rail-plan --examples``` TYCHO USE THIS
+```robust-rail-plan --examples```
 
 ```robust-rail-plan --subproblem parking```
 
