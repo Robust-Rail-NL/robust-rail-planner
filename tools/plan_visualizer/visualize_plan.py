@@ -1,4 +1,5 @@
 import argparse
+import base64
 import json
 import re
 from pathlib import Path
@@ -253,12 +254,33 @@ def load_layout(layout_path):
     return {"tracks": {}}
 
 
-def render_html(location_name, states, edges, layout, output_path):
+def encode_image_base64(image_path):
+    path = Path(image_path)
+    if not path.exists():
+        return None
+    with open(path, "rb") as f:
+        data = base64.b64encode(f.read()).decode("ascii")
+    ext = path.suffix.lower()
+    mime = {
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "gif": "image/gif",
+        "svg": "image/svg+xml",
+    }.get(ext.lstrip("."), "image/png")
+    return f"data:{mime};base64,{data}"
+
+
+def render_html(location_name, states, edges, layout, output_path, image_data_uri=None, image_width=None, image_height=None, track_meta=None):
     payload = {
         "locationName": location_name,
         "states": states,
         "edges": edges,
         "positions": layout.get("tracks", {}),
+        "imageDataUri": image_data_uri,
+        "imageWidth": image_width,
+        "imageHeight": image_height,
+        "trackMeta": track_meta or {},
     }
     data_json = json.dumps(payload)
 
@@ -532,18 +554,36 @@ function plainDesc(state) {{
 
 // ---- YARD MAP ----
 const positions = data.positions || {{}};
+const trackMeta = data.trackMeta || {{}};
 const posKeys = Object.keys(positions);
 const hasPositions = posKeys.length > 0;
-let svgMinX=0, svgMinY=0, svgScaleX=1, svgScaleY=1;
+let svgMinX=0, svgMinY=0, svgScaleX=1, svgScaleY=1, svgPad=20, svgNodeR=3, svgNodeRActive=5, svgNodeRPrev=4;
 
 function buildYard() {{
   if (!hasPositions) {{ document.getElementById('yard-panel').style.display='none'; return; }}
   const xs=posKeys.map(k=>positions[k].x), ys=posKeys.map(k=>positions[k].y);
   const minX=Math.min(...xs),maxX=Math.max(...xs),minY=Math.min(...ys),maxY=Math.max(...ys);
-  const pad=20,svgW=1000,svgH=120;
-  const scale=Math.min((svgW-pad*2)/(maxX-minX||1),(svgH-pad*2)/(maxY-minY||1));
-  svgScaleX=scale; svgScaleY=scale; svgMinX=minX; svgMinY=minY;
-  document.getElementById('yard-svg').setAttribute('viewBox',`0 0 ${{svgW}} ${{svgH}}`);
+  const hasImage = data.imageDataUri && data.imageWidth && data.imageHeight;
+  if (hasImage) {{
+    const imgW = data.imageWidth, imgH = data.imageHeight;
+    svgPad = 0; svgScaleX = 1; svgScaleY = 1; svgMinX = 0; svgMinY = 0;
+    svgNodeR = 14; svgNodeRActive = 20; svgNodeRPrev = 16;
+    const svg = document.getElementById('yard-svg');
+    svg.setAttribute('viewBox', `0 0 ${{imgW}} ${{imgH}}`);
+    const aspectH = Math.round(800 * imgH / imgW);
+    svg.setAttribute('height', Math.max(200, aspectH));
+    const img = document.createElementNS('http://www.w3.org/2000/svg','image');
+    img.setAttribute('href', data.imageDataUri);
+    img.setAttribute('x', 0); img.setAttribute('y', 0);
+    img.setAttribute('width', imgW); img.setAttribute('height', imgH);
+    svg.insertBefore(img, svg.firstChild);
+  }} else {{
+    const pad=20,svgW=1000,svgH=120;
+    const scale=Math.min((svgW-pad*2)/(maxX-minX||1),(svgH-pad*2)/(maxY-minY||1));
+    svgPad=20; svgScaleX=scale; svgScaleY=scale; svgMinX=minX; svgMinY=minY;
+    svgNodeR=3; svgNodeRActive=5; svgNodeRPrev=4;
+    document.getElementById('yard-svg').setAttribute('viewBox',`0 0 ${{svgW}} ${{svgH}}`);
+  }}
   const edgesLayer=document.getElementById('edges-layer');
   data.edges.forEach(e => {{
     const a=positions[e.source],b=positions[e.target];
@@ -558,11 +598,16 @@ function buildYard() {{
   const nodesLayer=document.getElementById('nodes-layer');
   posKeys.forEach(name => {{
     const pos=positions[name];
+    const meta=trackMeta[name]||{{}};
+    const isParking=meta.parkingAllowed===true;
+    const r=isParking?svgNodeR:svgNodeR*0.5;
     const c=document.createElementNS('http://www.w3.org/2000/svg','circle');
     c.setAttribute('cx',toSvgX(pos.x)); c.setAttribute('cy',toSvgY(pos.y));
-    c.setAttribute('r','3'); c.setAttribute('fill','var(--yard-node)');
+    c.setAttribute('r',r); c.setAttribute('fill','var(--yard-node)');
+    c.setAttribute('stroke','#fff'); c.setAttribute('stroke-width','2');
+    c.setAttribute('data-parking',isParking?'1':'0');
     c.setAttribute('id','node-'+name.replace(/[^a-zA-Z0-9]/g,'_'));
-    const title=document.createElementNS('http://www.w3.org/2000/svg','title'); title.textContent=name; c.appendChild(title);
+    const title=document.createElementNS('http://www.w3.org/2000/svg','title'); title.textContent=name+(isParking?' (parking)':''); c.appendChild(title);
     nodesLayer.appendChild(c);
   }});
   const legendEl=document.getElementById('yard-legend');
@@ -572,8 +617,8 @@ function buildYard() {{
     legendEl.appendChild(item);
   }});
 }}
-function toSvgX(x) {{ return 20+(x-svgMinX)*svgScaleX; }}
-function toSvgY(y) {{ return 20+(y-svgMinY)*svgScaleY; }}
+function toSvgX(x) {{ return svgPad+(x-svgMinX)*svgScaleX; }}
+function toSvgY(y) {{ return svgPad+(y-svgMinY)*svgScaleY; }}
 
 function updateYard(state, prevState) {{
   if(!hasPositions) return;
@@ -581,7 +626,10 @@ function updateYard(state, prevState) {{
     l.setAttribute('stroke','var(--yard-edge)'); l.setAttribute('stroke-width','1.5');
   }});
   document.querySelectorAll('#nodes-layer circle').forEach(c => {{
-    c.setAttribute('fill','var(--yard-node)'); c.setAttribute('r','3');
+    const isParking=c.getAttribute('data-parking')==='1';
+    c.setAttribute('fill','var(--yard-node)');
+    c.setAttribute('stroke','#fff'); c.setAttribute('stroke-width','2');
+    c.setAttribute('r',isParking?svgNodeR:svgNodeR*0.5);
   }});
   const trainsToShow=filterTrain?[filterTrain]:allTrains;
   trainsToShow.forEach(train => {{
@@ -589,7 +637,7 @@ function updateYard(state, prevState) {{
     if(!info||!info.track||info.status==='departed') return;
     const color=trainColorMap[train];
     const node=document.getElementById('node-'+info.track.replace(/[^a-zA-Z0-9]/g,'_'));
-    if(node) {{ node.setAttribute('fill',color); node.setAttribute('r','5'); }}
+    if(node) {{ node.setAttribute('fill',color); node.setAttribute('r',svgNodeRActive); }}
     if(prevState) {{
       const prev=prevState.trains[train];
       if(prev&&prev.track&&prev.track!==info.track) {{
@@ -601,7 +649,7 @@ function updateYard(state, prevState) {{
           }}
         }});
         const pn=document.getElementById('node-'+src.replace(/[^a-zA-Z0-9]/g,'_'));
-        if(pn&&pn.getAttribute('fill')==='var(--yard-node)') {{ pn.setAttribute('fill',color); pn.setAttribute('r','4'); }}
+        if(pn&&pn.getAttribute('fill')==='var(--yard-node)') {{ pn.setAttribute('fill',color); pn.setAttribute('r',svgNodeRPrev); }}
       }}
     }}
   }});
@@ -796,14 +844,32 @@ def main():
 
     layout = load_layout(args.layout)
     raw_positions = layout.get("tracks", {})
+    name_set = set(name_to_track.keys())
     lower_map = {k.lower(): v for k, v in token_to_name.items()}
     positions = {}
     for key, pos in raw_positions.items():
-        track_name = token_to_name.get(key) or lower_map.get(key.lower(), key)
+        if key in name_set:
+            track_name = key
+        else:
+            track_name = token_to_name.get(key) or lower_map.get(key.lower(), key)
         positions[track_name] = {"x": pos["x"], "y": pos["y"]}
     layout["tracks"] = positions
 
-    render_html(Path(args.location).parent.name, states, edges, layout, args.output)
+    image_data_uri = None
+    image_width = None
+    image_height = None
+    image_path = args.image or layout.get("image")
+    if image_path:
+        layout_dir = Path(args.layout).resolve().parent if args.layout else Path.cwd()
+        abs_image_path = layout_dir / image_path
+        image_data_uri = encode_image_base64(abs_image_path)
+        image_width = layout.get("width")
+        image_height = layout.get("height")
+
+    track_meta = {str(t["name"]): {"parkingAllowed": t.get("parkingAllowed", False), "type": t.get("type", "")} for t in location.get("trackParts", [])}
+    render_html(Path(args.location).parent.name, states, edges, layout, args.output,
+                image_data_uri=image_data_uri, image_width=image_width, image_height=image_height,
+                track_meta=track_meta)
     print(f"Wrote visualizer to {args.output}")
     print(f"Steps: {len(steps)}; trains: {len(initial)}; yard nodes: {len(positions)}")
 
