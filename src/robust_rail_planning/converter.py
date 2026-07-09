@@ -467,13 +467,14 @@ def get_all_bside(track_part, switch_like_ids, id_to_tp):
 
 def build_graph(location):
     id_to_tp = {tp["id"]: tp for tp in location["trackParts"]}
-    switch_like = build_switch_sets(location)
     graph = {}
     for tp in location["trackParts"]:
         src = tp["id"]
         neighbors = set()
-        neighbors |= get_all_aside(tp, switch_like, id_to_tp)
-        neighbors |= get_all_bside(tp, switch_like, id_to_tp)
+        for nb_id in tp.get("aSide", []):
+            neighbors.add(str(nb_id))
+        for nb_id in tp.get("bSide", []):
+            neighbors.add(str(nb_id))
         graph[src] = neighbors
     return graph
 

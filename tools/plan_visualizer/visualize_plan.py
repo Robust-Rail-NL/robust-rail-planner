@@ -104,6 +104,11 @@ def action_track(action):
     return None
 
 
+def action_path_resources(action):
+    resources = action.get("resources", [])
+    return [str(r["trackPartId"]) for r in resources if r.get("trackPartId") is not None]
+
+
 def parse_solver_plan(path):
     plan = load_json(path)
     actions = sorted(
@@ -119,6 +124,7 @@ def parse_solver_plan(path):
         else:
             train = "su_" + str(action.get("shuntingUnit", {}).get("id", "unknown"))
         track = action_track(action)
+        path_raw = action_path_resources(action)
         if task_name == "Wait":
             steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: Wait {train}", "action": "wait", "args": [train]})
         elif task_name == "Combine":
@@ -126,13 +132,13 @@ def parse_solver_plan(path):
         elif not track:
             continue
         elif task_name == "Move":
-            steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: Move {train} \u2192 {track}", "action": "move_to", "args": [train, track]})
+            steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: Move {train} \u2192 {track}", "action": "move_to", "args": [train, track], "path": path_raw})
         elif task_name == "Arrive":
-            steps.append({"raw": f"{action.get('startTime')}: Arrive {train} @ {track}", "action": "arrive", "args": [train, track]})
+            steps.append({"raw": f"{action.get('startTime')}: Arrive {train} @ {track}", "action": "arrive", "args": [train, track], "path": path_raw})
         elif task_name == "Exit":
-            steps.append({"raw": f"{action.get('startTime')}: Exit {train} @ {track}", "action": "depart", "args": [train, track]})
+            steps.append({"raw": f"{action.get('startTime')}: Exit {train} @ {track}", "action": "depart", "args": [train, track], "path": path_raw})
         else:
-            steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: {task_name} {train} @ {track}", "action": "park", "args": [train, track]})
+            steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: {task_name} {train} @ {track}", "action": "service", "args": [train, track], "path": path_raw})
     return steps
 
 
@@ -161,6 +167,15 @@ def normalize_track(token, token_to_name):
     return token_to_name.get(stripped, stripped)
 
 
+def normalize_path(raw_path, token_to_name):
+    seen = []
+    for t in raw_path:
+        norm = normalize_track(t, token_to_name)
+        if norm and (not seen or norm != seen[-1]):
+            seen.append(norm)
+    return seen
+
+
 def simulate_steps(initial_trains, steps, token_to_name):
     states = [{"index": 0, "action": "initial", "action_type": "initial", "train": None, "raw": "Initial state", "trains": json.loads(json.dumps(initial_trains))}]
     trains = json.loads(json.dumps(initial_trains))
@@ -170,6 +185,12 @@ def simulate_steps(initial_trains, steps, token_to_name):
         args = step["args"]
         label = step["raw"]
         involved_train = args[0] if args else None
+        raw_path = step.get("path")
+
+        if raw_path:
+            train_path = {involved_train: normalize_path(raw_path, token_to_name)}
+        else:
+            train_path = {}
 
         if action == "move" and len(args) >= 3:
             train, source, target = args[:3]
@@ -230,6 +251,12 @@ def simulate_steps(initial_trains, steps, token_to_name):
             trains[train]["track"] = normalize_track(track, token_to_name)
             trains[train]["status"] = "departed"
             action_type = "depart"
+        elif action == "service" and len(args) >= 2:
+            train, target = args[:2]
+            trains.setdefault(train, {"track": None, "status": "active"})
+            trains[train]["track"] = normalize_track(target, token_to_name)
+            trains[train]["status"] = "service"
+            action_type = "service"
         elif action in ("start_move", "end_move"):
             action_type = "wait"
         elif action in ("wait",):
@@ -244,6 +271,7 @@ def simulate_steps(initial_trains, steps, token_to_name):
             "train": involved_train,
             "raw": label,
             "trains": json.loads(json.dumps(trains)),
+            "train_path": train_path,
         })
     return states
 
@@ -306,6 +334,7 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
       --badge-combine-bg: #f3e8ff;--badge-combine-fg: #7e22ce;
       --status-active-bg: #dbeafe;  --status-active-fg: #1d4ed8;
       --status-parked-bg: #d1fae5;  --status-parked-fg: #065f46;
+      --status-service-bg: #fef3c7; --status-service-fg: #92400e;
       --status-departed-bg: #f3f4f6;--status-departed-fg: #9ca3af;
       --status-combined-bg: #f3e8ff;--status-combined-fg: #7e22ce;
       --track-changed-bg: #fef3c7; --track-changed-fg: #92400e;
@@ -332,6 +361,7 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
       --badge-combine-bg: #2e1065; --badge-combine-fg: #d8b4fe;
       --status-active-bg: #1e3a5f;  --status-active-fg: #93c5fd;
       --status-parked-bg: #064e3b;  --status-parked-fg: #6ee7b7;
+      --status-service-bg: #451a03; --status-service-fg: #fbbf24;
       --status-departed-bg: #1f2937;--status-departed-fg: #6b7280;
       --status-combined-bg: #2e1065;--status-combined-fg: #d8b4fe;
       --track-changed-bg: #451a03; --track-changed-fg: #fdba74;
@@ -392,6 +422,7 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
     .status-badge {{ display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 500; }}
     .status-active   {{ background: var(--status-active-bg);   color: var(--status-active-fg); }}
     .status-parked   {{ background: var(--status-parked-bg);   color: var(--status-parked-fg); }}
+    .status-service  {{ background: var(--status-service-bg);  color: var(--status-service-fg); }}
     .status-departed {{ background: var(--status-departed-bg); color: var(--status-departed-fg); }}
     .status-combined {{ background: var(--status-combined-bg); color: var(--status-combined-fg); }}
     .track-cell {{ font-family: monospace; font-size: 12px; font-weight: 500; }}
@@ -636,8 +667,29 @@ function updateYard(state, prevState) {{
     const info=state.trains[train];
     if(!info||!info.track||info.status==='departed') return;
     const color=trainColorMap[train];
-    const node=document.getElementById('node-'+info.track.replace(/[^a-zA-Z0-9]/g,'_'));
-    if(node) {{ node.setAttribute('fill',color); node.setAttribute('r',svgNodeRActive); }}
+    const trainPath = state.train_path && state.train_path[train];
+    if (trainPath && trainPath.length >= 2) {{
+      for (let i = 0; i < trainPath.length; i++) {{
+        const pn = document.getElementById('node-'+trainPath[i].replace(/[^a-zA-Z0-9]/g,'_'));
+        if (pn) {{
+          const isLast = i === trainPath.length - 1;
+          pn.setAttribute('fill', color);
+          pn.setAttribute('r', isLast ? svgNodeRActive : svgNodeRPrev);
+        }}
+        if (i < trainPath.length - 1) {{
+          const a = trainPath[i], b = trainPath[i+1];
+          document.querySelectorAll('#edges-layer line').forEach(l => {{
+            const ls = l.getAttribute('data-source'), lt = l.getAttribute('data-target');
+            if ((ls === a && lt === b) || (ls === b && lt === a)) {{
+              l.setAttribute('stroke', color); l.setAttribute('stroke-width', '3');
+            }}
+          }});
+        }}
+      }}
+    }} else {{
+      const node=document.getElementById('node-'+info.track.replace(/[^a-zA-Z0-9]/g,'_'));
+      if(node) {{ node.setAttribute('fill',color); node.setAttribute('r',svgNodeRActive); }}
+    }}
     if(prevState) {{
       const prev=prevState.trains[train];
       if(prev&&prev.track&&prev.track!==info.track) {{
@@ -759,6 +811,7 @@ function render(idx) {{
     if(info.status==='parked') statusHTML='<span class="status-badge status-parked">parked</span>';
     else if(info.status==='departed') statusHTML='<span class="status-badge status-departed">departed</span>';
     else if(info.status==='combined') statusHTML='<span class="status-badge status-combined">absorbed</span>';
+    else if(info.status==='service') statusHTML='<span class="status-badge status-service">service</span>';
     else statusHTML='<span class="status-badge status-active">moving</span>';
     statusEl.innerHTML=statusHTML;
 
