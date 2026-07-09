@@ -356,6 +356,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     shunting_unit_type = up.UserType("shuntingunit")
     parking_request_type = up.UserType("parkingrequest")
     parking_slot_type = up.UserType("parkingslot")
+    shunting_composition_type = up.UserType("shuntingcomposition")
 
     parking_allowed = problem.add_fluent(up.Fluent("parking_allowed", up.BoolType(), trackpart=track_part_type),                         default_initial_value=False)
     turning_allowed = problem.add_fluent(up.Fluent("turning_allowed", up.BoolType(), trackpart=track_part_type),                         default_initial_value=False)
@@ -417,6 +418,16 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     facility_type     = problem.add_fluent(up.Fluent("facility_type", up.BoolType(), trackpart=track_part_type, ftype=facility_type_type), default_initial_value=False)
     requires_facility = problem.add_fluent(up.Fluent("requires_facility", up.BoolType(), shunting_unit=shunting_unit_type, ftype=facility_type_type), default_initial_value=False)
     serviced          = problem.add_fluent(up.Fluent("serviced", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=True)
+
+
+    front_of = problem.add_fluent(up.Fluent("front_of", up.BoolType(), unit=train_unit_type, su=shunting_unit_type),default_initial_value=False)
+    back_of = problem.add_fluent(up.Fluent("back_of", up.BoolType(), unit=train_unit_type, su=shunting_unit_type), default_initial_value=False)
+    next_in_su = problem.add_fluent(up.Fluent("next_in_su", up.BoolType(), front=train_unit_type, back=train_unit_type, su=shunting_unit_type),default_initial_value=False,)
+    front_slot = problem.add_fluent(up.Fluent("front_slot", up.BoolType(), slot=request_slot_type, su=shunting_unit_type), default_initial_value=False)
+    back_slot = problem.add_fluent(up.Fluent("back_slot", up.BoolType(), slot=request_slot_type, su=shunting_unit_type), default_initial_value=False)
+    su_unit_count = problem.add_fluent(up.Fluent("su_unit_count", up.IntType(), shunting_unit=shunting_unit_type), default_initial_value=up.Int(0))
+    request_size = problem.add_fluent(up.Fluent("request_size", up.IntType(), request=departure_request_type), default_initial_value=up.Int(0))
+
     id_to_facility_type = {ftype_str: problem.add_object(ftype_str.lower(), facility_type_type)
                            for ftype_str in {info["type"] for info in service_track_ids.values()}}
 
@@ -648,6 +659,184 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     uncouple.add_effect(part_of_composition(uncouple.unit, uncouple.composition), False)
     problem.add_action(uncouple)
 
+    uncouple_front_su = up.InstantaneousAction(
+        "uncouple_front_su",
+        parent_su=shunting_unit_type,
+        front_su=shunting_unit_type,
+        front_unit=train_unit_type,
+        next_unit=train_unit_type,
+        composition=arrival_composition_type,
+        track=track_part_type,
+    )
+    uncouple_front_su.add_precondition(active_su(uncouple_front_su.parent_su))
+    uncouple_front_su.add_precondition(allowed_to_move_su(uncouple_front_su.parent_su))
+    uncouple_front_su.add_precondition(up.Not(active_su(uncouple_front_su.front_su)))
+    uncouple_front_su.add_precondition(contains_su(uncouple_front_su.parent_su, uncouple_front_su.front_unit))
+    uncouple_front_su.add_precondition(contains_su(uncouple_front_su.front_su, uncouple_front_su.front_unit))
+    uncouple_front_su.add_precondition(single_unit_su(uncouple_front_su.front_su, uncouple_front_su.front_unit))
+    uncouple_front_su.add_precondition(front_of(uncouple_front_su.front_unit, uncouple_front_su.parent_su))
+    uncouple_front_su.add_precondition(next_in_su(uncouple_front_su.front_unit, uncouple_front_su.next_unit, uncouple_front_su.parent_su))
+    uncouple_front_su.add_precondition(part_of_composition(uncouple_front_su.front_unit, uncouple_front_su.composition))
+    uncouple_front_su.add_precondition(composition_needs_uncoupling(uncouple_front_su.composition))
+    uncouple_front_su.add_precondition(at_su(uncouple_front_su.parent_su, uncouple_front_su.track))
+    uncouple_front_su.add_effect(active_su(uncouple_front_su.front_su), True)
+    uncouple_front_su.add_effect(su_may_move(uncouple_front_su.parent_su), True)
+    uncouple_front_su.add_effect(su_may_move(uncouple_front_su.front_su), True)
+    uncouple_front_su.add_effect(allowed_to_move_su(uncouple_front_su.parent_su), False)
+    uncouple_front_su.add_effect(concurrent_movements, concurrent_movements - 1)
+    uncouple_front_su.add_effect(at_su(uncouple_front_su.front_su, uncouple_front_su.track), True)
+    uncouple_front_su.add_effect(su_aside_distance(uncouple_front_su.front_su), su_aside_distance(uncouple_front_su.parent_su))
+    uncouple_front_su.add_effect(su_aside_distance(uncouple_front_su.parent_su), su_aside_distance(uncouple_front_su.parent_su) + su_length(uncouple_front_su.front_su))
+    uncouple_front_su.add_effect(su_length(uncouple_front_su.parent_su), su_length(uncouple_front_su.parent_su) - su_length(uncouple_front_su.front_su))
+    uncouple_front_su.add_effect(su_unit_count(uncouple_front_su.parent_su), su_unit_count(uncouple_front_su.parent_su) - 1)
+    uncouple_front_su.add_effect(su_unit_count(uncouple_front_su.front_su), 1)
+    uncouple_front_su.add_effect(number_of_trains_on_track(uncouple_front_su.track), number_of_trains_on_track(uncouple_front_su.track) + 1)
+    uncouple_front_su.add_effect(contains_su(uncouple_front_su.parent_su, uncouple_front_su.front_unit), False)
+    uncouple_front_su.add_effect(front_of(uncouple_front_su.front_unit, uncouple_front_su.parent_su), False)
+    uncouple_front_su.add_effect(front_of(uncouple_front_su.next_unit, uncouple_front_su.parent_su), True)
+    uncouple_front_su.add_effect(front_of(uncouple_front_su.front_unit, uncouple_front_su.front_su), True)
+    uncouple_front_su.add_effect(back_of(uncouple_front_su.front_unit, uncouple_front_su.front_su), True)
+    uncouple_front_su.add_effect(next_in_su(uncouple_front_su.front_unit, uncouple_front_su.next_unit, uncouple_front_su.parent_su), False)
+    uncouple_front_su.add_effect(available(uncouple_front_su.front_unit), True)
+    uncouple_front_su.add_effect(part_of_composition(uncouple_front_su.front_unit, uncouple_front_su.composition), False)
+    problem.add_action(uncouple_front_su)
+
+    uncouple_back_su = up.InstantaneousAction(
+        "uncouple_back_su",
+        parent_su=shunting_unit_type,
+        back_su=shunting_unit_type,
+        previous_unit=train_unit_type,
+        back_unit=train_unit_type,
+        composition=arrival_composition_type,
+        track=track_part_type,
+    )
+    uncouple_back_su.add_precondition(active_su(uncouple_back_su.parent_su))
+    uncouple_back_su.add_precondition(allowed_to_move_su(uncouple_back_su.parent_su))
+    uncouple_back_su.add_precondition(up.Not(active_su(uncouple_back_su.back_su)))
+    uncouple_back_su.add_precondition(contains_su(uncouple_back_su.parent_su, uncouple_back_su.back_unit))
+    uncouple_back_su.add_precondition(contains_su(uncouple_back_su.back_su, uncouple_back_su.back_unit))
+    uncouple_back_su.add_precondition(single_unit_su(uncouple_back_su.back_su, uncouple_back_su.back_unit))
+    uncouple_back_su.add_precondition(back_of(uncouple_back_su.back_unit, uncouple_back_su.parent_su))
+    uncouple_back_su.add_precondition(next_in_su(uncouple_back_su.previous_unit, uncouple_back_su.back_unit, uncouple_back_su.parent_su))
+    uncouple_back_su.add_precondition(part_of_composition(uncouple_back_su.back_unit, uncouple_back_su.composition))
+    uncouple_back_su.add_precondition(composition_needs_uncoupling(uncouple_back_su.composition))
+    uncouple_back_su.add_precondition(at_su(uncouple_back_su.parent_su, uncouple_back_su.track))
+    uncouple_back_su.add_effect(active_su(uncouple_back_su.back_su), True)
+    uncouple_back_su.add_effect(su_may_move(uncouple_back_su.parent_su), True)
+    uncouple_back_su.add_effect(su_may_move(uncouple_back_su.back_su), True)
+    uncouple_back_su.add_effect(allowed_to_move_su(uncouple_back_su.parent_su), False)
+    uncouple_back_su.add_effect(concurrent_movements, concurrent_movements - 1)
+    uncouple_back_su.add_effect(at_su(uncouple_back_su.back_su, uncouple_back_su.track), True)
+    uncouple_back_su.add_effect(su_aside_distance(uncouple_back_su.back_su), su_aside_distance(uncouple_back_su.parent_su) + su_length(uncouple_back_su.parent_su) - su_length(uncouple_back_su.back_su))
+    uncouple_back_su.add_effect(su_length(uncouple_back_su.parent_su), su_length(uncouple_back_su.parent_su) - su_length(uncouple_back_su.back_su))
+    uncouple_back_su.add_effect(su_unit_count(uncouple_back_su.parent_su), su_unit_count(uncouple_back_su.parent_su) - 1)
+    uncouple_back_su.add_effect(su_unit_count(uncouple_back_su.back_su), 1)
+    uncouple_back_su.add_effect(number_of_trains_on_track(uncouple_back_su.track), number_of_trains_on_track(uncouple_back_su.track) + 1)
+    uncouple_back_su.add_effect(contains_su(uncouple_back_su.parent_su, uncouple_back_su.back_unit), False)
+    uncouple_back_su.add_effect(back_of(uncouple_back_su.back_unit, uncouple_back_su.parent_su), False)
+    uncouple_back_su.add_effect(back_of(uncouple_back_su.previous_unit, uncouple_back_su.parent_su), True)
+    uncouple_back_su.add_effect(front_of(uncouple_back_su.back_unit, uncouple_back_su.back_su), True)
+    uncouple_back_su.add_effect(back_of(uncouple_back_su.back_unit, uncouple_back_su.back_su), True)
+    uncouple_back_su.add_effect(next_in_su(uncouple_back_su.previous_unit, uncouple_back_su.back_unit, uncouple_back_su.parent_su), False)
+    uncouple_back_su.add_effect(available(uncouple_back_su.back_unit), True)
+    uncouple_back_su.add_effect(part_of_composition(uncouple_back_su.back_unit, uncouple_back_su.composition), False)
+    problem.add_action(uncouple_back_su)
+
+    uncouple_front_pair_su = up.InstantaneousAction(
+        "uncouple_front_pair_su",
+        parent_su=shunting_unit_type,
+        front_su=shunting_unit_type,
+        front_unit=train_unit_type,
+        remaining_unit=train_unit_type,
+        composition=arrival_composition_type,
+        track=track_part_type,
+    )
+    uncouple_front_pair_su.add_precondition(active_su(uncouple_front_pair_su.parent_su))
+    uncouple_front_pair_su.add_precondition(allowed_to_move_su(uncouple_front_pair_su.parent_su))
+    uncouple_front_pair_su.add_precondition(up.Not(active_su(uncouple_front_pair_su.front_su)))
+    uncouple_front_pair_su.add_precondition(contains_su(uncouple_front_pair_su.parent_su, uncouple_front_pair_su.front_unit))
+    uncouple_front_pair_su.add_precondition(contains_su(uncouple_front_pair_su.parent_su, uncouple_front_pair_su.remaining_unit))
+    uncouple_front_pair_su.add_precondition(contains_su(uncouple_front_pair_su.front_su, uncouple_front_pair_su.front_unit))
+    uncouple_front_pair_su.add_precondition(single_unit_su(uncouple_front_pair_su.front_su, uncouple_front_pair_su.front_unit))
+    uncouple_front_pair_su.add_precondition(front_of(uncouple_front_pair_su.front_unit, uncouple_front_pair_su.parent_su))
+    uncouple_front_pair_su.add_precondition(back_of(uncouple_front_pair_su.remaining_unit, uncouple_front_pair_su.parent_su))
+    uncouple_front_pair_su.add_precondition(next_in_su(uncouple_front_pair_su.front_unit, uncouple_front_pair_su.remaining_unit, uncouple_front_pair_su.parent_su))
+    uncouple_front_pair_su.add_precondition(part_of_composition(uncouple_front_pair_su.front_unit, uncouple_front_pair_su.composition))
+    uncouple_front_pair_su.add_precondition(part_of_composition(uncouple_front_pair_su.remaining_unit, uncouple_front_pair_su.composition))
+    uncouple_front_pair_su.add_precondition(composition_needs_uncoupling(uncouple_front_pair_su.composition))
+    uncouple_front_pair_su.add_precondition(at_su(uncouple_front_pair_su.parent_su, uncouple_front_pair_su.track))
+    uncouple_front_pair_su.add_effect(active_su(uncouple_front_pair_su.front_su), True)
+    uncouple_front_pair_su.add_effect(su_may_move(uncouple_front_pair_su.parent_su), True)
+    uncouple_front_pair_su.add_effect(su_may_move(uncouple_front_pair_su.front_su), True)
+    uncouple_front_pair_su.add_effect(allowed_to_move_su(uncouple_front_pair_su.parent_su), False)
+    uncouple_front_pair_su.add_effect(concurrent_movements, concurrent_movements - 1)
+    uncouple_front_pair_su.add_effect(at_su(uncouple_front_pair_su.front_su, uncouple_front_pair_su.track), True)
+    uncouple_front_pair_su.add_effect(su_aside_distance(uncouple_front_pair_su.front_su), su_aside_distance(uncouple_front_pair_su.parent_su))
+    uncouple_front_pair_su.add_effect(su_aside_distance(uncouple_front_pair_su.parent_su), su_aside_distance(uncouple_front_pair_su.parent_su) + su_length(uncouple_front_pair_su.front_su))
+    uncouple_front_pair_su.add_effect(su_length(uncouple_front_pair_su.parent_su), su_length(uncouple_front_pair_su.parent_su) - su_length(uncouple_front_pair_su.front_su))
+    uncouple_front_pair_su.add_effect(su_unit_count(uncouple_front_pair_su.parent_su), 1)
+    uncouple_front_pair_su.add_effect(su_unit_count(uncouple_front_pair_su.front_su), 1)
+    uncouple_front_pair_su.add_effect(number_of_trains_on_track(uncouple_front_pair_su.track), number_of_trains_on_track(uncouple_front_pair_su.track) + 1)
+    uncouple_front_pair_su.add_effect(contains_su(uncouple_front_pair_su.parent_su, uncouple_front_pair_su.front_unit), False)
+    uncouple_front_pair_su.add_effect(single_unit_su(uncouple_front_pair_su.parent_su, uncouple_front_pair_su.remaining_unit), True)
+    uncouple_front_pair_su.add_effect(front_of(uncouple_front_pair_su.front_unit, uncouple_front_pair_su.parent_su), False)
+    uncouple_front_pair_su.add_effect(front_of(uncouple_front_pair_su.remaining_unit, uncouple_front_pair_su.parent_su), True)
+    uncouple_front_pair_su.add_effect(front_of(uncouple_front_pair_su.front_unit, uncouple_front_pair_su.front_su), True)
+    uncouple_front_pair_su.add_effect(back_of(uncouple_front_pair_su.front_unit, uncouple_front_pair_su.front_su), True)
+    uncouple_front_pair_su.add_effect(next_in_su(uncouple_front_pair_su.front_unit, uncouple_front_pair_su.remaining_unit, uncouple_front_pair_su.parent_su), False)
+    uncouple_front_pair_su.add_effect(available(uncouple_front_pair_su.front_unit), True)
+    uncouple_front_pair_su.add_effect(available(uncouple_front_pair_su.remaining_unit), True)
+    uncouple_front_pair_su.add_effect(part_of_composition(uncouple_front_pair_su.front_unit, uncouple_front_pair_su.composition), False)
+    uncouple_front_pair_su.add_effect(part_of_composition(uncouple_front_pair_su.remaining_unit, uncouple_front_pair_su.composition), False)
+    problem.add_action(uncouple_front_pair_su)
+
+    uncouple_back_pair_su = up.InstantaneousAction(
+        "uncouple_back_pair_su",
+        parent_su=shunting_unit_type,
+        back_su=shunting_unit_type,
+        remaining_unit=train_unit_type,
+        back_unit=train_unit_type,
+        composition=arrival_composition_type,
+        track=track_part_type,
+    )
+    uncouple_back_pair_su.add_precondition(active_su(uncouple_back_pair_su.parent_su))
+    uncouple_back_pair_su.add_precondition(allowed_to_move_su(uncouple_back_pair_su.parent_su))
+    uncouple_back_pair_su.add_precondition(up.Not(active_su(uncouple_back_pair_su.back_su)))
+    uncouple_back_pair_su.add_precondition(contains_su(uncouple_back_pair_su.parent_su, uncouple_back_pair_su.remaining_unit))
+    uncouple_back_pair_su.add_precondition(contains_su(uncouple_back_pair_su.parent_su, uncouple_back_pair_su.back_unit))
+    uncouple_back_pair_su.add_precondition(contains_su(uncouple_back_pair_su.back_su, uncouple_back_pair_su.back_unit))
+    uncouple_back_pair_su.add_precondition(single_unit_su(uncouple_back_pair_su.back_su, uncouple_back_pair_su.back_unit))
+    uncouple_back_pair_su.add_precondition(front_of(uncouple_back_pair_su.remaining_unit, uncouple_back_pair_su.parent_su))
+    uncouple_back_pair_su.add_precondition(back_of(uncouple_back_pair_su.back_unit, uncouple_back_pair_su.parent_su))
+    uncouple_back_pair_su.add_precondition(next_in_su(uncouple_back_pair_su.remaining_unit, uncouple_back_pair_su.back_unit, uncouple_back_pair_su.parent_su))
+    uncouple_back_pair_su.add_precondition(part_of_composition(uncouple_back_pair_su.remaining_unit, uncouple_back_pair_su.composition))
+    uncouple_back_pair_su.add_precondition(part_of_composition(uncouple_back_pair_su.back_unit, uncouple_back_pair_su.composition))
+    uncouple_back_pair_su.add_precondition(composition_needs_uncoupling(uncouple_back_pair_su.composition))
+    uncouple_back_pair_su.add_precondition(at_su(uncouple_back_pair_su.parent_su, uncouple_back_pair_su.track))
+    uncouple_back_pair_su.add_effect(active_su(uncouple_back_pair_su.back_su), True)
+    uncouple_back_pair_su.add_effect(su_may_move(uncouple_back_pair_su.parent_su), True)
+    uncouple_back_pair_su.add_effect(su_may_move(uncouple_back_pair_su.back_su), True)
+    uncouple_back_pair_su.add_effect(allowed_to_move_su(uncouple_back_pair_su.parent_su), False)
+    uncouple_back_pair_su.add_effect(concurrent_movements, concurrent_movements - 1)
+    uncouple_back_pair_su.add_effect(at_su(uncouple_back_pair_su.back_su, uncouple_back_pair_su.track), True)
+    uncouple_back_pair_su.add_effect(su_aside_distance(uncouple_back_pair_su.back_su), su_aside_distance(uncouple_back_pair_su.parent_su) + su_length(uncouple_back_pair_su.parent_su) - su_length(uncouple_back_pair_su.back_su))
+    uncouple_back_pair_su.add_effect(su_length(uncouple_back_pair_su.parent_su), su_length(uncouple_back_pair_su.parent_su) - su_length(uncouple_back_pair_su.back_su))
+    uncouple_back_pair_su.add_effect(su_unit_count(uncouple_back_pair_su.parent_su), 1)
+    uncouple_back_pair_su.add_effect(su_unit_count(uncouple_back_pair_su.back_su), 1)
+    uncouple_back_pair_su.add_effect(number_of_trains_on_track(uncouple_back_pair_su.track), number_of_trains_on_track(uncouple_back_pair_su.track) + 1)
+    uncouple_back_pair_su.add_effect(contains_su(uncouple_back_pair_su.parent_su, uncouple_back_pair_su.back_unit), False)
+    uncouple_back_pair_su.add_effect(single_unit_su(uncouple_back_pair_su.parent_su, uncouple_back_pair_su.remaining_unit), True)
+    uncouple_back_pair_su.add_effect(back_of(uncouple_back_pair_su.back_unit, uncouple_back_pair_su.parent_su), False)
+    uncouple_back_pair_su.add_effect(back_of(uncouple_back_pair_su.remaining_unit, uncouple_back_pair_su.parent_su), True)
+    uncouple_back_pair_su.add_effect(front_of(uncouple_back_pair_su.back_unit, uncouple_back_pair_su.back_su), True)
+    uncouple_back_pair_su.add_effect(back_of(uncouple_back_pair_su.back_unit, uncouple_back_pair_su.back_su), True)
+    uncouple_back_pair_su.add_effect(next_in_su(uncouple_back_pair_su.remaining_unit, uncouple_back_pair_su.back_unit, uncouple_back_pair_su.parent_su), False)
+    uncouple_back_pair_su.add_effect(available(uncouple_back_pair_su.remaining_unit), True)
+    uncouple_back_pair_su.add_effect(available(uncouple_back_pair_su.back_unit), True)
+    uncouple_back_pair_su.add_effect(part_of_composition(uncouple_back_pair_su.remaining_unit, uncouple_back_pair_su.composition), False)
+    uncouple_back_pair_su.add_effect(part_of_composition(uncouple_back_pair_su.back_unit, uncouple_back_pair_su.composition), False)
+    problem.add_action(uncouple_back_pair_su)
+
     split_two_unit_su = up.InstantaneousAction(
         "split_two_unit_su",
         parent_su=shunting_unit_type,
@@ -690,7 +879,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     split_two_unit_su.add_effect(available(split_two_unit_su.unit_b), True)
     split_two_unit_su.add_effect(part_of_composition(split_two_unit_su.unit_a, split_two_unit_su.composition), False)
     split_two_unit_su.add_effect(part_of_composition(split_two_unit_su.unit_b, split_two_unit_su.composition), False)
-    problem.add_action(split_two_unit_su)
+    # Fixed-size split actions are kept for reference but not registered; the
+    # front/back uncoupling actions above are the active composition model.
 
     split_three_unit_su = up.InstantaneousAction(
         "split_three_unit_su",
@@ -748,12 +938,147 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     split_three_unit_su.add_effect(part_of_composition(split_three_unit_su.unit_a, split_three_unit_su.composition), False)
     split_three_unit_su.add_effect(part_of_composition(split_three_unit_su.unit_b, split_three_unit_su.composition), False)
     split_three_unit_su.add_effect(part_of_composition(split_three_unit_su.unit_c, split_three_unit_su.composition), False)
-    problem.add_action(split_three_unit_su)
+    # See note above: use front/back uncoupling instead of size-specific splits.
 
     slot_coupled = problem.add_fluent(up.Fluent("slot_coupled", up.BoolType(), slot=request_slot_type), default_initial_value=False)
     coupled_to_request = problem.add_fluent(up.Fluent("coupled_to_request", up.BoolType(), unit=train_unit_type, request=departure_request_type), default_initial_value=False)
     physically_coupled = problem.add_fluent(up.Fluent("physically_coupled", up.BoolType(), first=train_unit_type, second=train_unit_type), default_initial_value=False)
     request_assembled = problem.add_fluent(up.Fluent("request_assembled", up.BoolType(), request=departure_request_type), default_initial_value=False)
+
+    start_request_composition = up.InstantaneousAction(
+        "start_request_composition",
+        source_su=shunting_unit_type,
+        request_su=shunting_unit_type,
+        unit=train_unit_type,
+        slot=request_slot_type,
+        request=departure_request_type,
+        track=track_part_type,
+    )
+    start_request_composition.add_precondition(active_su(start_request_composition.source_su))
+    start_request_composition.add_precondition(up.Not(parked_su(start_request_composition.source_su)))
+    start_request_composition.add_precondition(up.Not(active_su(start_request_composition.request_su)))
+    start_request_composition.add_precondition(contains_su(start_request_composition.source_su, start_request_composition.unit))
+    start_request_composition.add_precondition(single_unit_su(start_request_composition.source_su, start_request_composition.unit))
+    start_request_composition.add_precondition(request_su_for_request(start_request_composition.request_su, start_request_composition.request))
+    start_request_composition.add_precondition(at_su(start_request_composition.source_su, start_request_composition.track))
+    start_request_composition.add_precondition(coupling_allowed(start_request_composition.track))
+    start_request_composition.add_precondition(coupling_track_for_request(start_request_composition.request, start_request_composition.track))
+    start_request_composition.add_precondition(matched(start_request_composition.unit, start_request_composition.slot))
+    start_request_composition.add_precondition(slot_for_request(start_request_composition.slot, start_request_composition.request))
+    start_request_composition.add_effect(active_su(start_request_composition.source_su), False)
+    start_request_composition.add_effect(active_su(start_request_composition.request_su), True)
+    start_request_composition.add_effect(su_may_move(start_request_composition.request_su), True)
+    start_request_composition.add_effect(at_su(start_request_composition.source_su, start_request_composition.track), False)
+    start_request_composition.add_effect(at_su(start_request_composition.request_su, start_request_composition.track), True)
+    start_request_composition.add_effect(su_aside_distance(start_request_composition.request_su), su_aside_distance(start_request_composition.source_su))
+    start_request_composition.add_effect(su_length(start_request_composition.request_su), su_length(start_request_composition.source_su))
+    start_request_composition.add_effect(su_unit_count(start_request_composition.request_su), 1)
+    start_request_composition.add_effect(contains_su(start_request_composition.request_su, start_request_composition.unit), True)
+    start_request_composition.add_effect(front_of(start_request_composition.unit, start_request_composition.request_su), True)
+    start_request_composition.add_effect(back_of(start_request_composition.unit, start_request_composition.request_su), True)
+    start_request_composition.add_effect(front_slot(start_request_composition.slot, start_request_composition.request_su), True)
+    start_request_composition.add_effect(back_slot(start_request_composition.slot, start_request_composition.request_su), True)
+    start_request_composition.add_effect(slot_coupled(start_request_composition.slot), True)
+    start_request_composition.add_effect(coupled_to_request(start_request_composition.unit, start_request_composition.request), True)
+    problem.add_action(start_request_composition)
+
+    couple_front_to_request = up.InstantaneousAction(
+        "couple_front_to_request",
+        source_su=shunting_unit_type,
+        request_su=shunting_unit_type,
+        unit=train_unit_type,
+        old_front_unit=train_unit_type,
+        slot=request_slot_type,
+        old_front_slot=request_slot_type,
+        request=departure_request_type,
+        track=track_part_type,
+    )
+    couple_front_to_request.add_precondition(active_su(couple_front_to_request.source_su))
+    couple_front_to_request.add_precondition(active_su(couple_front_to_request.request_su))
+    couple_front_to_request.add_precondition(up.Not(parked_su(couple_front_to_request.source_su)))
+    couple_front_to_request.add_precondition(up.Not(parked_su(couple_front_to_request.request_su)))
+    couple_front_to_request.add_precondition(contains_su(couple_front_to_request.source_su, couple_front_to_request.unit))
+    couple_front_to_request.add_precondition(single_unit_su(couple_front_to_request.source_su, couple_front_to_request.unit))
+    couple_front_to_request.add_precondition(request_su_for_request(couple_front_to_request.request_su, couple_front_to_request.request))
+    couple_front_to_request.add_precondition(at_su(couple_front_to_request.source_su, couple_front_to_request.track))
+    couple_front_to_request.add_precondition(at_su(couple_front_to_request.request_su, couple_front_to_request.track))
+    couple_front_to_request.add_precondition(coupling_allowed(couple_front_to_request.track))
+    couple_front_to_request.add_precondition(coupling_track_for_request(couple_front_to_request.request, couple_front_to_request.track))
+    couple_front_to_request.add_precondition(matched(couple_front_to_request.unit, couple_front_to_request.slot))
+    couple_front_to_request.add_precondition(slot_for_request(couple_front_to_request.slot, couple_front_to_request.request))
+    couple_front_to_request.add_precondition(front_of(couple_front_to_request.old_front_unit, couple_front_to_request.request_su))
+    couple_front_to_request.add_precondition(front_slot(couple_front_to_request.old_front_slot, couple_front_to_request.request_su))
+    couple_front_to_request.add_precondition(slot_before(couple_front_to_request.slot, couple_front_to_request.old_front_slot))
+    couple_front_to_request.add_effect(active_su(couple_front_to_request.source_su), False)
+    couple_front_to_request.add_effect(at_su(couple_front_to_request.source_su, couple_front_to_request.track), False)
+    couple_front_to_request.add_effect(su_length(couple_front_to_request.request_su), su_length(couple_front_to_request.request_su) + su_length(couple_front_to_request.source_su))
+    couple_front_to_request.add_effect(su_unit_count(couple_front_to_request.request_su), su_unit_count(couple_front_to_request.request_su) + 1)
+    couple_front_to_request.add_effect(number_of_trains_on_track(couple_front_to_request.track), number_of_trains_on_track(couple_front_to_request.track) - 1)
+    couple_front_to_request.add_effect(contains_su(couple_front_to_request.request_su, couple_front_to_request.unit), True)
+    couple_front_to_request.add_effect(front_of(couple_front_to_request.old_front_unit, couple_front_to_request.request_su), False)
+    couple_front_to_request.add_effect(front_of(couple_front_to_request.unit, couple_front_to_request.request_su), True)
+    couple_front_to_request.add_effect(next_in_su(couple_front_to_request.unit, couple_front_to_request.old_front_unit, couple_front_to_request.request_su), True)
+    couple_front_to_request.add_effect(front_slot(couple_front_to_request.old_front_slot, couple_front_to_request.request_su), False)
+    couple_front_to_request.add_effect(front_slot(couple_front_to_request.slot, couple_front_to_request.request_su), True)
+    couple_front_to_request.add_effect(slot_coupled(couple_front_to_request.slot), True)
+    couple_front_to_request.add_effect(coupled_to_request(couple_front_to_request.unit, couple_front_to_request.request), True)
+    couple_front_to_request.add_effect(physically_coupled(couple_front_to_request.unit, couple_front_to_request.old_front_unit), True)
+    problem.add_action(couple_front_to_request)
+
+    couple_back_to_request = up.InstantaneousAction(
+        "couple_back_to_request",
+        request_su=shunting_unit_type,
+        source_su=shunting_unit_type,
+        old_back_unit=train_unit_type,
+        unit=train_unit_type,
+        old_back_slot=request_slot_type,
+        slot=request_slot_type,
+        request=departure_request_type,
+        track=track_part_type,
+    )
+    couple_back_to_request.add_precondition(active_su(couple_back_to_request.request_su))
+    couple_back_to_request.add_precondition(active_su(couple_back_to_request.source_su))
+    couple_back_to_request.add_precondition(up.Not(parked_su(couple_back_to_request.request_su)))
+    couple_back_to_request.add_precondition(up.Not(parked_su(couple_back_to_request.source_su)))
+    couple_back_to_request.add_precondition(contains_su(couple_back_to_request.source_su, couple_back_to_request.unit))
+    couple_back_to_request.add_precondition(single_unit_su(couple_back_to_request.source_su, couple_back_to_request.unit))
+    couple_back_to_request.add_precondition(request_su_for_request(couple_back_to_request.request_su, couple_back_to_request.request))
+    couple_back_to_request.add_precondition(at_su(couple_back_to_request.request_su, couple_back_to_request.track))
+    couple_back_to_request.add_precondition(at_su(couple_back_to_request.source_su, couple_back_to_request.track))
+    couple_back_to_request.add_precondition(coupling_allowed(couple_back_to_request.track))
+    couple_back_to_request.add_precondition(coupling_track_for_request(couple_back_to_request.request, couple_back_to_request.track))
+    couple_back_to_request.add_precondition(matched(couple_back_to_request.unit, couple_back_to_request.slot))
+    couple_back_to_request.add_precondition(slot_for_request(couple_back_to_request.slot, couple_back_to_request.request))
+    couple_back_to_request.add_precondition(back_of(couple_back_to_request.old_back_unit, couple_back_to_request.request_su))
+    couple_back_to_request.add_precondition(back_slot(couple_back_to_request.old_back_slot, couple_back_to_request.request_su))
+    couple_back_to_request.add_precondition(slot_before(couple_back_to_request.old_back_slot, couple_back_to_request.slot))
+    couple_back_to_request.add_effect(active_su(couple_back_to_request.source_su), False)
+    couple_back_to_request.add_effect(at_su(couple_back_to_request.source_su, couple_back_to_request.track), False)
+    couple_back_to_request.add_effect(su_length(couple_back_to_request.request_su), su_length(couple_back_to_request.request_su) + su_length(couple_back_to_request.source_su))
+    couple_back_to_request.add_effect(su_unit_count(couple_back_to_request.request_su), su_unit_count(couple_back_to_request.request_su) + 1)
+    couple_back_to_request.add_effect(number_of_trains_on_track(couple_back_to_request.track), number_of_trains_on_track(couple_back_to_request.track) - 1)
+    couple_back_to_request.add_effect(contains_su(couple_back_to_request.request_su, couple_back_to_request.unit), True)
+    couple_back_to_request.add_effect(back_of(couple_back_to_request.old_back_unit, couple_back_to_request.request_su), False)
+    couple_back_to_request.add_effect(back_of(couple_back_to_request.unit, couple_back_to_request.request_su), True)
+    couple_back_to_request.add_effect(next_in_su(couple_back_to_request.old_back_unit, couple_back_to_request.unit, couple_back_to_request.request_su), True)
+    couple_back_to_request.add_effect(back_slot(couple_back_to_request.old_back_slot, couple_back_to_request.request_su), False)
+    couple_back_to_request.add_effect(back_slot(couple_back_to_request.slot, couple_back_to_request.request_su), True)
+    couple_back_to_request.add_effect(slot_coupled(couple_back_to_request.slot), True)
+    couple_back_to_request.add_effect(coupled_to_request(couple_back_to_request.unit, couple_back_to_request.request), True)
+    couple_back_to_request.add_effect(physically_coupled(couple_back_to_request.old_back_unit, couple_back_to_request.unit), True)
+    problem.add_action(couple_back_to_request)
+
+    complete_request_composition = up.InstantaneousAction(
+        "complete_request_composition",
+        request_su=shunting_unit_type,
+        request=departure_request_type,
+    )
+    complete_request_composition.add_precondition(active_su(complete_request_composition.request_su))
+    complete_request_composition.add_precondition(request_su_for_request(complete_request_composition.request_su, complete_request_composition.request))
+    complete_request_composition.add_precondition(up.Equals(su_unit_count(complete_request_composition.request_su), request_size(complete_request_composition.request)))
+    complete_request_composition.add_effect(request_assembled(complete_request_composition.request), True)
+    complete_request_composition.add_effect(must_depart_su(complete_request_composition.request_su), True)
+    problem.add_action(complete_request_composition)
 
     couple_two_sus = up.InstantaneousAction(
         "couple_two_sus",
@@ -806,7 +1131,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     couple_two_sus.add_effect(coupled_to_request(couple_two_sus.unit_b, couple_two_sus.request), True)
     couple_two_sus.add_effect(physically_coupled(couple_two_sus.unit_a, couple_two_sus.unit_b), True)
     couple_two_sus.add_effect(request_assembled(couple_two_sus.request), True)
-    problem.add_action(couple_two_sus)
+    # Fixed two-unit coupling is kept for comparison but not registered; request
+    # compositions are built incrementally with start/couple-front/couple-back.
 
     service_su = up.InstantaneousAction('service_su', su=shunting_unit_type, l=track_part_type, f=facility_type_type)
     service_su.add_precondition(active_su(service_su.su))
@@ -819,8 +1145,17 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     couple_two_sus.add_precondition(serviced(couple_two_sus.su_a))
     couple_two_sus.add_precondition(serviced(couple_two_sus.su_b))
+    start_request_composition.add_precondition(serviced(start_request_composition.source_su))
+    couple_front_to_request.add_precondition(serviced(couple_front_to_request.source_su))
+    couple_front_to_request.add_precondition(serviced(couple_front_to_request.request_su))
+    couple_back_to_request.add_precondition(serviced(couple_back_to_request.source_su))
+    couple_back_to_request.add_precondition(serviced(couple_back_to_request.request_su))
     split_two_unit_su.add_precondition(serviced(split_two_unit_su.parent_su))
     split_three_unit_su.add_precondition(serviced(split_three_unit_su.parent_su))
+    uncouple_front_su.add_precondition(serviced(uncouple_front_su.parent_su))
+    uncouple_back_su.add_precondition(serviced(uncouple_back_su.parent_su))
+    uncouple_front_pair_su.add_precondition(serviced(uncouple_front_pair_su.parent_su))
+    uncouple_back_pair_su.add_precondition(serviced(uncouple_back_pair_su.parent_su))
     depart_aside_su.add_precondition(serviced(depart_aside_su.su))
     depart_bside_su.add_precondition(serviced(depart_bside_su.su))
     depart_aside_su_for_request.add_precondition(serviced(depart_aside_su_for_request.su))
@@ -1043,6 +1378,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
         train_total_length = _train_total_length(train)
         problem.set_initial_value(su_length(shunting_unit), up.Real(train_total_length))
+        problem.set_initial_value(su_unit_count(shunting_unit), up.Int(len(train_members)))
         if source == "in":
             problem.set_initial_value(at_su(shunting_unit, phantom_track), True)
             if initial_track_id in id_to_track_part:
@@ -1063,11 +1399,13 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             problem.set_initial_value(su_has_arrived(shunting_unit), False)
             in_train_sus.append((int(train.get("arrival", 0)), shunting_unit))
 
+        member_unit_objs = []
         for trainunit in train_members:
             unit = trainunit["trainUnit"]
             unit_obj = problem.add_object("unit" + unit["id"], train_unit_type)
             id_to_unit[unit["id"]] = unit_obj
             unit_type_by_id[unit["id"]] = train_unit_type_key(unit)
+            member_unit_objs.append(unit_obj)
             problem.set_initial_value(contains_su(shunting_unit, unit_obj), True)
             if len(train_members) == 1:
                 problem.set_initial_value(single_unit_su(shunting_unit, unit_obj), True)
@@ -1076,10 +1414,21 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 problem.set_initial_value(contains_su(single_unit_su_obj, unit_obj), True)
                 problem.set_initial_value(single_unit_su(single_unit_su_obj, unit_obj), True)
                 problem.set_initial_value(su_length(single_unit_su_obj), up.Real(_train_unit_length(unit)))
+                problem.set_initial_value(su_unit_count(single_unit_su_obj), up.Int(1))
+                problem.set_initial_value(front_of(unit_obj, single_unit_su_obj), True)
+                problem.set_initial_value(back_of(unit_obj, single_unit_su_obj), True)
             if composition_obj is None:
                 problem.set_initial_value(available(unit_obj), True)
             else:
                 problem.set_initial_value(part_of_composition(unit_obj, composition_obj), True)
+
+        if member_unit_objs:
+            problem.set_initial_value(front_of(member_unit_objs[0], shunting_unit), True)
+            problem.set_initial_value(back_of(member_unit_objs[-1], shunting_unit), True)
+            if len(member_unit_objs) == 1:
+                problem.set_initial_value(back_of(member_unit_objs[0], shunting_unit), True)
+            for first_obj, second_obj in zip(member_unit_objs, member_unit_objs[1:]):
+                problem.set_initial_value(next_in_su(first_obj, second_obj, shunting_unit), True)
 
         for first, second in zip(train_members, train_members[1:]):
             first_obj = id_to_unit[first["trainUnit"]["id"]]
@@ -1121,17 +1470,11 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     # assembly (couple) followed by departure of the assembled SU.
     request_objs = {}
     for request in out_requests:
-        if len(request["trainUnits"]) > 2:
-            raise ValueError(
-                "explicit_coupling currently supports only one-unit requests "
-                f"or physical coupling of exactly two units; request {request['displayName']} "
-                f"has {len(request['trainUnits'])} units"
-            )
-
         request_name = "request" + request["displayName"]
         request_obj = problem.add_object(request_name, departure_request_type)
         request_objs[request_name] = request_obj
         problem.set_initial_value(request_open(request_obj), True)
+        problem.set_initial_value(request_size(request_obj), up.Int(len(request["trainUnits"])))
 
         for track_id in _coupling_track_ids_for_request(request, location_object, coupling_candidate_track_ids):
             if track_id in id_to_track_part:
@@ -1152,8 +1495,10 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 if unit_type_by_id[unit_id] == requested_key:
                     problem.set_initial_value(compatible(unit_obj, slot_obj), True)
 
-        if len(slot_objects) == 2:
-            problem.set_initial_value(slot_before(slot_objects[0], slot_objects[1]), True)
+        for first_slot, second_slot in zip(slot_objects, slot_objects[1:]):
+            problem.set_initial_value(slot_before(first_slot, second_slot), True)
+
+        if len(slot_objects) > 1:
             request_su = problem.add_object("su_" + request_name, shunting_unit_type)
             problem.set_initial_value(request_su_for_request(request_su, request_obj), True)
 
