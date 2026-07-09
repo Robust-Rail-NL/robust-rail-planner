@@ -36,7 +36,7 @@ function parse_args()
     data_dir = joinpath(dirname(dirname(dirname(@__FILE__))), "data")
     domain_file = length(ARGS) > 0 ? ARGS[1] : joinpath(data_dir, "domain.pddl")
     problem_file = length(ARGS) > 1 ? ARGS[2] : joinpath(data_dir, "scenario_solver_example1.pddl")
-    backend = length(ARGS) > 2 ? lowercase(ARGS[3]) : "symbolic"
+    backend = length(ARGS) > 2 ? lowercase(ARGS[3]) : "enhsp"
     plan_file = length(ARGS) > 3 ? ARGS[4] : nothing
     return domain_file, problem_file, backend, plan_file
 end
@@ -95,12 +95,10 @@ end
 function run_planner()
     domain_file, problem_file, backend, plan_file = parse_args()
 
-    if backend == "symbolic"
-        ok = run_symbolic_planner(domain_file, problem_file, plan_file)
-    elseif backend == "enhsp"
+    if backend == "enhsp"
         ok = run_enhsp_planner(domain_file, problem_file)
     else
-        error("Unknown planner backend '$(backend)'. Use 'symbolic' or 'enhsp'.")
+        error("Only the local ENHSP jar backend is supported.")
     end
 
     ok || exit(1)

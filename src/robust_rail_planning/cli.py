@@ -12,9 +12,9 @@ def main():
     parser.add_argument("--log-level", default="INFO")
     parser.add_argument("--examples", action="store_true",
                         help="Run only scenario_solver_example*.json files")
-    parser.add_argument("--planner", choices=["astar", "enhsp"],
-                        default="astar",
-                        help="Planner backend to use (default: astar)")
+    parser.add_argument("--planner", choices=["enhsp"],
+                        default="enhsp",
+                        help="Planner backend to use (default: enhsp local jar)")
     
     parser.add_argument("--solve", action="store_true",
                         help="Run the local search solver on each plan")
