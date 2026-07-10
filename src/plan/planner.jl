@@ -77,7 +77,7 @@ function run_enhsp_planner(domain_file, problem_file)
         error("ENHSP jar not found: $(enhsp_jar)")
     end
 
-    command = `$(java) -jar $(enhsp_jar) -sp $(plan_file) -h hadd -s wa_star_4 -o $(domain_file) -f $(problem_file)`
+    command = `$(java) -Xmx4g -jar $(enhsp_jar) -sp $(plan_file) -h hadd -s wa_star_4 -o $(domain_file) -f $(problem_file)`
     println("Running: ", command)
     run(command)
 
