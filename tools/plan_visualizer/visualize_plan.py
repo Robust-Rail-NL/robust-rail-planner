@@ -136,7 +136,10 @@ def parse_solver_plan(path):
         elif task_name == "Arrive":
             steps.append({"raw": f"{action.get('startTime')}: Arrive {train} @ {track}", "action": "arrive", "args": [train, track], "path": path_raw})
         elif task_name == "Exit":
-            steps.append({"raw": f"{action.get('startTime')}: Exit {train} @ {track}", "action": "depart", "args": [train, track], "path": path_raw})
+            standing_type = action.get("shuntingUnit", {}).get("standingType", "")
+            action_name = "park" if standing_type == "OutStanding" else "depart"
+            label = "Park" if action_name == "park" else "Depart"
+            steps.append({"raw": f"{action.get('startTime')}: {label} {train} @ {track}", "action": action_name, "args": [train, track], "path": path_raw})
         else:
             steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: {task_name} {train} @ {track}", "action": "service", "args": [train, track], "path": path_raw})
     return steps
@@ -204,39 +207,37 @@ def simulate_steps(initial_trains, steps, token_to_name):
             trains[train]["track"] = normalize_track(target, token_to_name)
             trains[train]["status"] = "active"
             action_type = "move"
-            if "+" in train:
-                for member in train.split("+"):
-                    if member in trains:
-                        trains[member]["status"] = "combined"
-                        trains[member]["track"] = None
         elif action == "arrive" and len(args) >= 2:
             train, target = args[:2]
             trains.setdefault(train, {"track": None, "status": "active"})
             trains[train]["track"] = normalize_track(target, token_to_name)
             trains[train]["status"] = "active"
             action_type = "arrive"
-            if "+" in train:
-                for member in train.split("+"):
-                    if member in trains:
-                        trains[member]["status"] = "combined"
-                        trains[member]["track"] = None
         elif action == "park" and len(args) >= 2:
             train, track = args[:2]
             trains.setdefault(train, {"track": None, "status": "active"})
             trains[train]["track"] = normalize_track(track, token_to_name)
             trains[train]["status"] = "parked"
             action_type = "park"
+            if "+" in train:
+                for member_id in train.split("+"):
+                    if member_id in trains:
+                        trains[member_id]["track"] = normalize_track(track, token_to_name)
+                        trains[member_id]["status"] = "parked"
         elif action == "depart" and len(args) >= 2:
             train, track = args[:2]
             trains.setdefault(train, {"track": None, "status": "active"})
             trains[train]["track"] = normalize_track(track, token_to_name)
             trains[train]["status"] = "departed"
             action_type = "depart"
+            if "+" in train:
+                for member_id in train.split("+"):
+                    if member_id in trains:
+                        trains[member_id]["status"] = "departed"
         elif action == "combine" and len(args) >= 1:
             train = args[0]
             if train in trains:
                 trains[train]["status"] = "combined"
-                trains[train]["track"] = None
             action_type = "combine"
         elif action in ("move_aside_empty", "move_aside_occupied",
                         "move_bside_empty", "move_bside_occupied") and len(args) >= 3:
@@ -666,7 +667,7 @@ function updateYard(state, prevState) {{
   trainsToShow.forEach(train => {{
     const info=state.trains[train];
     if(!info||!info.track||info.status==='departed') return;
-    const color=trainColorMap[train];
+    const color=info.status==='combined'?'#7e22ce':trainColorMap[train];
     const trainPath = state.train_path && state.train_path[train];
     if (trainPath && trainPath.length >= 2) {{
       for (let i = 0; i < trainPath.length; i++) {{
@@ -729,9 +730,8 @@ function buildTimeline() {{
     const item=document.createElement('div');
     item.className='t-item'; item.dataset.idx=i; item.dataset.train=state.train||'';
     const atype=state.action_type||'initial';
-    const isCombineAction = state.train && state.train.includes('+');
-    const badgeClass = isCombineAction ? 'badge-combine' : 'badge-'+atype;
-    const badgeText = isCombineAction ? 'combine' : actionLabel(atype);
+    const badgeClass = 'badge-'+atype;
+    const badgeText = actionLabel(atype);
     item.innerHTML=`
       <div class="t-num">${{String(i).padStart(2,'0')}}</div>
       <span class="t-badge ${{badgeClass}}">${{badgeText}}</span>
@@ -796,14 +796,15 @@ function render(idx) {{
     const isCombined=info.status==='combined';
 
     if(row) {{
-      // Only grey out individual members that got absorbed, not the combined unit itself
-      row.classList.toggle('is-combined', isCombined && !train.includes('+'));
+      row.classList.toggle('is-combined', false);
     }}
-    // For combined members, show which combined unit they belong to
     if (isCombined && !train.includes('+')) {{
       const combinedUnit = allTrains.find(t => t.includes('+') && t.split('+').includes(train) && state.trains[t] && state.trains[t].status !== 'combined');
       const tag = combinedUnit ? ` <span style="font-size:10px;background:var(--badge-combine-bg);color:var(--badge-combine-fg);padding:1px 5px;border-radius:4px;">in ${{combinedUnit.split('+').join(' + ')}}</span>` : '';
-      trackEl.innerHTML = `<span class="track-cell track-departed">\u2014</span>${{tag}}`;
+      trackEl.innerHTML = `<span class="track-cell" style="color:#7e22ce">${{info.track||'\u2014'}}</span>${{tag}}`;
+      let statusHTML = '<span class="status-badge status-combined">combined</span>';
+      statusEl.innerHTML = statusHTML;
+      prevEl.innerHTML = `<span class="prev-track">${{prev&&prev.track?prev.track:'-'}}</span>`;
       return;
     }}
 
