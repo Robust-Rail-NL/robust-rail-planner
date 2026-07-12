@@ -515,11 +515,11 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     arrive_su.add_precondition(up.Not(su_has_arrived(arrive_su.su)))
     arrive_su.add_precondition(su_previous_arrived(arrive_su.su))
     arrive_su.add_precondition(at_su(arrive_su.su, phantom_track))
+    # A train may only enter the yard while no movement session is active (collision
+    # safety), but arriving does not itself open a session that must be ended.
     arrive_su.add_precondition(concurrent_movements < max_concurrent_movements)
     arrive_su.add_precondition(su_arrival_track(arrive_su.su, arrive_su.l))
     arrive_su.add_effect(su_has_arrived(arrive_su.su), True)
-    arrive_su.add_effect(allowed_to_move_su(arrive_su.su), True)
-    arrive_su.add_effect(concurrent_movements, concurrent_movements + 1)
     arrive_su.add_effect(at_su(arrive_su.su, phantom_track), False)
     arrive_su.add_effect(at_su(arrive_su.su, arrive_su.l), True)
     arrive_su.add_effect(su_aside_distance(arrive_su.su), bstack_distance(arrive_su.l))
