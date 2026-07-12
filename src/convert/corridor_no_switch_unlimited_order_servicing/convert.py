@@ -140,6 +140,46 @@ def _train_task_types(train):
     }
 
 
+def _select_precomputed_matching(unit_type_by_id, slot_records, matching_variant):
+    # Enumerate deterministic one-to-one, type-compatible assignments. The
+    # variant selects a specific assignment when several matchings are valid.
+    if matching_variant < 0:
+        raise ValueError("matching_variant must be non-negative")
+
+    unit_ids = list(unit_type_by_id)
+    selected = None
+    completed = 0
+
+    def search(slot_index, used_units, assignment):
+        nonlocal selected, completed
+        if slot_index == len(slot_records):
+            if completed == matching_variant:
+                selected = list(assignment)
+                return True
+            completed += 1
+            return False
+
+        _, requested_key = slot_records[slot_index]
+        for unit_id in unit_ids:
+            if unit_id in used_units or unit_type_by_id[unit_id] != requested_key:
+                continue
+            used_units.add(unit_id)
+            assignment.append((unit_id, slot_index))
+            if search(slot_index + 1, used_units, assignment):
+                return True
+            assignment.pop()
+            used_units.remove(unit_id)
+        return False
+
+    search(0, set(), [])
+    if selected is None:
+        raise ValueError(
+            f"No complete precomputed matching exists for variant {matching_variant}; "
+            f"found {completed} matching variant(s)"
+        )
+    return selected
+
+
 def _build_service_track_ids(location_object):
     # Service tracks come from facilities[].relatedTrackParts for facilities with taskTypes.
     service_tracks = {}
@@ -370,7 +410,7 @@ def _train_object_name(source, index, train):
     return "train" + train["id"]
 
 
-def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None):
+def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None, precompute_matching=False, matching_variant=0):
     if path_to_folder is None:
         path_to_folder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "scenario-planning-inputs", "Location_KleineBinckhorst")
 
@@ -1216,7 +1256,10 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     match.add_effect(slot_filled(match.slot), True)
     match.add_effect(available(match.unit), False)
     match.add_effect(slot_open(match.slot), False)
-    problem.add_action(match)
+    # Keep matching planner-controlled by default; prematched problems encode
+    # the equivalent action effects directly in their initial state.
+    if not precompute_matching:
+        problem.add_action(match)
 
     parking_fulfill = up.InstantaneousAction("parking_fulfill", su=shunting_unit_type, unit=train_unit_type, slot=parking_slot_type, l=track_part_type)
     parking_fulfill.add_precondition(active_su(parking_fulfill.su))
@@ -1501,6 +1544,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     # Single-unit requests require a departure action; two-unit requests require
     # assembly (couple) followed by departure of the assembled SU.
     request_objs = {}
+    # Preserve slot order and requested types for deterministic pre-matching.
+    departure_slot_records = []
     for request in out_requests:
         request_name = "request" + request["displayName"]
         request_obj = problem.add_object(request_name, departure_request_type)
@@ -1520,6 +1565,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
             problem.set_initial_value(slot_open(slot_obj), True)
             problem.set_initial_value(slot_for_request(slot_obj, request_obj), True)
+            departure_slot_records.append((slot_obj, requested_key))
             if len(request["trainUnits"]) == 1:
                 problem.add_goal(request_departed(request_obj))
 
@@ -1536,6 +1582,21 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
             problem.add_goal(request_assembled(request_obj))
             problem.add_goal(departed_su(request_su))
+
+    # Apply the selected assignment exactly as the omitted match actions would:
+    # matched units become unavailable and their filled slots become closed.
+    if precompute_matching:
+        assignment = _select_precomputed_matching(
+            unit_type_by_id, departure_slot_records, matching_variant
+        )
+        for unit_id, slot_index in assignment:
+            unit_obj = id_to_unit[unit_id]
+            slot_obj, _ = departure_slot_records[slot_index]
+            problem.set_initial_value(matched(unit_obj, slot_obj), True)
+            problem.set_initial_value(slot_filled(slot_obj), True)
+            problem.set_initial_value(available(unit_obj), False)
+            problem.set_initial_value(slot_open(slot_obj), False)
+            print(f"Precomputed match: {unit_obj.name} -> {slot_obj.name}")
 
     if output_file is None:
         output_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", f"{scenario_name}.pddl")
