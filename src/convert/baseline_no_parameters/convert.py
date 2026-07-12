@@ -103,7 +103,7 @@ def _coupling_track_ids_for_request(request, location_object, candidate_track_id
 
 
 def _shortest_path(adjacency, start_id, goal_id):
-    # BFS shortest path (inclusive list of node ids) over the undirected track graph.
+    # BFS shortest path (inclusive list of node ids) over executable movement edges.
     if start_id is None or goal_id is None:
         return []
     if start_id == goal_id:
@@ -130,6 +130,15 @@ def _request_type_keys(request):
     return {train_unit_type_key(train_unit) for train_unit in request.get("trainUnits", [])}
 
 
+def _train_task_types(train):
+    return {
+        task["type"]["other"]
+        for member in train.get("members", [])
+        for task in member.get("tasks", [])
+        if task.get("type", {}).get("other")
+    }
+
+
 def _build_service_track_ids(location_object):
     # Service tracks come from facilities[].relatedTrackParts for facilities with taskTypes.
     service_tracks = {}
@@ -147,8 +156,8 @@ def _relevant_corridor_nodes(scenario_object, location_object, known_track_ids, 
     # Restrict movement connectivity to the tracks that matter for this scenario: the nodes
     # on each type-compatible train's start -> coupling track -> exit/parking route, plus an
     # `expand_hops` neighborhood for maneuvering.
-    raw_adj = _build_adjacency(location_object)
-    adjacency = {str(k): {str(n) for n in v} for k, v in raw_adj.items()}
+    _, adjacency = _build_side_aware_track_graph(location_object, known_track_ids)
+    service_track_ids = _build_service_track_ids(location_object)
     path_nodes = set()
 
     def add_path(a, b):
@@ -170,8 +179,16 @@ def _relevant_corridor_nodes(scenario_object, location_object, known_track_ids, 
         for train, start_id in trains_with_starts:
             if _train_unit_type_keys(train).isdisjoint(request_keys):
                 continue
+            service_ids = [
+                track_id
+                for track_id, info in service_track_ids.items()
+                if info["type"] in _train_task_types(train)
+            ]
             for coupling_id in coupling_ids:
                 add_path(start_id, coupling_id)
+                for service_id in service_ids:
+                    add_path(start_id, service_id)
+                    add_path(service_id, coupling_id)
                 for target_id in route_targets:
                     add_path(coupling_id, target_id)
 
@@ -183,22 +200,39 @@ def _relevant_corridor_nodes(scenario_object, location_object, known_track_ids, 
         for train, start_id in trains_with_starts:
             if _train_unit_type_keys(train).isdisjoint(request_keys):
                 continue
+            service_ids = [
+                track_id
+                for track_id, info in service_track_ids.items()
+                if info["type"] in _train_task_types(train)
+            ]
             add_path(start_id, str(target_id))
+            for service_id in service_ids:
+                add_path(start_id, service_id)
+                add_path(service_id, str(target_id))
 
     if not path_nodes:
         return None
+
+    # Count expansion hops on raw physical connections. Counting on the
+    # switch-collapsed graph would make three hops cover almost the whole yard.
+    raw_neighborhood = _build_adjacency(location_object)
+    neighborhood = {
+        str(node): {str(neighbor) for neighbor in neighbors}
+        for node, neighbors in raw_neighborhood.items()
+    }
 
     reached = set(path_nodes)
     frontier = set(path_nodes)
     for _ in range(expand_hops):
         nxt = set()
         for n in frontier:
-            for m in adjacency.get(n, ()):
+            for m in neighborhood.get(n, ()):
                 if m not in reached:
                     reached.add(m)
                     nxt.add(m)
         frontier = nxt
-    return reached
+    known = {str(track_id) for track_id in known_track_ids}
+    return reached.intersection(known)
 
 
 def _train_total_length(train):
@@ -271,6 +305,56 @@ def _bfs_through_switches(adj, start, switch_ids, allowed_ids):
                 visited.add(neighbor)
                 queue.append(neighbor)
     return reachable
+
+
+def _build_side_aware_track_graph(location_object, allowed_track_ids=None):
+    """Build the exact no-switch movement graph while retaining A/B edge labels."""
+    switch_ids = {
+        tp["id"]
+        for tp in location_object["trackParts"]
+        if _is_switch_like_track_part(tp)
+    }
+    non_switch_ids = {
+        tp["id"]
+        for tp in location_object["trackParts"]
+        if tp["id"] not in switch_ids
+    }
+    if allowed_track_ids is not None:
+        allowed = {str(track_id) for track_id in allowed_track_ids}
+        non_switch_ids = {
+            track_id for track_id in non_switch_ids if str(track_id) in allowed
+        }
+
+    a_adj = _build_directed_adj(location_object, "aSide")
+    b_adj = _build_directed_adj(location_object, "bSide")
+    side_graph = {
+        str(track_id): {"a": set(), "b": set()}
+        for track_id in non_switch_ids
+    }
+
+    # These are the same switch paths later emitted as connected_aside/bside facts.
+    for source_id in non_switch_ids:
+        source = str(source_id)
+        side_graph[source]["a"].update(
+            str(target_id)
+            for target_id in _bfs_through_switches(
+                a_adj, source_id, switch_ids, non_switch_ids
+            )
+            if target_id != source_id
+        )
+        side_graph[source]["b"].update(
+            str(target_id)
+            for target_id in _bfs_through_switches(
+                b_adj, source_id, switch_ids, non_switch_ids
+            )
+            if target_id != source_id
+        )
+
+    movement_graph = {
+        source: sides["a"] | sides["b"]
+        for source, sides in side_graph.items()
+    }
+    return side_graph, movement_graph
 
 
 
