@@ -112,7 +112,7 @@ def _shortest_path(adjacency, start_id, goal_id):
     queue = deque([[start_id]])
     while queue:
         path = queue.popleft()
-        for nb in adjacency.get(path[-1], ()):
+        for nb in sorted(adjacency.get(path[-1], ())):
             if nb in visited:
                 continue
             if nb == goal_id:
