@@ -967,7 +967,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     start_request_composition.add_precondition(slot_for_request(start_request_composition.slot, start_request_composition.request))
     start_request_composition.add_effect(active_su(start_request_composition.source_su), False)
     start_request_composition.add_effect(active_su(start_request_composition.request_su), True)
-    start_request_composition.add_effect(su_may_move(start_request_composition.request_su), True)
+    # start_request_composition.add_effect(su_may_move(start_request_composition.request_su), True)
     start_request_composition.add_effect(at_su(start_request_composition.source_su, start_request_composition.track), False)
     start_request_composition.add_effect(at_su(start_request_composition.request_su, start_request_composition.track), True)
     start_request_composition.add_effect(su_aside_distance(start_request_composition.request_su), su_aside_distance(start_request_composition.source_su))
@@ -1074,9 +1074,11 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         request=departure_request_type,
     )
     complete_request_composition.add_precondition(active_su(complete_request_composition.request_su))
+    complete_request_composition.add_precondition(up.Not(request_assembled(complete_request_composition.request)))
     complete_request_composition.add_precondition(request_su_for_request(complete_request_composition.request_su, complete_request_composition.request))
     complete_request_composition.add_precondition(up.Equals(su_unit_count(complete_request_composition.request_su), request_size(complete_request_composition.request)))
     complete_request_composition.add_effect(request_assembled(complete_request_composition.request), True)
+    complete_request_composition.add_effect(su_may_move(complete_request_composition.request_su), True)
     complete_request_composition.add_effect(must_depart_su(complete_request_composition.request_su), True)
     problem.add_action(complete_request_composition)
 
