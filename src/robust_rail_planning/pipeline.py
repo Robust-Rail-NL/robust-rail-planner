@@ -383,14 +383,14 @@ def process_scenario(scenario_path, idx, total, run_id, use_examples, planner):
             logger.info("      saved raw plan to %s", os.path.relpath(archived_plan, BASE_DIR))
 
             logger.info("      converting plan to TORS JSON")
-            # subprocess.run(
-            #     [sys.executable, CONVERTER_SCRIPT,
-            #      "--plan", plan_path,
-            #      "--scenario", scenario_path,
-            #      "--location", LOCATION_FILE,
-            #      "--output", json_path],
-            #     check=True, capture_output=True, text=True,
-            # )
+            subprocess.run(
+                [sys.executable, CONVERTER_SCRIPT,
+                 "--plan", plan_path,
+                 "--scenario", scenario_path,
+                 "--location", LOCATION_FILE,
+                 "--output", json_path],
+                check=True, capture_output=True, text=True,
+            )
 
             # evaluate(tors_scenario_path, json_path)
         else:

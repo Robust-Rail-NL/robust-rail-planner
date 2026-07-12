@@ -292,10 +292,12 @@ def create_arrive_action(train_id, time, track,
 
 
 def create_exit_action(train_id, time, track,
-                       train_lookup, track_lookup, unit_lookup=None):
+                       train_lookup, track_lookup, unit_lookup=None,
+                       standing_type=""):
     """Create an Exit action"""
     resource = convert_track(track, track_lookup)
     shunting_unit = make_shunting_unit(train_id, train_lookup, unit_lookup)
+    shunting_unit["standingType"] = standing_type
 
     return {
         "startTime": str(time),
@@ -311,10 +313,12 @@ def create_exit_action(train_id, time, track,
 
 
 def create_park_action(train_id, time, track,
-                       train_lookup, track_lookup, unit_lookup=None):
+                       train_lookup, track_lookup, unit_lookup=None,
+                       standing_type=""):
     """Create a Park action"""
     resource = convert_track(track, track_lookup)
     shunting_unit = make_shunting_unit(train_id, train_lookup, unit_lookup)
+    shunting_unit["standingType"] = standing_type
 
     return {
         "startTime": str(time),
@@ -467,13 +471,14 @@ def get_all_bside(track_part, switch_like_ids, id_to_tp):
 
 def build_graph(location):
     id_to_tp = {tp["id"]: tp for tp in location["trackParts"]}
-    switch_like = build_switch_sets(location)
     graph = {}
     for tp in location["trackParts"]:
         src = tp["id"]
         neighbors = set()
-        neighbors |= get_all_aside(tp, switch_like, id_to_tp)
-        neighbors |= get_all_bside(tp, switch_like, id_to_tp)
+        for nb_id in tp.get("aSide", []):
+            neighbors.add(str(nb_id))
+        for nb_id in tp.get("bSide", []):
+            neighbors.add(str(nb_id))
         graph[src] = neighbors
     return graph
 
@@ -653,14 +658,6 @@ def convert_plan(plan_file, scenario_file, location_file):
         if m:
             su_id = m.group(1)
             track = m.group(2)
-            # Record arrival time from scenario, not current_time
-            stripped = su_id[3:] if su_id.startswith("su_") else su_id
-            arrival = current_time
-            for incoming in scenario.get("in", {}).get("trains", []):
-                if stripped == f"train{incoming['id']}" or su_id == f"su_train{incoming['id']}":
-                    arrival = int(incoming.get("arrival", current_time))
-                    break
-            train_arrival_times[su_id] = arrival
             train_arrival_times[su_id] = current_time
             train_locations[su_id] = track
             continue
@@ -815,9 +812,9 @@ def convert_plan(plan_file, scenario_file, location_file):
                 track,
                 train_lookup,
                 track_lookup,
-                unit_lookup
+                unit_lookup,
+                standing_type="OutStanding"
             )
-            exit_action["shuntingUnit"]["standingType"] = ""
             actions.append(exit_action)
             current_time = current_time + 1
             continue
@@ -887,7 +884,6 @@ def convert_plan(plan_file, scenario_file, location_file):
                 track_lookup,
                 unit_lookup
             )
-            exit_action["shuntingUnit"]["standingType"] = ""
             actions.append(exit_action)
             current_time = max(current_time, exit_time) + 1
             continue
