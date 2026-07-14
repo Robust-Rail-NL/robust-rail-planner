@@ -15,6 +15,13 @@ parser.add_argument("-l", "--location-file", required=False, default="location_s
 parser.add_argument("-o", "--output-file", required=False, default=None)
 parser.add_argument("-d", "--domain-file", required=False, default=None)
 parser.add_argument("--log-level", default="ERROR", required=False)
+parser.add_argument("--precompute-matching", action="store_true")
+parser.add_argument("--matching-variant", type=int, default=0)
+parser.add_argument(
+    "--matching-strategy",
+    choices=("stable", "order_preserving", "order_preserving_auto"),
+    default="stable",
+)
 
 
 CORRIDOR_EXPAND_HOPS = 3
@@ -139,24 +146,59 @@ def _train_task_types(train):
     }
 
 
-def _select_precomputed_matching(unit_type_by_id, slot_records, matching_variant):
+def _unit_source_positions(scenario_object):
+    # Record each unit's index and composition size so incoming and requested
+    # relative positions can be compared during pre-matching.
+    positions = {}
+    for _, _, train in all_trains_with_source(scenario_object):
+        members = train.get("members", [])
+        for index, member in enumerate(members):
+            positions[member["trainUnit"]["id"]] = (index, len(members))
+    return positions
+
+
+def _has_order_sensitive_matching(scenario_object):
+    # Pre-matching is useful when a unit type occurs in both a multi-unit source
+    # composition and a multi-slot outgoing request.
+    source_types = {
+        train_unit_type_key(member["trainUnit"])
+        for _, _, train in all_trains_with_source(scenario_object)
+        if len(train.get("members", [])) > 1
+        for member in train["members"]
+    }
+    request_types = {
+        train_unit_type_key(unit)
+        for request in scenario_object.get("out", {}).get("trainRequests", [])
+        if len(request.get("trainUnits", [])) > 1
+        for unit in request["trainUnits"]
+    }
+    return bool(source_types & request_types)
+
+
+def _select_precomputed_matching(
+    unit_type_by_id,
+    slot_records,
+    matching_variant,
+    matching_strategy="stable",
+    unit_positions=None,
+):
     if matching_variant < 0:
         raise ValueError("matching_variant must be non-negative")
 
     unit_ids = list(unit_type_by_id)
-    selected = None
-    completed = 0
+    completed_assignments = []
 
+    # Enumerate one-to-one, type-compatible assignments. Stable matching may
+    # stop at its requested variant; order-preserving matching ranks them all.
     def search(slot_index, used_units, assignment):
-        nonlocal selected, completed
         if slot_index == len(slot_records):
-            if completed == matching_variant:
-                selected = list(assignment)
-                return True
-            completed += 1
-            return False
+            completed_assignments.append(list(assignment))
+            return (
+                matching_strategy == "stable"
+                and len(completed_assignments) > matching_variant
+            )
 
-        _, requested_key = slot_records[slot_index]
+        _, requested_key, _, _ = slot_records[slot_index]
         for unit_id in unit_ids:
             if unit_id in used_units or unit_type_by_id[unit_id] != requested_key:
                 continue
@@ -169,12 +211,32 @@ def _select_precomputed_matching(unit_type_by_id, slot_records, matching_variant
         return False
 
     search(0, set(), [])
-    if selected is None:
+    if matching_strategy == "order_preserving":
+        unit_positions = unit_positions or {}
+
+        # Normalize source and target indexes to compare relative positions
+        # across compositions of different sizes; lower penalties retain order.
+        def order_penalty(assignment):
+            penalty = Fraction(0)
+            for unit_id, slot_index in assignment:
+                source_index, source_size = unit_positions.get(unit_id, (0, 1))
+                _, _, target_index, target_size = slot_records[slot_index]
+                if source_size > 1 and target_size > 1:
+                    source_position = Fraction(source_index, source_size - 1)
+                    target_position = Fraction(target_index, target_size - 1)
+                    penalty += abs(source_position - target_position)
+            return penalty
+
+        completed_assignments.sort(
+            key=lambda assignment: (order_penalty(assignment), assignment)
+        )
+
+    if matching_variant >= len(completed_assignments):
         raise ValueError(
             f"No complete precomputed matching exists for variant {matching_variant}; "
-            f"found {completed} matching variant(s)"
+            f"found {len(completed_assignments)} matching variant(s)"
         )
-    return selected
+    return completed_assignments[matching_variant]
 
 
 def _build_service_track_ids(location_object):
@@ -402,7 +464,7 @@ def _train_object_name(source, index, train):
     return "train" + train["id"]
 
 
-def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None, precompute_matching=False, matching_variant=0):
+def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None, precompute_matching=False, matching_variant=0, matching_strategy="stable"):
     if path_to_folder is None:
         path_to_folder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "scenario-planning-inputs", "Location_KleineBinckhorst")
 
@@ -422,6 +484,14 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     location_object = json.load(open(location_file))
     scenario_object = json.load(open(scenario_file))
+
+    # Automatic mode leaves matching planner-controlled when the scenario has
+    # no overlapping multi-unit types that make composition order relevant.
+    if precompute_matching and matching_strategy == "order_preserving_auto":
+        precompute_matching = _has_order_sensitive_matching(scenario_object)
+        matching_strategy = "order_preserving"
+        mode = "precomputed" if precompute_matching else "planner-controlled"
+        print(f"Matching mode: {mode}")
 
     problem = up.Problem(scenario_name)
     track_part_type = up.UserType("trackpart")
@@ -445,8 +515,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     number_of_trains_on_track = problem.add_fluent(up.Fluent("number_of_trains_on_track", up.IntType(), trackpart=track_part_type),                 default_initial_value=up.Int(0))
     num_of_departed_trains = problem.add_fluent(up.Fluent("num_of_departed_trains", up.IntType()),                                      default_initial_value=up.Int(0))
     track_length = problem.add_fluent(up.Fluent("track_length", up.RealType(), trackpart=track_part_type),                          default_initial_value=up.Real(Fraction(0)))
-    astack_distance = problem.add_fluent(up.Fluent("astack_distance", up.RealType(), trackpart=track_part_type),                         default_initial_value=up.Real(Fraction(0)))
-    bstack_distance = problem.add_fluent(up.Fluent("bstack_distance", up.RealType(), trackpart=track_part_type),                         default_initial_value=up.Real(Fraction(0)))
     concurrent_movements = problem.add_fluent(up.Fluent("concurrent_movements", up.IntType()), default_initial_value=up.Int(0))
     max_concurrent_movements = 1
 
@@ -476,7 +544,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     frontmost_a_su   = problem.add_fluent(up.Fluent("frontmost_a_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
     frontmost_b_su   = problem.add_fluent(up.Fluent("frontmost_b_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
     behind_su        = problem.add_fluent(up.Fluent("behind_su", up.BoolType(), back=shunting_unit_type, front=shunting_unit_type), default_initial_value=False)
-    su_aside_distance = problem.add_fluent(up.Fluent("su_aside_distance", up.RealType(), shunting_unit=shunting_unit_type), default_initial_value=up.Real(Fraction(0)))
     allowed_to_move_su = problem.add_fluent(up.Fluent("allowed_to_move_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
     su_may_move       = problem.add_fluent(up.Fluent("su_may_move", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
     must_depart_su    = problem.add_fluent(up.Fluent("must_depart_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
@@ -1723,7 +1790,11 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
             problem.set_initial_value(slot_open(slot_obj), True)
             problem.set_initial_value(slot_for_request(slot_obj, request_obj), True)
-            departure_slot_records.append((slot_obj, requested_key))
+            # Keep the slot's requested type, index, and request size for the
+            # type-compatible search and relative-position penalty.
+            departure_slot_records.append(
+                (slot_obj, requested_key, index, len(request["trainUnits"]))
+            )
             if len(request["trainUnits"]) == 1:
                 problem.add_goal(request_departed(request_obj))
 
@@ -1741,13 +1812,19 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             problem.add_goal(request_assembled(request_obj))
             problem.add_goal(departed_su(request_su))
 
+    # Encode the selected assignment as the initial effects that match actions
+    # would otherwise produce, closing each used unit and request slot.
     if precompute_matching:
         assignment = _select_precomputed_matching(
-            unit_type_by_id, departure_slot_records, matching_variant
+            unit_type_by_id,
+            departure_slot_records,
+            matching_variant,
+            matching_strategy=matching_strategy,
+            unit_positions=_unit_source_positions(scenario_object),
         )
         for unit_id, slot_index in assignment:
             unit_obj = id_to_unit[unit_id]
-            slot_obj, _ = departure_slot_records[slot_index]
+            slot_obj, _, _, _ = departure_slot_records[slot_index]
             problem.set_initial_value(matched(unit_obj, slot_obj), True)
             problem.set_initial_value(slot_filled(slot_obj), True)
             problem.set_initial_value(available(unit_obj), False)
@@ -1781,4 +1858,7 @@ if __name__ == "__main__":
         scenario_file=args.scenario_file,
         location_file=args.location_file,
         output_file=args.output_file,
+        precompute_matching=args.precompute_matching,
+        matching_variant=args.matching_variant,
+        matching_strategy=args.matching_strategy,
     )
