@@ -462,7 +462,7 @@ def process_scenario(scenario_path, idx, total, run_id, use_examples, planner):
     return row, records
 
 
-def process_simple_scenario():
+def process_simple_scenario(planner="astar"):
     """Convert, plan, and evaluate the simple scenario using TORS."""
     solver_scenario_path = os.path.join(SCENARIOS_DIR, "scenario_solver_simple.json")
     tors_scenario_path = os.path.join(SCENARIOS_DIR, "scenario_simple.json")
@@ -483,7 +483,10 @@ def process_simple_scenario():
 
     # Step 2: Plan
     logger.info("Planning simple scenario")
-    plan_found, plan_path, plan_length, planner_status = plan(pddl_path, timeout=600)
+    if planner == "enhsp":
+        plan_found, plan_path, plan_length, planner_status = plan(pddl_path, timeout=600)
+    else:
+        plan_found, plan_path, plan_length, planner_status = plan_with_julia(pddl_path)
 
     if not plan_found:
         logger.error("  no plan found for simple scenario (status=%s)", planner_status)
@@ -526,7 +529,7 @@ def run_pipeline(do_generate=False, use_examples=False, planner="astar",
     )
 
     if simple_scenario:
-        process_simple_scenario()
+        process_simple_scenario(planner=planner)
         return
 
     if do_local_search:
