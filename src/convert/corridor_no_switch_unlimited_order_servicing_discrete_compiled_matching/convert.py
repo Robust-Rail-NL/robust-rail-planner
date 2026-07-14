@@ -857,7 +857,9 @@ def _train_object_name(source, index, train):
     return "train" + train["id"]
 
 
-def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None, precompute_matching=False, matching_variant=0, matching_strategy="stable"):
+def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None, precompute_matching=False, matching_variant=0, matching_strategy="stable", compile_precomputed_actions=False):
+    if compile_precomputed_actions and not precompute_matching:
+        raise ValueError("Compiled request actions require precomputed matching")
     if path_to_folder is None:
         path_to_folder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "scenario-planning-inputs", "Location_KleineBinckhorst")
 
@@ -1824,6 +1826,343 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     depart_bside_su_for_request.add_precondition(serviced(depart_bside_su_for_request.su))
     park_su.add_precondition(serviced(park_su.su))
 
+    compiled_target_request_su = problem.add_fluent(
+        up.Fluent("compiled_target_request_su", up.BoolType(), unit=train_unit_type, request_su=shunting_unit_type),
+        default_initial_value=False,
+    )
+    compiled_whole_target = problem.add_fluent(
+        up.Fluent("compiled_whole_target", up.BoolType(), source_su=shunting_unit_type, request_su=shunting_unit_type),
+        default_initial_value=False,
+    )
+    compiled_direct_departure = problem.add_fluent(
+        up.Fluent("compiled_direct_departure", up.BoolType(), su=shunting_unit_type),
+        default_initial_value=False,
+    )
+    compiled_departure_material = problem.add_fluent(
+        up.Fluent("compiled_departure_material", up.BoolType(), su=shunting_unit_type),
+        default_initial_value=False,
+    )
+    compiled_route_edge = problem.add_fluent(
+        up.Fluent("compiled_route_edge", up.BoolType(), source=track_part_type, target=track_part_type),
+        default_initial_value=False,
+    )
+    compiled_arrival_composition_su = problem.add_fluent(
+        up.Fluent("compiled_arrival_composition_su", up.BoolType(), su=shunting_unit_type),
+        default_initial_value=False,
+    )
+    compiled_uncouple_track = problem.add_fluent(
+        up.Fluent("compiled_uncouple_track", up.BoolType(), su=shunting_unit_type, track=track_part_type),
+        default_initial_value=False,
+    )
+    compiled_single_request = problem.add_fluent(
+        up.Fluent("compiled_single_request", up.BoolType(), unit=train_unit_type, request=departure_request_type),
+        default_initial_value=False,
+    )
+    compiled_coupling_track = problem.add_fluent(
+        up.Fluent("compiled_coupling_track", up.BoolType(), request_su=shunting_unit_type, track=track_part_type),
+        default_initial_value=False,
+    )
+    compiled_target_rank = problem.add_fluent(
+        up.Fluent("compiled_target_rank", up.IntType(), unit=train_unit_type),
+        default_initial_value=0,
+    )
+    compiled_front_rank = problem.add_fluent(
+        up.Fluent("compiled_front_rank", up.IntType(), request_su=shunting_unit_type),
+        default_initial_value=0,
+    )
+    compiled_back_rank = problem.add_fluent(
+        up.Fluent("compiled_back_rank", up.IntType(), request_su=shunting_unit_type),
+        default_initial_value=0,
+    )
+
+    if compile_precomputed_actions:
+        park_su.add_precondition(up.Not(compiled_departure_material(park_su.su)))
+        for movement_action in (
+            move_aside_empty_su,
+            move_aside_occupied_su,
+            move_bside_empty_su,
+            move_bside_occupied_su,
+        ):
+            movement_action.add_precondition(up.Not(compiled_direct_departure(movement_action.su)))
+            movement_action.add_precondition(
+                compiled_route_edge(movement_action.l_from, movement_action.l_to)
+            )
+
+        adopt_composition = up.InstantaneousAction(
+            "compiled_adopt_composition",
+            source_su=shunting_unit_type,
+            request_su=shunting_unit_type,
+            track=track_part_type,
+        )
+        adopt_composition.add_precondition(active_su(adopt_composition.source_su))
+        adopt_composition.add_precondition(up.Not(active_su(adopt_composition.request_su)))
+        adopt_composition.add_precondition(compiled_whole_target(adopt_composition.source_su, adopt_composition.request_su))
+        adopt_composition.add_precondition(at_su(adopt_composition.source_su, adopt_composition.track))
+        adopt_composition.add_precondition(serviced(adopt_composition.source_su))
+        adopt_composition.add_effect(active_su(adopt_composition.source_su), False)
+        adopt_composition.add_effect(active_su(adopt_composition.request_su), True)
+        adopt_composition.add_effect(at_su(adopt_composition.source_su, adopt_composition.track), False)
+        adopt_composition.add_effect(at_su(adopt_composition.request_su, adopt_composition.track), True)
+        adopt_composition.add_effect(su_length(adopt_composition.request_su), su_length(adopt_composition.source_su))
+        adopt_composition.add_effect(su_unit_count(adopt_composition.request_su), su_unit_count(adopt_composition.source_su))
+        adopt_composition.add_effect(su_may_move(adopt_composition.request_su), True)
+        adopt_composition.add_effect(must_depart_su(adopt_composition.request_su), True)
+        adopt_composition.add_effect(
+            fluent=allowed_to_move_su(adopt_composition.request_su),
+            value=True,
+            condition=allowed_to_move_su(adopt_composition.source_su),
+        )
+        adopt_composition.add_effect(
+            fluent=allowed_to_move_su(adopt_composition.source_su),
+            value=False,
+            condition=allowed_to_move_su(adopt_composition.source_su),
+        )
+        # Transfer unit membership and internal order to the adopted request SU.
+        adopted_unit = up.Variable("adopted_unit", train_unit_type)
+        adopted_next_unit = up.Variable("adopted_next_unit", train_unit_type)
+        adopted_request = up.Variable("adopted_request", departure_request_type)
+        adopted_track_neighbor = up.Variable("adopted_track_neighbor", shunting_unit_type)
+        adopt_composition.add_effect(fluent=contains_su(adopt_composition.request_su, adopted_unit), value=True, condition=contains_su(adopt_composition.source_su, adopted_unit), forall=[adopted_unit])
+        adopt_composition.add_effect(fluent=contains_su(adopt_composition.source_su, adopted_unit), value=False, condition=contains_su(adopt_composition.source_su, adopted_unit), forall=[adopted_unit])
+        adopt_composition.add_effect(fluent=front_of(adopted_unit, adopt_composition.request_su), value=True, condition=front_of(adopted_unit, adopt_composition.source_su), forall=[adopted_unit])
+        adopt_composition.add_effect(fluent=front_of(adopted_unit, adopt_composition.source_su), value=False, condition=front_of(adopted_unit, adopt_composition.source_su), forall=[adopted_unit])
+        adopt_composition.add_effect(fluent=back_of(adopted_unit, adopt_composition.request_su), value=True, condition=back_of(adopted_unit, adopt_composition.source_su), forall=[adopted_unit])
+        adopt_composition.add_effect(fluent=back_of(adopted_unit, adopt_composition.source_su), value=False, condition=back_of(adopted_unit, adopt_composition.source_su), forall=[adopted_unit])
+        adopt_composition.add_effect(fluent=next_in_su(adopted_unit, adopted_next_unit, adopt_composition.request_su), value=True, condition=next_in_su(adopted_unit, adopted_next_unit, adopt_composition.source_su), forall=[adopted_unit, adopted_next_unit])
+        adopt_composition.add_effect(fluent=next_in_su(adopted_unit, adopted_next_unit, adopt_composition.source_su), value=False, condition=next_in_su(adopted_unit, adopted_next_unit, adopt_composition.source_su), forall=[adopted_unit, adopted_next_unit])
+        adopt_composition.add_effect(fluent=request_assembled(adopted_request), value=True, condition=request_su_for_request(adopt_composition.request_su, adopted_request), forall=[adopted_request])
+        adopt_composition.add_effect(fluent=frontmost_a_su(adopt_composition.request_su), value=True, condition=frontmost_a_su(adopt_composition.source_su))
+        adopt_composition.add_effect(fluent=frontmost_b_su(adopt_composition.request_su), value=True, condition=frontmost_b_su(adopt_composition.source_su))
+        adopt_composition.add_effect(frontmost_a_su(adopt_composition.source_su), False)
+        adopt_composition.add_effect(frontmost_b_su(adopt_composition.source_su), False)
+        # Replace the source SU with the request SU in the surrounding track order.
+        adopt_composition.add_effect(fluent=behind_su(adopted_track_neighbor, adopt_composition.request_su), value=True, condition=behind_su(adopted_track_neighbor, adopt_composition.source_su), forall=[adopted_track_neighbor])
+        adopt_composition.add_effect(fluent=behind_su(adopted_track_neighbor, adopt_composition.source_su), value=False, condition=behind_su(adopted_track_neighbor, adopt_composition.source_su), forall=[adopted_track_neighbor])
+        adopt_composition.add_effect(fluent=behind_su(adopt_composition.request_su, adopted_track_neighbor), value=True, condition=behind_su(adopt_composition.source_su, adopted_track_neighbor), forall=[adopted_track_neighbor])
+        adopt_composition.add_effect(fluent=behind_su(adopt_composition.source_su, adopted_track_neighbor), value=False, condition=behind_su(adopt_composition.source_su, adopted_track_neighbor), forall=[adopted_track_neighbor])
+        problem.add_action(adopt_composition)
+
+        def add_compiled_uncouple(name, front):
+            action = up.InstantaneousAction(
+                name,
+                parent_su=shunting_unit_type,
+                child_su=shunting_unit_type,
+                unit=train_unit_type,
+                track=track_part_type,
+            )
+            action.add_precondition(active_su(action.parent_su))
+            action.add_precondition(compiled_arrival_composition_su(action.parent_su))
+            action.add_precondition(up.Not(compiled_direct_departure(action.parent_su)))
+            action.add_precondition(compiled_uncouple_track(action.parent_su, action.track))
+            action.add_precondition(allowed_to_move_su(action.parent_su))
+            action.add_precondition(up.Not(active_su(action.child_su)))
+            action.add_precondition(contains_su(action.parent_su, action.unit))
+            action.add_precondition(contains_su(action.child_su, action.unit))
+            action.add_precondition(single_unit_su(action.child_su, action.unit))
+            action.add_precondition(front_of(action.unit, action.parent_su) if front else back_of(action.unit, action.parent_su))
+            action.add_precondition(at_su(action.parent_su, action.track))
+            action.add_precondition(serviced(action.parent_su))
+            action.add_precondition(up.GE(su_unit_count(action.parent_su), 2))
+            action.add_effect(active_su(action.child_su), True)
+            action.add_effect(su_may_move(action.parent_su), True)
+            action.add_effect(su_may_move(action.child_su), True)
+            action.add_effect(allowed_to_move_su(action.parent_su), False)
+            action.add_effect(concurrent_movements, concurrent_movements - 1)
+            action.add_effect(at_su(action.child_su, action.track), True)
+            action.add_effect(su_length(action.parent_su), su_length(action.parent_su) - su_length(action.child_su))
+            action.add_effect(su_unit_count(action.parent_su), su_unit_count(action.parent_su) - 1)
+            action.add_effect(su_unit_count(action.child_su), 1)
+            action.add_effect(number_of_trains_on_track(action.track), number_of_trains_on_track(action.track) + 1)
+            action.add_effect(contains_su(action.parent_su, action.unit), False)
+            action.add_effect(front_of(action.unit, action.parent_su) if front else back_of(action.unit, action.parent_su), False)
+            action.add_effect(front_of(action.unit, action.child_su), True)
+            action.add_effect(back_of(action.unit, action.child_su), True)
+            action.add_effect(available(action.unit), True)
+            # Promote the remaining end unit and release composition membership.
+            uncoupled_neighbor_unit = up.Variable(f"{name}_neighbor_unit", train_unit_type)
+            uncoupled_composition = up.Variable(f"{name}_composition", arrival_composition_type)
+            if front:
+                neighbor_condition = next_in_su(action.unit, uncoupled_neighbor_unit, action.parent_su)
+                action.add_effect(fluent=front_of(uncoupled_neighbor_unit, action.parent_su), value=True, condition=neighbor_condition, forall=[uncoupled_neighbor_unit])
+                action.add_effect(fluent=next_in_su(action.unit, uncoupled_neighbor_unit, action.parent_su), value=False, condition=neighbor_condition, forall=[uncoupled_neighbor_unit])
+            else:
+                neighbor_condition = next_in_su(uncoupled_neighbor_unit, action.unit, action.parent_su)
+                action.add_effect(fluent=back_of(uncoupled_neighbor_unit, action.parent_su), value=True, condition=neighbor_condition, forall=[uncoupled_neighbor_unit])
+                action.add_effect(fluent=next_in_su(uncoupled_neighbor_unit, action.unit, action.parent_su), value=False, condition=neighbor_condition, forall=[uncoupled_neighbor_unit])
+            pair_condition = up.And(neighbor_condition, up.Equals(su_unit_count(action.parent_su), 2))
+            action.add_effect(fluent=single_unit_su(action.parent_su, uncoupled_neighbor_unit), value=True, condition=pair_condition, forall=[uncoupled_neighbor_unit])
+            action.add_effect(fluent=available(uncoupled_neighbor_unit), value=True, condition=pair_condition, forall=[uncoupled_neighbor_unit])
+            action.add_effect(
+                fluent=part_of_composition(action.unit, uncoupled_composition),
+                value=False,
+                condition=part_of_composition(action.unit, uncoupled_composition),
+                forall=[uncoupled_composition],
+            )
+            action.add_effect(
+                fluent=part_of_composition(uncoupled_neighbor_unit, uncoupled_composition),
+                value=False,
+                condition=up.And(pair_condition, part_of_composition(uncoupled_neighbor_unit, uncoupled_composition)),
+                forall=[uncoupled_neighbor_unit, uncoupled_composition],
+            )
+            # Insert the detached child at the correct end of the track order.
+            uncoupled_track_neighbor = up.Variable(f"{name}_track_neighbor", shunting_unit_type)
+            if front:
+                action.add_effect(fluent=frontmost_a_su(action.child_su), value=True, condition=frontmost_a_su(action.parent_su))
+                action.add_effect(frontmost_a_su(action.parent_su), False)
+                action.add_effect(behind_su(action.parent_su, action.child_su), True)
+                action.add_effect(fluent=behind_su(action.child_su, uncoupled_track_neighbor), value=True, condition=behind_su(action.parent_su, uncoupled_track_neighbor), forall=[uncoupled_track_neighbor])
+                action.add_effect(fluent=behind_su(action.parent_su, uncoupled_track_neighbor), value=False, condition=behind_su(action.parent_su, uncoupled_track_neighbor), forall=[uncoupled_track_neighbor])
+            else:
+                action.add_effect(fluent=frontmost_b_su(action.child_su), value=True, condition=frontmost_b_su(action.parent_su))
+                action.add_effect(frontmost_b_su(action.parent_su), False)
+                action.add_effect(behind_su(action.child_su, action.parent_su), True)
+                action.add_effect(fluent=behind_su(uncoupled_track_neighbor, action.child_su), value=True, condition=behind_su(uncoupled_track_neighbor, action.parent_su), forall=[uncoupled_track_neighbor])
+                action.add_effect(fluent=behind_su(uncoupled_track_neighbor, action.parent_su), value=False, condition=behind_su(uncoupled_track_neighbor, action.parent_su), forall=[uncoupled_track_neighbor])
+            problem.add_action(action)
+
+        add_compiled_uncouple("compiled_uncouple_front", True)
+        add_compiled_uncouple("compiled_uncouple_back", False)
+
+        compiled_start = up.InstantaneousAction(
+            "compiled_start_request",
+            source_su=shunting_unit_type,
+            unit=train_unit_type,
+            request_su=shunting_unit_type,
+            track=track_part_type,
+        )
+        compiled_start.add_precondition(active_su(compiled_start.source_su))
+        compiled_start.add_precondition(up.Not(parked_su(compiled_start.source_su)))
+        compiled_start.add_precondition(up.Not(active_su(compiled_start.request_su)))
+        compiled_start.add_precondition(contains_su(compiled_start.source_su, compiled_start.unit))
+        compiled_start.add_precondition(single_unit_su(compiled_start.source_su, compiled_start.unit))
+        compiled_start.add_precondition(compiled_target_request_su(compiled_start.unit, compiled_start.request_su))
+        compiled_start.add_precondition(at_su(compiled_start.source_su, compiled_start.track))
+        compiled_start.add_precondition(coupling_allowed(compiled_start.track))
+        compiled_start.add_precondition(compiled_coupling_track(compiled_start.request_su, compiled_start.track))
+        compiled_start.add_precondition(serviced(compiled_start.source_su))
+        compiled_start.add_effect(active_su(compiled_start.source_su), False)
+        compiled_start.add_effect(active_su(compiled_start.request_su), True)
+        compiled_start.add_effect(at_su(compiled_start.source_su, compiled_start.track), False)
+        compiled_start.add_effect(at_su(compiled_start.request_su, compiled_start.track), True)
+        compiled_start.add_effect(su_length(compiled_start.request_su), su_length(compiled_start.source_su))
+        compiled_start.add_effect(su_unit_count(compiled_start.request_su), 1)
+        compiled_start.add_effect(contains_su(compiled_start.request_su, compiled_start.unit), True)
+        compiled_start.add_effect(front_of(compiled_start.unit, compiled_start.request_su), True)
+        compiled_start.add_effect(back_of(compiled_start.unit, compiled_start.request_su), True)
+        compiled_start.add_effect(compiled_front_rank(compiled_start.request_su), compiled_target_rank(compiled_start.unit))
+        compiled_start.add_effect(compiled_back_rank(compiled_start.request_su), compiled_target_rank(compiled_start.unit))
+        # Replace the source SU with the new request SU in the track order.
+        start_request_track_neighbor = up.Variable("start_request_track_neighbor", shunting_unit_type)
+        compiled_start.add_effect(fluent=frontmost_a_su(compiled_start.request_su), value=True, condition=frontmost_a_su(compiled_start.source_su))
+        compiled_start.add_effect(fluent=frontmost_b_su(compiled_start.request_su), value=True, condition=frontmost_b_su(compiled_start.source_su))
+        compiled_start.add_effect(frontmost_a_su(compiled_start.source_su), False)
+        compiled_start.add_effect(frontmost_b_su(compiled_start.source_su), False)
+        compiled_start.add_effect(fluent=behind_su(start_request_track_neighbor, compiled_start.request_su), value=True, condition=behind_su(start_request_track_neighbor, compiled_start.source_su), forall=[start_request_track_neighbor])
+        compiled_start.add_effect(fluent=behind_su(start_request_track_neighbor, compiled_start.source_su), value=False, condition=behind_su(start_request_track_neighbor, compiled_start.source_su), forall=[start_request_track_neighbor])
+        compiled_start.add_effect(fluent=behind_su(compiled_start.request_su, start_request_track_neighbor), value=True, condition=behind_su(compiled_start.source_su, start_request_track_neighbor), forall=[start_request_track_neighbor])
+        compiled_start.add_effect(fluent=behind_su(compiled_start.source_su, start_request_track_neighbor), value=False, condition=behind_su(compiled_start.source_su, start_request_track_neighbor), forall=[start_request_track_neighbor])
+        problem.add_action(compiled_start)
+
+        def add_compiled_end_coupling(name, front):
+            action = up.InstantaneousAction(
+                name,
+                source_su=shunting_unit_type,
+                unit=train_unit_type,
+                request_su=shunting_unit_type,
+                track=track_part_type,
+            )
+            action.add_precondition(active_su(action.source_su))
+            action.add_precondition(active_su(action.request_su))
+            action.add_precondition(up.Not(parked_su(action.source_su)))
+            action.add_precondition(up.Not(parked_su(action.request_su)))
+            action.add_precondition(contains_su(action.source_su, action.unit))
+            action.add_precondition(single_unit_su(action.source_su, action.unit))
+            action.add_precondition(compiled_target_request_su(action.unit, action.request_su))
+            action.add_precondition(at_su(action.source_su, action.track))
+            action.add_precondition(at_su(action.request_su, action.track))
+            action.add_precondition(coupling_allowed(action.track))
+            action.add_precondition(compiled_coupling_track(action.request_su, action.track))
+            action.add_precondition(serviced(action.source_su))
+            action.add_precondition(serviced(action.request_su))
+            if front:
+                action.add_precondition(up.Equals(compiled_target_rank(action.unit) + 1, compiled_front_rank(action.request_su)))
+                action.add_precondition(behind_su(action.request_su, action.source_su))
+            else:
+                action.add_precondition(up.Equals(compiled_target_rank(action.unit), compiled_back_rank(action.request_su) + 1))
+                action.add_precondition(behind_su(action.source_su, action.request_su))
+            action.add_effect(active_su(action.source_su), False)
+            action.add_effect(at_su(action.source_su, action.track), False)
+            action.add_effect(su_length(action.request_su), su_length(action.request_su) + su_length(action.source_su))
+            action.add_effect(su_unit_count(action.request_su), su_unit_count(action.request_su) + 1)
+            action.add_effect(number_of_trains_on_track(action.track), number_of_trains_on_track(action.track) - 1)
+            action.add_effect(contains_su(action.request_su, action.unit), True)
+            # Update the request end unit and reconnect its surrounding track order.
+            previous_request_end_unit = up.Variable(f"{name}_old_unit", train_unit_type)
+            coupled_track_neighbor = up.Variable(f"{name}_neighbor", shunting_unit_type)
+            if front:
+                action.add_effect(fluent=front_of(previous_request_end_unit, action.request_su), value=False, condition=front_of(previous_request_end_unit, action.request_su), forall=[previous_request_end_unit])
+                action.add_effect(fluent=next_in_su(action.unit, previous_request_end_unit, action.request_su), value=True, condition=front_of(previous_request_end_unit, action.request_su), forall=[previous_request_end_unit])
+                action.add_effect(fluent=physically_coupled(action.unit, previous_request_end_unit), value=True, condition=front_of(previous_request_end_unit, action.request_su), forall=[previous_request_end_unit])
+                action.add_effect(front_of(action.unit, action.request_su), True)
+                action.add_effect(compiled_front_rank(action.request_su), compiled_target_rank(action.unit))
+                action.add_effect(behind_su(action.request_su, action.source_su), False)
+                action.add_effect(fluent=behind_su(action.request_su, coupled_track_neighbor), value=True, condition=behind_su(action.source_su, coupled_track_neighbor), forall=[coupled_track_neighbor])
+                action.add_effect(fluent=behind_su(action.source_su, coupled_track_neighbor), value=False, condition=behind_su(action.source_su, coupled_track_neighbor), forall=[coupled_track_neighbor])
+                action.add_effect(fluent=frontmost_a_su(action.request_su), value=True, condition=frontmost_a_su(action.source_su))
+            else:
+                action.add_effect(fluent=back_of(previous_request_end_unit, action.request_su), value=False, condition=back_of(previous_request_end_unit, action.request_su), forall=[previous_request_end_unit])
+                action.add_effect(fluent=next_in_su(previous_request_end_unit, action.unit, action.request_su), value=True, condition=back_of(previous_request_end_unit, action.request_su), forall=[previous_request_end_unit])
+                action.add_effect(fluent=physically_coupled(previous_request_end_unit, action.unit), value=True, condition=back_of(previous_request_end_unit, action.request_su), forall=[previous_request_end_unit])
+                action.add_effect(back_of(action.unit, action.request_su), True)
+                action.add_effect(compiled_back_rank(action.request_su), compiled_target_rank(action.unit))
+                action.add_effect(behind_su(action.source_su, action.request_su), False)
+                action.add_effect(fluent=behind_su(coupled_track_neighbor, action.request_su), value=True, condition=behind_su(coupled_track_neighbor, action.source_su), forall=[coupled_track_neighbor])
+                action.add_effect(fluent=behind_su(coupled_track_neighbor, action.source_su), value=False, condition=behind_su(coupled_track_neighbor, action.source_su), forall=[coupled_track_neighbor])
+                action.add_effect(fluent=frontmost_b_su(action.request_su), value=True, condition=frontmost_b_su(action.source_su))
+            action.add_effect(frontmost_a_su(action.source_su), False)
+            action.add_effect(frontmost_b_su(action.source_su), False)
+            problem.add_action(action)
+
+        add_compiled_end_coupling("compiled_couple_front", True)
+        add_compiled_end_coupling("compiled_couple_back", False)
+
+        def add_compiled_single_departure(name, aside):
+            action = up.InstantaneousAction(name, su=shunting_unit_type, unit=train_unit_type, request=departure_request_type, l=track_part_type)
+            action.add_precondition(active_su(action.su))
+            action.add_precondition(allowed_to_move_su(action.su))
+            action.add_precondition(contains_su(action.su, action.unit))
+            action.add_precondition(single_unit_su(action.su, action.unit))
+            action.add_precondition(compiled_single_request(action.unit, action.request))
+            action.add_precondition(at_su(action.su, action.l))
+            action.add_precondition(departure_exit_a(action.l) if aside else departure_exit_b(action.l))
+            action.add_precondition(frontmost_a_su(action.su) if aside else frontmost_b_su(action.su))
+            action.add_precondition(serviced(action.su))
+            action.add_effect(active_su(action.su), False)
+            action.add_effect(at_su(action.su, action.l), False)
+            action.add_effect(at_su(action.su, phantom_track), True)
+            action.add_effect(departed_su(action.su), True)
+            action.add_effect(occupied_length(action.l), occupied_length(action.l) - su_length(action.su))
+            action.add_effect(request_departed(action.request), True)
+            action.add_effect(num_of_departed_trains(), num_of_departed_trains() + 1)
+            action.add_effect(number_of_trains_on_track(action.l), number_of_trains_on_track(action.l) - 1)
+            action.add_effect(concurrent_movements, concurrent_movements - 1)
+            action.add_effect(allowed_to_move_su(action.su), False)
+            # Promote the adjacent SU to the exposed track end after departure.
+            departure_track_neighbor = up.Variable(f"{name}_neighbor", shunting_unit_type)
+            if aside:
+                action.add_effect(fluent=frontmost_a_su(departure_track_neighbor), value=True, condition=behind_su(departure_track_neighbor, action.su), forall=[departure_track_neighbor])
+                action.add_effect(fluent=behind_su(departure_track_neighbor, action.su), value=False, condition=behind_su(departure_track_neighbor, action.su), forall=[departure_track_neighbor])
+                action.add_effect(frontmost_a_su(action.su), False)
+            else:
+                action.add_effect(fluent=frontmost_b_su(departure_track_neighbor), value=True, condition=behind_su(action.su, departure_track_neighbor), forall=[departure_track_neighbor])
+                action.add_effect(fluent=behind_su(action.su, departure_track_neighbor), value=False, condition=behind_su(action.su, departure_track_neighbor), forall=[departure_track_neighbor])
+                action.add_effect(frontmost_b_su(action.su), False)
+            problem.add_action(action)
+            return action
+
+        compiled_depart_aside = add_compiled_single_departure("compiled_depart_aside_for_request", True)
+        compiled_depart_bside = add_compiled_single_departure("compiled_depart_bside_for_request", False)
+
     match = up.InstantaneousAction("match", unit=train_unit_type, slot=request_slot_type)
     match.add_precondition(available(match.unit))
     match.add_precondition(slot_open(match.slot))
@@ -2007,6 +2346,9 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     in_train_sus = []
     track_initial_su_order = {}
+    source_composition_records = []
+    single_unit_su_by_unit_name = {}
+    direct_departure_sources = set()
     for source, index, train in all_trains_with_source(scenario_object):
         preferred_track_keys = ["firstParkingTrackPart", "entryTrackPart"] if source == "inStanding" else ["entryTrackPart", "firstParkingTrackPart"]
         initial_track_id = _train_initial_track_id(train, preferred_track_keys)
@@ -2018,6 +2360,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             problem.set_initial_value(su_may_move(shunting_unit), True)
 
         needs_service = any(task for member in train.get("members", []) for task in member.get("tasks", []))
+        if source == "in" and not needs_service and initial_track_id in (exit_ids_a | exit_ids_b):
+            direct_departure_sources.add(shunting_unit)
         if needs_service:
             problem.set_initial_value(serviced(shunting_unit), False)
             for member in train.get("members", []):
@@ -2043,6 +2387,13 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             composition_obj = problem.add_object("composition" + train["id"], arrival_composition_type)
             problem.set_initial_value(composition_needs_uncoupling(composition_obj), True)
             problem.set_initial_value(su_may_move(shunting_unit), True)
+            if compile_precomputed_actions:
+                problem.set_initial_value(compiled_arrival_composition_su(shunting_unit), True)
+                if initial_track_id in id_to_track_part:
+                    problem.set_initial_value(
+                        compiled_uncouple_track(shunting_unit, id_to_track_part[initial_track_id]),
+                        True,
+                    )
         else:
             problem.set_initial_value(su_may_move(shunting_unit), True)
 
@@ -2062,6 +2413,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 problem.set_initial_value(single_unit_su(shunting_unit, unit_obj), True)
             else:
                 single_unit_su_obj = problem.add_object("su_unit" + unit["id"], shunting_unit_type)
+                single_unit_su_by_unit_name[unit_obj.name] = single_unit_su_obj
                 problem.set_initial_value(contains_su(single_unit_su_obj, unit_obj), True)
                 problem.set_initial_value(single_unit_su(single_unit_su_obj, unit_obj), True)
                 problem.set_initial_value(su_length(single_unit_su_obj), up.Real(_train_unit_length(unit)))
@@ -2080,6 +2432,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 problem.set_initial_value(back_of(member_unit_objs[0], shunting_unit), True)
             for first_obj, second_obj in zip(member_unit_objs, member_unit_objs[1:]):
                 problem.set_initial_value(next_in_su(first_obj, second_obj, shunting_unit), True)
+            source_composition_records.append((shunting_unit, member_unit_objs))
 
         for first, second in zip(train_members, train_members[1:]):
             first_obj = id_to_unit[first["trainUnit"]["id"]]
@@ -2127,6 +2480,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     # assembly (couple) followed by departure of the assembled SU.
     request_objs = {}
     departure_slot_records = []
+    request_action_records = []
     for request in out_requests:
         request_name = "request" + request["displayName"]
         request_obj = problem.add_object(request_name, departure_request_type)
@@ -2134,9 +2488,12 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         problem.set_initial_value(request_open(request_obj), True)
         problem.set_initial_value(request_size(request_obj), up.Int(len(request["trainUnits"])))
 
+        coupling_track_objects = []
         for track_id in _coupling_track_ids_for_request(request, location_object, coupling_candidate_track_ids):
             if track_id in id_to_track_part:
-                problem.set_initial_value(coupling_track_for_request(request_obj, id_to_track_part[track_id]), True)
+                coupling_track_object = id_to_track_part[track_id]
+                coupling_track_objects.append(coupling_track_object)
+                problem.set_initial_value(coupling_track_for_request(request_obj, coupling_track_object), True)
 
         slot_objects = []
         for index, requested_unit in enumerate(request["trainUnits"]):
@@ -2159,13 +2516,18 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         for first_slot, second_slot in zip(slot_objects, slot_objects[1:]):
             problem.set_initial_value(slot_before(first_slot, second_slot), True)
 
+        request_su = None
         if len(slot_objects) > 1:
             request_su = problem.add_object("su_" + request_name, shunting_unit_type)
             problem.set_initial_value(request_su_for_request(request_su, request_obj), True)
 
             problem.add_goal(request_assembled(request_obj))
             problem.add_goal(departed_su(request_su))
+        request_action_records.append(
+            (request, request_obj, request_su, slot_objects, coupling_track_objects)
+        )
 
+    assignment = []
     if precompute_matching:
         # Match departures only after reserving units needed by parking requests.
         departure_candidates = _departure_matching_candidates(
