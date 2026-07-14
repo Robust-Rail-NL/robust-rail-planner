@@ -2,7 +2,7 @@ import os
 import json
 import logging
 import argparse
-from collections import deque
+from collections import Counter, defaultdict, deque
 from fractions import Fraction
 import unified_planning.shortcuts as up
 from unified_planning.io import PDDLWriter
@@ -267,14 +267,25 @@ def _minimum_assignment_cost(slot_indices, unit_ids, slot_records, unit_position
     return sum(costs[row][column] for row, column in enumerate(assignment))
 
 
-def _select_order_preserving_matching(unit_type_by_id, slot_records, unit_positions):
+def _select_order_preserving_matching(
+    unit_type_by_id, slot_records, unit_positions, allowed_slot_indices=None
+):
     assignments = []
     unit_order = list(unit_type_by_id)
-    requested_types = list(dict.fromkeys(record[1] for record in slot_records))
+    # Limit matching to slots not already filled by a preserved composition.
+    if allowed_slot_indices is None:
+        allowed_slot_indices = list(range(len(slot_records)))
+    requested_types = list(
+        dict.fromkeys(slot_records[index][1] for index in allowed_slot_indices)
+    )
 
     # Compatibility is exact by train-unit type, so each type can be optimized independently.
     for requested_type in requested_types:
-        slots = [index for index, record in enumerate(slot_records) if record[1] == requested_type]
+        slots = [
+            index
+            for index in allowed_slot_indices
+            if slot_records[index][1] == requested_type
+        ]
         units = [unit_id for unit_id in unit_order if unit_type_by_id[unit_id] == requested_type]
         optimum = _minimum_assignment_cost(slots, units, slot_records, unit_positions)
         if optimum is None:
@@ -307,12 +318,110 @@ def _select_order_preserving_matching(unit_type_by_id, slot_records, unit_positi
     return sorted(assignments, key=lambda item: item[1])
 
 
+def _select_composition_preserving_matching(
+    scenario_object, unit_type_by_id, slot_records, unit_positions
+):
+    # Keep each source composition's membership and unit order together.
+    source_rows = list(all_trains_with_source(scenario_object))
+    source_rows.sort(
+        key=lambda row: (
+            0 if row[0] == "inStanding" else 1,
+            int(row[2].get("arrival", 0)),
+            row[1],
+        )
+    )
+    source_groups = []
+    for _, _, train in source_rows:
+        unit_ids = [
+            member["trainUnit"]["id"]
+            for member in train.get("members", [])
+            if member["trainUnit"]["id"] in unit_type_by_id
+        ]
+        if unit_ids:
+            source_groups.append(
+                (unit_ids, [unit_type_by_id[unit_id] for unit_id in unit_ids])
+            )
+
+    # Reuse complete incoming compositions where possible before assigning the
+    # remaining units with the existing order-preserving matcher.
+    assignments = []
+    assigned_units = set()
+    assigned_slots = set()
+    used_groups = set()
+    slot_offset = 0
+    for request in scenario_object.get("out", {}).get("trainRequests", []):
+        requested_types = [train_unit_type_key(unit) for unit in request.get("trainUnits", [])]
+        request_slots = list(range(slot_offset, slot_offset + len(requested_types)))
+        slot_offset += len(requested_types)
+        for group_index, (unit_ids, source_types) in enumerate(source_groups):
+            if group_index in used_groups or source_types != requested_types:
+                continue
+            assignments.extend(zip(unit_ids, request_slots))
+            assigned_units.update(unit_ids)
+            assigned_slots.update(request_slots)
+            used_groups.add(group_index)
+            break
+
+    remaining_units = {
+        unit_id: unit_type
+        for unit_id, unit_type in unit_type_by_id.items()
+        if unit_id not in assigned_units
+    }
+    remaining_slots = [
+        index for index in range(len(slot_records)) if index not in assigned_slots
+    ]
+    # Fill slots not covered by exact composition matches while preserving order.
+    assignments.extend(
+        _select_order_preserving_matching(
+            remaining_units,
+            slot_records,
+            unit_positions,
+            allowed_slot_indices=remaining_slots,
+        )
+    )
+    grouped_assignment = sorted(assignments, key=lambda item: item[1])
+
+    # A chronological unit stream minimizes composition fragmentation when exact
+    # source/request sizes differ, such as pairs that must form triples.
+    stream_units = [unit_id for unit_ids, _ in source_groups for unit_id in unit_ids]
+    stream_assignment = list(zip(stream_units, range(len(slot_records))))
+    stream_compatible = len(stream_units) == len(slot_records) and all(
+        unit_type_by_id[unit_id] == slot_records[slot_index][1]
+        for unit_id, slot_index in stream_assignment
+    )
+    if not stream_compatible:
+        return grouped_assignment
+
+    source_index_by_unit = {
+        unit_id: source_index
+        for source_index, (unit_ids, _) in enumerate(source_groups)
+        for unit_id in unit_ids
+    }
+    request_index_by_slot = {}
+    request_index = -1
+    for slot_index, (_, _, position, _) in enumerate(slot_records):
+        if position == 0:
+            request_index += 1
+        request_index_by_slot[slot_index] = request_index
+
+    def fragmentation_score(candidate):
+        # Count distinct source-composition to departure-request assignments.
+        edges = {
+            (source_index_by_unit[unit_id], request_index_by_slot[slot_index])
+            for unit_id, slot_index in candidate
+        }
+        return len(edges)
+
+    return min(grouped_assignment, stream_assignment, key=fragmentation_score)
+
+
 def _select_precomputed_matching(
     unit_type_by_id,
     slot_records,
     matching_variant,
     matching_strategy="stable",
     unit_positions=None,
+    scenario_object=None,
 ):
     if matching_variant < 0:
         raise ValueError("matching_variant must be non-negative")
@@ -320,6 +429,13 @@ def _select_precomputed_matching(
     if matching_strategy == "order_preserving" and matching_variant == 0:
         return _select_order_preserving_matching(
             unit_type_by_id, slot_records, unit_positions or {}
+        )
+    if matching_strategy == "composition_preserving" and matching_variant == 0:
+        return _select_composition_preserving_matching(
+            scenario_object or {},
+            unit_type_by_id,
+            slot_records,
+            unit_positions or {},
         )
 
     unit_ids = list(unit_type_by_id)
@@ -370,6 +486,44 @@ def _select_precomputed_matching(
             f"found {len(completed_assignments)} matching variant(s)"
         )
     return completed_assignments[matching_variant]
+
+
+def _departure_matching_candidates(scenario_object, unit_type_by_id):
+    # Count demand by type so departure matching cannot consume parking units.
+    outgoing_counts = Counter(
+        train_unit_type_key(unit)
+        for request in scenario_object.get("out", {}).get("trainRequests", [])
+        for unit in request.get("trainUnits", [])
+    )
+    parking_counts = Counter(
+        train_unit_type_key(unit)
+        for request in scenario_object.get("outStanding", {}).get("trainRequests", [])
+        for unit in request.get("trainUnits", [])
+    )
+    candidates_by_type = defaultdict(list)
+    for source, _, train in all_trains_with_source(scenario_object):
+        for member in train.get("members", []):
+            unit = member["trainUnit"]
+            candidates_by_type[train_unit_type_key(unit)].append(
+                (0 if source == "inStanding" else 1, unit["id"])
+            )
+
+    reserved = set()
+    for unit_type, parking_count in parking_counts.items():
+        candidates = sorted(candidates_by_type[unit_type])
+        required = outgoing_counts[unit_type] + parking_count
+        if len(candidates) < required:
+            raise ValueError(
+                f"Not enough units of type {unit_type} for both departure and parking requests"
+            )
+        # Standing units are ordered first and reserved for parking where possible.
+        reserved.update(unit_id for _, unit_id in candidates[:parking_count])
+
+    return {
+        unit_id: unit_type
+        for unit_id, unit_type in unit_type_by_id.items()
+        if unit_id not in reserved
+    }
 
 
 def _build_service_track_ids(location_object):
@@ -1907,12 +2061,17 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             problem.add_goal(departed_su(request_su))
 
     if precompute_matching:
+        # Match departures only after reserving units needed by parking requests.
+        departure_candidates = _departure_matching_candidates(
+            scenario_object, unit_type_by_id
+        )
         assignment = _select_precomputed_matching(
-            unit_type_by_id,
+            departure_candidates,
             departure_slot_records,
             matching_variant,
             matching_strategy=matching_strategy,
             unit_positions=_unit_source_positions(scenario_object),
+            scenario_object=scenario_object,
         )
         for unit_id, slot_index in assignment:
             unit_obj = id_to_unit[unit_id]
