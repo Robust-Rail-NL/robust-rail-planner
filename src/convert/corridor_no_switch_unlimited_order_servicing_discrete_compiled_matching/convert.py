@@ -90,6 +90,24 @@ def all_trains_with_source(scenario_object):
 def _coupling_track_ids_for_request(request, location_object, candidate_track_ids):
     # Prefer request-specific parking/departure information, otherwise use nearby coupling tracks.
     candidate_track_ids = {str(track_id) for track_id in candidate_track_ids}
+    required_length = sum(
+        float(train_unit.get("type", {}).get("length", 0.0))
+        for train_unit in request.get("trainUnits", [])
+    )
+    track_length_by_id = {
+        str(track_part["id"]): float(track_part.get("length", 0.0))
+        for track_part in location_object.get("trackParts", [])
+    }
+    candidate_track_ids = {
+        track_id
+        for track_id in candidate_track_ids
+        if track_length_by_id.get(track_id, 0.0) >= required_length
+    }
+    if not candidate_track_ids:
+        raise ValueError(
+            f"No coupling track can hold request {request.get('displayName')} "
+            f"with length {required_length}"
+        )
     preferred_ids = [request.get("lastParkingTrackPart"), request.get("leaveTrackPart")]
     preferred_ids = [str(track_id) for track_id in preferred_ids if track_id is not None and str(track_id) in candidate_track_ids]
     if preferred_ids:
