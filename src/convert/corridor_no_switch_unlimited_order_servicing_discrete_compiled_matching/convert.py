@@ -942,6 +942,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     su_has_arrived = problem.add_fluent(up.Fluent("su_has_arrived", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=True)
     su_previous_arrived = problem.add_fluent(up.Fluent("su_previous_arrived", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
     su_arrival_immediately_before = problem.add_fluent(up.Fluent("su_arrival_immediately_before", up.BoolType(), first=shunting_unit_type, second=shunting_unit_type), default_initial_value=False)
+    compiled_arrival_ready = problem.add_fluent(up.Fluent("compiled_arrival_ready", up.BoolType(), su=shunting_unit_type), default_initial_value=False)
+    compiled_departure_unlocks = problem.add_fluent(up.Fluent("compiled_departure_unlocks", up.BoolType(), departing_su=shunting_unit_type, next_su=shunting_unit_type), default_initial_value=False)
 
     phantom_track = problem.add_object("phantom", track_part_type)
     su_arrival_track = problem.add_fluent(up.Fluent("su_arrival_track", up.BoolType(), su=shunting_unit_type, track=track_part_type), default_initial_value=False)
@@ -1146,6 +1148,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     depart_aside_su = up.InstantaneousAction('depart_aside_su', su=shunting_unit_type, l=track_part_type)
     depart_aside_su.add_precondition(active_su(depart_aside_su.su))
     depart_aside_su.add_precondition(allowed_to_move_su(depart_aside_su.su))
+    depart_aside_su.add_precondition(must_depart_su(depart_aside_su.su))
     depart_aside_su.add_precondition(at_su(depart_aside_su.su, depart_aside_su.l))
     depart_aside_su.add_precondition(departure_exit_a(depart_aside_su.l))
     pass
@@ -1170,6 +1173,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     depart_bside_su = up.InstantaneousAction('depart_bside_su', su=shunting_unit_type, l=track_part_type)
     depart_bside_su.add_precondition(active_su(depart_bside_su.su))
     depart_bside_su.add_precondition(allowed_to_move_su(depart_bside_su.su))
+    depart_bside_su.add_precondition(must_depart_su(depart_bside_su.su))
     depart_bside_su.add_precondition(at_su(depart_bside_su.su, depart_bside_su.l))
     depart_bside_su.add_precondition(departure_exit_b(depart_bside_su.l))
     pass
@@ -1225,7 +1229,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     depart_aside_su_for_request.add_effect(fluent=frontmost_a_su(_v_depart_aside_su_for_request), value=True, condition=behind_su(_v_depart_aside_su_for_request, depart_aside_su_for_request.su), forall=[_v_depart_aside_su_for_request])
     depart_aside_su_for_request.add_effect(fluent=behind_su(_v_depart_aside_su_for_request, depart_aside_su_for_request.su), value=False, condition=behind_su(_v_depart_aside_su_for_request, depart_aside_su_for_request.su), forall=[_v_depart_aside_su_for_request])
     depart_aside_su_for_request.add_effect(frontmost_a_su(depart_aside_su_for_request.su), False)
-    problem.add_action(depart_aside_su_for_request)
+    if not compile_precomputed_actions:
+        problem.add_action(depart_aside_su_for_request)
 
     depart_bside_su_for_request = up.InstantaneousAction(
         'depart_bside_su_for_request',
@@ -1261,7 +1266,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     depart_bside_su_for_request.add_effect(fluent=frontmost_b_su(_v_depart_bside_su_for_request), value=True, condition=behind_su(depart_bside_su_for_request.su, _v_depart_bside_su_for_request), forall=[_v_depart_bside_su_for_request])
     depart_bside_su_for_request.add_effect(fluent=behind_su(depart_bside_su_for_request.su, _v_depart_bside_su_for_request), value=False, condition=behind_su(depart_bside_su_for_request.su, _v_depart_bside_su_for_request), forall=[_v_depart_bside_su_for_request])
     depart_bside_su_for_request.add_effect(frontmost_b_su(depart_bside_su_for_request.su), False)
-    problem.add_action(depart_bside_su_for_request)
+    if not compile_precomputed_actions:
+        problem.add_action(depart_bside_su_for_request)
 
     part_of_composition = problem.add_fluent(up.Fluent("part_of_composition", up.BoolType(), unit=train_unit_type, composition=arrival_composition_type), default_initial_value=False)
     composition_needs_uncoupling = problem.add_fluent(up.Fluent("composition_needs_uncoupling", up.BoolType(), composition=arrival_composition_type), default_initial_value=False)
@@ -1270,7 +1276,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     uncouple.add_precondition(composition_needs_uncoupling(uncouple.composition))
     uncouple.add_effect(available(uncouple.unit), True)
     uncouple.add_effect(part_of_composition(uncouple.unit, uncouple.composition), False)
-    problem.add_action(uncouple)
+    if not compile_precomputed_actions:
+        problem.add_action(uncouple)
 
     uncouple_front_su = up.InstantaneousAction(
         "uncouple_front_su",
@@ -1318,7 +1325,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     uncouple_front_su.add_effect(behind_su(uncouple_front_su.parent_su, uncouple_front_su.front_su), True)
     uncouple_front_su.add_effect(fluent=behind_su(uncouple_front_su.front_su, _ux_uncouple_front_su), value=True, condition=behind_su(uncouple_front_su.parent_su, _ux_uncouple_front_su), forall=[_ux_uncouple_front_su])
     uncouple_front_su.add_effect(fluent=behind_su(uncouple_front_su.parent_su, _ux_uncouple_front_su), value=False, condition=behind_su(uncouple_front_su.parent_su, _ux_uncouple_front_su), forall=[_ux_uncouple_front_su])
-    problem.add_action(uncouple_front_su)
+    if not compile_precomputed_actions:
+        problem.add_action(uncouple_front_su)
 
     uncouple_back_su = up.InstantaneousAction(
         "uncouple_back_su",
@@ -1365,7 +1373,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     uncouple_back_su.add_effect(behind_su(uncouple_back_su.back_su, uncouple_back_su.parent_su), True)
     uncouple_back_su.add_effect(fluent=behind_su(_ux_uncouple_back_su, uncouple_back_su.back_su), value=True, condition=behind_su(_ux_uncouple_back_su, uncouple_back_su.parent_su), forall=[_ux_uncouple_back_su])
     uncouple_back_su.add_effect(fluent=behind_su(_ux_uncouple_back_su, uncouple_back_su.parent_su), value=False, condition=behind_su(_ux_uncouple_back_su, uncouple_back_su.parent_su), forall=[_ux_uncouple_back_su])
-    problem.add_action(uncouple_back_su)
+    if not compile_precomputed_actions:
+        problem.add_action(uncouple_back_su)
 
     uncouple_front_pair_su = up.InstantaneousAction(
         "uncouple_front_pair_su",
@@ -1419,7 +1428,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     uncouple_front_pair_su.add_effect(behind_su(uncouple_front_pair_su.parent_su, uncouple_front_pair_su.front_su), True)
     uncouple_front_pair_su.add_effect(fluent=behind_su(uncouple_front_pair_su.front_su, _ux_uncouple_front_pair_su), value=True, condition=behind_su(uncouple_front_pair_su.parent_su, _ux_uncouple_front_pair_su), forall=[_ux_uncouple_front_pair_su])
     uncouple_front_pair_su.add_effect(fluent=behind_su(uncouple_front_pair_su.parent_su, _ux_uncouple_front_pair_su), value=False, condition=behind_su(uncouple_front_pair_su.parent_su, _ux_uncouple_front_pair_su), forall=[_ux_uncouple_front_pair_su])
-    problem.add_action(uncouple_front_pair_su)
+    if not compile_precomputed_actions:
+        problem.add_action(uncouple_front_pair_su)
 
     uncouple_back_pair_su = up.InstantaneousAction(
         "uncouple_back_pair_su",
@@ -1472,7 +1482,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     uncouple_back_pair_su.add_effect(behind_su(uncouple_back_pair_su.back_su, uncouple_back_pair_su.parent_su), True)
     uncouple_back_pair_su.add_effect(fluent=behind_su(_ux_uncouple_back_pair_su, uncouple_back_pair_su.back_su), value=True, condition=behind_su(_ux_uncouple_back_pair_su, uncouple_back_pair_su.parent_su), forall=[_ux_uncouple_back_pair_su])
     uncouple_back_pair_su.add_effect(fluent=behind_su(_ux_uncouple_back_pair_su, uncouple_back_pair_su.parent_su), value=False, condition=behind_su(_ux_uncouple_back_pair_su, uncouple_back_pair_su.parent_su), forall=[_ux_uncouple_back_pair_su])
-    problem.add_action(uncouple_back_pair_su)
+    if not compile_precomputed_actions:
+        problem.add_action(uncouple_back_pair_su)
 
     split_two_unit_su = up.InstantaneousAction(
         "split_two_unit_su",
@@ -1626,7 +1637,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     start_request_composition.add_effect(fluent=behind_su(_srcn, start_request_composition.source_su), value=False, condition=behind_su(_srcn, start_request_composition.source_su), forall=[_srcn])
     start_request_composition.add_effect(fluent=behind_su(start_request_composition.request_su, _srcn), value=True, condition=behind_su(start_request_composition.source_su, _srcn), forall=[_srcn])
     start_request_composition.add_effect(fluent=behind_su(start_request_composition.source_su, _srcn), value=False, condition=behind_su(start_request_composition.source_su, _srcn), forall=[_srcn])
-    problem.add_action(start_request_composition)
+    if not compile_precomputed_actions:
+        problem.add_action(start_request_composition)
 
     couple_front_to_request = up.InstantaneousAction(
         "couple_front_to_request",
@@ -1677,7 +1689,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     couple_front_to_request.add_effect(fluent=frontmost_a_su(couple_front_to_request.request_su), value=True, condition=frontmost_a_su(couple_front_to_request.source_su))
     couple_front_to_request.add_effect(frontmost_a_su(couple_front_to_request.source_su), False)
     couple_front_to_request.add_effect(frontmost_b_su(couple_front_to_request.source_su), False)
-    problem.add_action(couple_front_to_request)
+    if not compile_precomputed_actions:
+        problem.add_action(couple_front_to_request)
 
     couple_back_to_request = up.InstantaneousAction(
         "couple_back_to_request",
@@ -1728,7 +1741,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     couple_back_to_request.add_effect(fluent=frontmost_b_su(couple_back_to_request.request_su), value=True, condition=frontmost_b_su(couple_back_to_request.source_su))
     couple_back_to_request.add_effect(frontmost_a_su(couple_back_to_request.source_su), False)
     couple_back_to_request.add_effect(frontmost_b_su(couple_back_to_request.source_su), False)
-    problem.add_action(couple_back_to_request)
+    if not compile_precomputed_actions:
+        problem.add_action(couple_back_to_request)
 
     complete_request_composition = up.InstantaneousAction(
         "complete_request_composition",
@@ -2549,6 +2563,237 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             problem.set_initial_value(available(unit_obj), False)
             problem.set_initial_value(slot_open(slot_obj), False)
             print(f"Precomputed match: {unit_obj.name} -> {slot_obj.name}")
+
+    if compile_precomputed_actions:
+        assigned_unit_by_slot = {
+            departure_slot_records[slot_index][0].name: id_to_unit[unit_id]
+            for unit_id, slot_index in assignment
+        }
+
+        departure_su_by_source = {}
+        source_su_by_unit_sequence = {
+            tuple(unit.name for unit in source_units): source_su
+            for source_su, source_units in source_composition_records
+        }
+        source_su_by_unit_name = {
+            unit.name: source_su
+            for source_su, source_units in source_composition_records
+            for unit in source_units
+        }
+        assigned_unit_names = {unit.name for unit in assigned_unit_by_slot.values()}
+        for unit_name in assigned_unit_names:
+            problem.set_initial_value(
+                compiled_departure_material(source_su_by_unit_name[unit_name]), True
+            )
+            single_unit_su_obj = single_unit_su_by_unit_name.get(unit_name)
+            if single_unit_su_obj is not None:
+                problem.set_initial_value(
+                    compiled_departure_material(single_unit_su_obj), True
+                )
+        compiled_request_sources = []
+
+        for _, request_obj, request_su, slot_objects, coupling_tracks in request_action_records:
+            slot_units = [assigned_unit_by_slot[slot.name] for slot in slot_objects]
+            compiled_request_sources.append(
+                (
+                    request_obj,
+                    request_su,
+                    {source_su_by_unit_name[unit.name] for unit in slot_units},
+                )
+            )
+            if len(slot_objects) == 1:
+                problem.set_initial_value(compiled_single_request(slot_units[0], request_obj), True)
+                source_su = source_su_by_unit_sequence.get((slot_units[0].name,))
+                if source_su is not None:
+                    departure_su_by_source[source_su] = source_su
+                    if source_su in direct_departure_sources:
+                        problem.set_initial_value(compiled_direct_departure(source_su), True)
+                continue
+            for rank, unit in enumerate(slot_units):
+                problem.set_initial_value(compiled_target_request_su(unit, request_su), True)
+                problem.set_initial_value(compiled_target_rank(unit), up.Int(rank))
+            for source_su, source_units in source_composition_records:
+                if source_units == slot_units:
+                    problem.set_initial_value(compiled_whole_target(source_su, request_su), True)
+                    departure_su_by_source[source_su] = request_su
+                    if source_su in direct_departure_sources:
+                        problem.set_initial_value(compiled_direct_departure(source_su), True)
+                        problem.set_initial_value(compiled_direct_departure(request_su), True)
+                    break
+            for track in coupling_tracks:
+                problem.set_initial_value(compiled_coupling_track(request_su, track), True)
+
+        has_service_tasks = any(
+            member.get("tasks")
+            for _, _, train in all_trains_with_source(scenario_object)
+            for member in train.get("members", [])
+        )
+        restrict_routes = not has_service_tasks and not scenario_object.get("outStanding")
+        _, adjacency = _build_side_aware_track_graph(
+            location_object, allowed_track_ids=id_to_track_part.keys()
+        )
+        allowed_route_edges = set()
+        if restrict_routes:
+            coupling_ids = {
+                track.name.removeprefix("o_")
+                for _, _, _, _, tracks in request_action_records
+                for track in tracks
+            }
+            for exit_id in exit_ids_a | exit_ids_b:
+                for coupling_id in coupling_ids:
+                    route = _shortest_path(adjacency, exit_id, coupling_id)
+                    for first, second in zip(route, route[1:]):
+                        allowed_route_edges.add((first, second))
+                        allowed_route_edges.add((second, first))
+        if not allowed_route_edges:
+            allowed_route_edges = {
+                (source, target)
+                for source, targets in adjacency.items()
+                for target in targets
+            }
+        for source_id, target_id in allowed_route_edges:
+            if source_id in id_to_track_part and target_id in id_to_track_part:
+                problem.set_initial_value(
+                    compiled_route_edge(id_to_track_part[source_id], id_to_track_part[target_id]),
+                    True,
+                )
+
+        # When every arriving composition already exactly matches one departure request,
+        # admit the next arrival only after the previous composition has departed.
+        ordered_arrival_sus = [su for _, su in in_train_sus]
+        if ordered_arrival_sus and all(su in departure_su_by_source for su in ordered_arrival_sus):
+            arrive_su.add_precondition(compiled_arrival_ready(arrive_su.su))
+            problem.set_initial_value(compiled_arrival_ready(ordered_arrival_sus[0]), True)
+            for current_su, next_arrival_su in zip(ordered_arrival_sus, ordered_arrival_sus[1:]):
+                departing_su = departure_su_by_source[current_su]
+                problem.set_initial_value(compiled_departure_unlocks(departing_su, next_arrival_su), True)
+
+            next_arrival = up.Variable("compiled_next_arrival", shunting_unit_type)
+            for departure_action in (
+                depart_aside_su,
+                depart_bside_su,
+                compiled_depart_aside,
+                compiled_depart_bside,
+            ):
+                departure_action.add_effect(
+                    fluent=compiled_arrival_ready(next_arrival),
+                    value=True,
+                    condition=compiled_departure_unlocks(departure_action.su, next_arrival),
+                    forall=[next_arrival],
+                )
+        elif ordered_arrival_sus:
+            # Requests connected through shared source compositions form independent
+            # assembly components. Process one component at a time to avoid admitting
+            # unrelated trains that can only congest the yard.
+            arrive_su.add_precondition(compiled_arrival_ready(arrive_su.su))
+            node_neighbors = {}
+            request_completion = {}
+            source_object_by_name = {
+                source_su.name: source_su for source_su, _ in source_composition_records
+            }
+            for request_obj, request_su, source_sus in compiled_request_sources:
+                request_node = ("request", request_obj.name)
+                node_neighbors.setdefault(request_node, set())
+                request_completion[request_obj.name] = (request_obj, request_su)
+                for source_su in source_sus:
+                    source_node = ("source", source_su.name)
+                    node_neighbors.setdefault(source_node, set()).add(request_node)
+                    node_neighbors[request_node].add(source_node)
+
+            components = []
+            unseen = set(node_neighbors)
+            while unseen:
+                start = min(unseen)
+                component = set()
+                queue = deque([start])
+                unseen.remove(start)
+                while queue:
+                    node = queue.popleft()
+                    component.add(node)
+                    for neighbor in node_neighbors[node]:
+                        if neighbor in unseen:
+                            unseen.remove(neighbor)
+                            queue.append(neighbor)
+                components.append(component)
+
+            arrival_rank = {su.name: rank for rank, su in enumerate(ordered_arrival_sus)}
+            components.sort(
+                key=lambda component: min(
+                    (arrival_rank.get(name, -1) for kind, name in component if kind == "source"),
+                    default=-1,
+                )
+            )
+            incoming_names = set(arrival_rank)
+            for su in ordered_arrival_sus:
+                problem.set_initial_value(su_previous_arrived(su), True)
+
+            request_sources_by_name = {
+                request_obj.name: {source_su.name for source_su in source_sus}
+                for request_obj, _, source_sus in compiled_request_sources
+            }
+            scheduled_source_names = set().union(
+                *request_sources_by_name.values()
+            ) if request_sources_by_name else set()
+            for source_name in incoming_names - scheduled_source_names:
+                problem.set_initial_value(
+                    compiled_arrival_ready(source_object_by_name[source_name]), True
+                )
+            request_schedule = []
+            for component in components:
+                remaining_requests = {
+                    name for kind, name in component if kind == "request"
+                }
+                current_sources = set()
+                while remaining_requests:
+                    sharing = [
+                        name
+                        for name in remaining_requests
+                        if request_sources_by_name[name] & current_sources
+                    ]
+                    candidates = sharing or list(remaining_requests)
+                    selected = min(
+                        candidates,
+                        key=lambda name: min(
+                            (
+                                arrival_rank.get(source_name, -1)
+                                for source_name in request_sources_by_name[name]
+                            ),
+                            default=-1,
+                        ),
+                    )
+                    request_schedule.append(selected)
+                    current_sources = request_sources_by_name[selected]
+                    remaining_requests.remove(selected)
+
+            enabled_sources = set()
+            for request_index, request_name in enumerate(request_schedule):
+                needed_sources = {
+                    source_name
+                    for source_name in request_sources_by_name[request_name]
+                    if source_name in incoming_names and source_name not in enabled_sources
+                }
+                if request_index == 0:
+                    for source_name in needed_sources:
+                        problem.set_initial_value(
+                            compiled_arrival_ready(source_object_by_name[source_name]), True
+                        )
+                else:
+                    previous_name = request_schedule[request_index - 1]
+                    previous_request, previous_su = request_completion[previous_name]
+                    advance = up.InstantaneousAction(
+                        f"compiled_advance_request_{request_index}"
+                    )
+                    if previous_su is None:
+                        advance.add_precondition(request_departed(previous_request))
+                    else:
+                        advance.add_precondition(departed_su(previous_su))
+                    for source_name in needed_sources:
+                        advance.add_effect(
+                            compiled_arrival_ready(source_object_by_name[source_name]), True
+                        )
+                    problem.add_action(advance)
+                enabled_sources.update(needed_sources)
+
 
     if output_file is None:
         output_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", f"{scenario_name}.pddl")
