@@ -175,6 +175,124 @@ def _has_order_sensitive_matching(scenario_object):
     return bool(source_types & request_types)
 
 
+def _matching_order_cost(unit_id, slot_index, slot_records, unit_positions):
+    source_index, source_size = unit_positions.get(unit_id, (0, 1))
+    _, _, target_index, target_size = slot_records[slot_index]
+    if source_size <= 1 or target_size <= 1:
+        return Fraction(0)
+    source_position = Fraction(source_index, source_size - 1)
+    target_position = Fraction(target_index, target_size - 1)
+    return abs(source_position - target_position)
+
+
+def _minimum_assignment_cost(slot_indices, unit_ids, slot_records, unit_positions):
+    if not slot_indices:
+        return Fraction(0)
+    if len(slot_indices) > len(unit_ids):
+        return None
+
+    costs = [
+        [
+            _matching_order_cost(unit_id, slot_index, slot_records, unit_positions)
+            for unit_id in unit_ids
+        ]
+        for slot_index in slot_indices
+    ]
+    row_count = len(costs)
+    column_count = len(costs[0])
+    row_potential = [Fraction(0)] * (row_count + 1)
+    column_potential = [Fraction(0)] * (column_count + 1)
+    matched_row = [0] * (column_count + 1)
+    predecessor = [0] * (column_count + 1)
+
+    # Hungarian assignment; rows are request slots and columns are compatible units.
+    for row in range(1, row_count + 1):
+        matched_row[0] = row
+        column = 0
+        minimum = [None] * (column_count + 1)
+        used = [False] * (column_count + 1)
+        while True:
+            used[column] = True
+            current_row = matched_row[column]
+            delta = None
+            next_column = 0
+            for candidate in range(1, column_count + 1):
+                if used[candidate]:
+                    continue
+                reduced_cost = (
+                    costs[current_row - 1][candidate - 1]
+                    - row_potential[current_row]
+                    - column_potential[candidate]
+                )
+                if minimum[candidate] is None or reduced_cost < minimum[candidate]:
+                    minimum[candidate] = reduced_cost
+                    predecessor[candidate] = column
+                if delta is None or minimum[candidate] < delta:
+                    delta = minimum[candidate]
+                    next_column = candidate
+            for candidate in range(column_count + 1):
+                if used[candidate]:
+                    row_potential[matched_row[candidate]] += delta
+                    column_potential[candidate] -= delta
+                elif minimum[candidate] is not None:
+                    minimum[candidate] -= delta
+            column = next_column
+            if matched_row[column] == 0:
+                break
+        while True:
+            previous = predecessor[column]
+            matched_row[column] = matched_row[previous]
+            column = previous
+            if column == 0:
+                break
+
+    assignment = [None] * row_count
+    for column in range(1, column_count + 1):
+        if matched_row[column] != 0:
+            assignment[matched_row[column] - 1] = column - 1
+    return sum(costs[row][column] for row, column in enumerate(assignment))
+
+
+def _select_order_preserving_matching(unit_type_by_id, slot_records, unit_positions):
+    assignments = []
+    unit_order = list(unit_type_by_id)
+    requested_types = list(dict.fromkeys(record[1] for record in slot_records))
+
+    # Compatibility is exact by train-unit type, so each type can be optimized independently.
+    for requested_type in requested_types:
+        slots = [index for index, record in enumerate(slot_records) if record[1] == requested_type]
+        units = [unit_id for unit_id in unit_order if unit_type_by_id[unit_id] == requested_type]
+        optimum = _minimum_assignment_cost(slots, units, slot_records, unit_positions)
+        if optimum is None:
+            raise ValueError(f"No complete precomputed matching exists for type {requested_type}")
+
+        remaining_slots = list(slots)
+        remaining_units = list(units)
+        while remaining_slots:
+            slot_index = remaining_slots.pop(0)
+            selected_unit = None
+            for unit_id in remaining_units:
+                remainder_units = [candidate for candidate in remaining_units if candidate != unit_id]
+                remainder_cost = _minimum_assignment_cost(
+                    remaining_slots, remainder_units, slot_records, unit_positions
+                )
+                if remainder_cost is None:
+                    continue
+                current_cost = _matching_order_cost(
+                    unit_id, slot_index, slot_records, unit_positions
+                )
+                if current_cost + remainder_cost == optimum:
+                    selected_unit = unit_id
+                    optimum -= current_cost
+                    break
+            if selected_unit is None:
+                raise ValueError("Could not reconstruct an optimal precomputed matching")
+            assignments.append((selected_unit, slot_index))
+            remaining_units.remove(selected_unit)
+
+    return sorted(assignments, key=lambda item: item[1])
+
+
 def _select_precomputed_matching(
     unit_type_by_id,
     slot_records,
@@ -184,6 +302,11 @@ def _select_precomputed_matching(
 ):
     if matching_variant < 0:
         raise ValueError("matching_variant must be non-negative")
+
+    if matching_strategy == "order_preserving" and matching_variant == 0:
+        return _select_order_preserving_matching(
+            unit_type_by_id, slot_records, unit_positions or {}
+        )
 
     unit_ids = list(unit_type_by_id)
     completed_assignments = []
