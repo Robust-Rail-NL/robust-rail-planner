@@ -22,13 +22,7 @@ parser.add_argument("-l", "--location-file", required=False, default="location_s
 parser.add_argument("-o", "--output-file", required=False, default=None)
 parser.add_argument("-d", "--domain-file", required=False, default=None)
 parser.add_argument("--log-level", default="ERROR", required=False)
-parser.add_argument("--precompute-matching", action="store_true")
 parser.add_argument("--matching-variant", type=int, default=0)
-parser.add_argument(
-    "--matching-strategy",
-    choices=("stable", "order_preserving", "order_preserving_auto"),
-    default="stable",
-)
 
 
 CORRIDOR_EXPAND_HOPS = 3
@@ -2822,7 +2816,8 @@ if __name__ == "__main__":
         scenario_file=args.scenario_file,
         location_file=args.location_file,
         output_file=args.output_file,
-        precompute_matching=args.precompute_matching,
+        precompute_matching=True,
         matching_variant=args.matching_variant,
-        matching_strategy=args.matching_strategy,
+        matching_strategy="composition_preserving",
+        compile_precomputed_actions=True,
     )
