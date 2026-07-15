@@ -249,74 +249,29 @@ def _is_switch_like_track_part(track_part):
     return length == 0 and len(_track_part_neighbors(track_part)) >= 2
 
 
-def _track_part_side_for_neighbor(track_part, neighbor_id):
-    if neighbor_id in track_part.get("aSide", []):
-        return "a"
-    if neighbor_id in track_part.get("bSide", []):
-        return "b"
-    return None
+def _build_directed_adj(location_object, side_key):
+    adj = {tp["id"]: [] for tp in location_object["trackParts"]}
+    for tp in location_object["trackParts"]:
+        for nb_id in tp.get(side_key, []):
+            if nb_id in adj:
+                adj[tp["id"]].append(nb_id)
+    return adj
 
 
-def _switch_like_components(location_object, switch_like_track_ids):
-    adjacency = _build_adjacency(location_object)
-    seen = set()
-    components = []
+def _bfs_through_switches(adj, start, switch_ids, allowed_ids):
+    visited = {start}
+    queue = deque([start])
+    reachable = set()
+    while queue:
+        node = queue.popleft()
+        for neighbor in adj.get(node, []):
+            if neighbor in allowed_ids and neighbor != start:
+                reachable.add(neighbor)
+            elif neighbor in switch_ids and neighbor not in visited:
+                visited.add(neighbor)
+                queue.append(neighbor)
+    return reachable
 
-    for track_id in switch_like_track_ids:
-        if track_id in seen:
-            continue
-        component = set()
-        queue = deque([track_id])
-        seen.add(track_id)
-        while queue:
-            current = queue.popleft()
-            component.add(current)
-            for neighbor_id in adjacency.get(current, []):
-                if neighbor_id in switch_like_track_ids and neighbor_id not in seen:
-                    seen.add(neighbor_id)
-                    queue.append(neighbor_id)
-        components.append(component)
-
-    return components
-
-
-def _reconnect_switch_like_components(location_object, switch_like_track_ids, id_to_track_part, problem, connected_pairs, connected_aside, connected_bside, allowed_track_ids=None):
-    # Collapse each switch-like component into direct boundary-to-boundary links.
-    components = _switch_like_components(location_object, switch_like_track_ids)
-    original_lookup = {tp["id"]: tp for tp in location_object["trackParts"]}
-
-    for component in components:
-        boundary_ports = []
-        for switch_id in component:
-            switch_part = original_lookup[switch_id]
-            for neighbor_id in _track_part_neighbors(switch_part):
-                if neighbor_id in component or neighbor_id not in id_to_track_part:
-                    continue
-                side = _track_part_side_for_neighbor(switch_part, neighbor_id)
-                if side is not None:
-                    boundary_ports.append((neighbor_id, side))
-
-        for left_index, (left_id, left_side) in enumerate(boundary_ports):
-            for right_id, right_side in boundary_ports[left_index + 1:]:
-                if left_id == right_id:
-                    continue
-                pair = tuple(sorted([left_id, right_id]))
-                if allowed_track_ids is not None and (str(left_id) not in allowed_track_ids or str(right_id) not in allowed_track_ids):
-                    continue
-                if pair in connected_pairs:
-                    continue
-
-                if left_side == "a":
-                    problem.set_initial_value(connected_aside(id_to_track_part[left_id], id_to_track_part[right_id]), True)
-                else:
-                    problem.set_initial_value(connected_bside(id_to_track_part[left_id], id_to_track_part[right_id]), True)
-
-                if right_side == "a":
-                    problem.set_initial_value(connected_aside(id_to_track_part[right_id], id_to_track_part[left_id]), True)
-                else:
-                    problem.set_initial_value(connected_bside(id_to_track_part[right_id], id_to_track_part[left_id]), True)
-
-                connected_pairs.add(pair)
 
 
 def _train_object_name(source, index, train):
@@ -518,10 +473,10 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_bside_empty_su.add_precondition(su_length(move_bside_empty_su.su) <= track_length(move_bside_empty_su.l_to))
     move_bside_empty_su.add_effect(number_of_trains_on_track(move_bside_empty_su.l_from), number_of_trains_on_track(move_bside_empty_su.l_from) - 1)
     move_bside_empty_su.add_effect(number_of_trains_on_track(move_bside_empty_su.l_to), 1)
-    move_bside_empty_su.add_effect(su_aside_distance(move_bside_empty_su.su), 0)
+    move_bside_empty_su.add_effect(su_aside_distance(move_bside_empty_su.su), track_length(move_bside_empty_su.l_to) - su_length(move_bside_empty_su.su))
     move_bside_empty_su.add_effect(bstack_distance(move_bside_empty_su.l_from), bstack_distance(move_bside_empty_su.l_from) - su_length(move_bside_empty_su.su))
-    move_bside_empty_su.add_effect(astack_distance(move_bside_empty_su.l_to), 0)
-    move_bside_empty_su.add_effect(bstack_distance(move_bside_empty_su.l_to), su_length(move_bside_empty_su.su))
+    move_bside_empty_su.add_effect(astack_distance(move_bside_empty_su.l_to), track_length(move_bside_empty_su.l_to) - su_length(move_bside_empty_su.su))
+    move_bside_empty_su.add_effect(bstack_distance(move_bside_empty_su.l_to), track_length(move_bside_empty_su.l_to))
     move_bside_empty_su.add_effect(at_su(move_bside_empty_su.su, move_bside_empty_su.l_to), True)
     move_bside_empty_su.add_effect(at_su(move_bside_empty_su.su, move_bside_empty_su.l_from), False)
     problem.add_action(move_bside_empty_su)
@@ -962,33 +917,21 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         if not track_part.get("parkingAllowed", False):
             problem.set_initial_value(track_length(obj), up.Real(Fraction(10**9)))
 
-    # Wire up direct aSide/bSide connections between adjacent non-switch track parts,
-    # filtering through the corridor check. Switch-like components are handled separately
-    # by reconnecting their boundary neighbours directly.
-    connected_pairs = set()
-    for track_part in location_object["trackParts"]:
-        src_id = track_part["id"]
-        if src_id not in id_to_track_part:
-            continue
-        for nb_id in track_part.get("aSide", []):
-            if nb_id in id_to_track_part:
-                pair = tuple(sorted([src_id, nb_id]))
-                if not _in_corridor(src_id, nb_id):
-                    continue
-                problem.set_initial_value(connected_aside(id_to_track_part[src_id], id_to_track_part[nb_id]), True)
-                if pair not in connected_pairs:
-                    connected_pairs.add(pair)
+    # Wire up aSide/bSide connections using directed BFS through switch-like nodes.
+    # Two non-switch tracks are connected iff there is a directed path between them
+    # that goes only through switch-like (phantom) intermediate nodes.
+    a_adj = _build_directed_adj(location_object, "aSide")
+    b_adj = _build_directed_adj(location_object, "bSide")
+    allowed_ids = set(id_to_track_part.keys())
 
-        for nb_id in track_part.get("bSide", []):
-            if nb_id in id_to_track_part:
-                pair = tuple(sorted([src_id, nb_id]))
-                if not _in_corridor(src_id, nb_id):
-                    continue
-                problem.set_initial_value(connected_bside(id_to_track_part[src_id], id_to_track_part[nb_id]), True)
-                if pair not in connected_pairs:
-                    connected_pairs.add(pair)
+    for src_id in list(id_to_track_part):
+        for target_id in _bfs_through_switches(a_adj, src_id, switch_like_track_ids, allowed_ids):
+            if target_id != src_id and target_id in id_to_track_part:
+                problem.set_initial_value(connected_aside(id_to_track_part[src_id], id_to_track_part[target_id]), True)
 
-    _reconnect_switch_like_components(location_object, switch_like_track_ids, id_to_track_part, problem, connected_pairs, connected_aside, connected_bside, corridor_or_required)
+        for target_id in _bfs_through_switches(b_adj, src_id, switch_like_track_ids, allowed_ids):
+            if target_id != src_id and target_id in id_to_track_part:
+                problem.set_initial_value(connected_bside(id_to_track_part[src_id], id_to_track_part[target_id]), True)
 
     # --- Compute initial occupancies ---
     # Standing trains already occupy their tracks at time zero. Record their

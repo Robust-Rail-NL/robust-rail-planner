@@ -1,0 +1,18 @@
+{
+  "image": "../../../../../Robust-Rail-NL/scenario-planning-inputs/Location_SimpleService/location.png",
+  "width": 1447,
+  "height": 447,
+  "tracks": {
+    "bumper_13": { "x": 82, "y": 145 },
+    "bumper_10": { "x": 82, "y": 347 },
+    "rail_4": { "x": 265, "y": 146 },
+    "rail_5": { "x": 265, "y": 347 },
+    "switch_21": { "x": 540, "y": 242 },
+    "rail_1": { "x": 720, "y": 242 },
+    "switch_20": { "x": 888, "y": 242 },
+    "rail_3": { "x": 1160, "y": 137 },
+    "rail_2": { "x": 1160, "y": 346 },
+    "bumper_12": { "x": 1349, "y": 137 },
+    "bumper_11": { "x": 1345, "y": 346 }
+  }
+}
