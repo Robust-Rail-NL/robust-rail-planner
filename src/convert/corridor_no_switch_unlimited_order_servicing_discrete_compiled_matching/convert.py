@@ -7,6 +7,13 @@ from fractions import Fraction
 import unified_planning.shortcuts as up
 from unified_planning.io import PDDLWriter
 
+try:
+    import numpy as np
+    from scipy.optimize import Bounds, LinearConstraint, milp
+    from scipy.sparse import lil_matrix
+except ImportError:
+    np = None
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-p", "--path-to-folder", required=False, default=None)
@@ -318,6 +325,99 @@ def _select_order_preserving_matching(
     return sorted(assignments, key=lambda item: item[1])
 
 
+def _optimize_composition_preserving_matching(
+    unit_type_by_id, slot_records, source_groups
+):
+    if np is None:
+        return None
+
+    source_index_by_unit = {
+        unit_id: source_index
+        for source_index, (unit_ids, _) in enumerate(source_groups)
+        for unit_id in unit_ids
+    }
+    request_index_by_slot = {}
+    request_index = -1
+    for slot_index, (_, _, position, _) in enumerate(slot_records):
+        if position == 0:
+            request_index += 1
+        request_index_by_slot[slot_index] = request_index
+
+    # Create assignment variables only for type-compatible unit and slot pairs.
+    compatible_pairs = [
+        (unit_id, slot_index)
+        for unit_id, unit_type in unit_type_by_id.items()
+        for slot_index, slot_record in enumerate(slot_records)
+        if unit_type == slot_record[1]
+    ]
+    edge_pairs = [
+        (source_index, request_id)
+        for source_index in range(len(source_groups))
+        for request_id in range(request_index + 1)
+    ]
+    x_index = {pair: index for index, pair in enumerate(compatible_pairs)}
+    y_offset = len(compatible_pairs)
+    y_index = {pair: y_offset + index for index, pair in enumerate(edge_pairs)}
+    variable_count = y_offset + len(edge_pairs)
+
+    rows = []
+    lower = []
+    upper = []
+    # A unit may be used once, while every outgoing slot must be filled once.
+    for unit_id in unit_type_by_id:
+        rows.append([x_index[pair] for pair in compatible_pairs if pair[0] == unit_id])
+        lower.append(0.0)
+        upper.append(1.0)
+    for slot_index in range(len(slot_records)):
+        rows.append([x_index[pair] for pair in compatible_pairs if pair[1] == slot_index])
+        lower.append(1.0)
+        upper.append(1.0)
+
+    # Link each selected assignment to its source-composition/request pair.
+    matrix = lil_matrix((len(rows) + len(compatible_pairs), variable_count))
+    for row_index, columns in enumerate(rows):
+        matrix[row_index, columns] = 1.0
+    constraint_row = len(rows)
+    for pair, column in x_index.items():
+        unit_id, slot_index = pair
+        edge = (source_index_by_unit[unit_id], request_index_by_slot[slot_index])
+        matrix[constraint_row, column] = 1.0
+        matrix[constraint_row, y_index[edge]] = -1.0
+        lower.append(-np.inf)
+        upper.append(0.0)
+        constraint_row += 1
+
+    # Minimize composition fragmentation, then prefer chronological assignments.
+    objective = np.zeros(variable_count)
+    chronological_position = {
+        unit_id: position
+        for position, unit_id in enumerate(
+            unit_id for unit_ids, _ in source_groups for unit_id in unit_ids
+        )
+    }
+    for pair, column in x_index.items():
+        unit_id, slot_index = pair
+        objective[column] = 1e-5 * abs(
+            chronological_position.get(unit_id, slot_index) - slot_index
+        )
+    for column in y_index.values():
+        objective[column] = 1.0
+
+    result = milp(
+        c=objective,
+        integrality=np.ones(variable_count),
+        bounds=Bounds(np.zeros(variable_count), np.ones(variable_count)),
+        constraints=LinearConstraint(matrix.tocsr(), np.array(lower), np.array(upper)),
+        options={"time_limit": 30.0},
+    )
+    if not result.success:
+        return None
+    return sorted(
+        [pair for pair, column in x_index.items() if result.x[column] > 0.5],
+        key=lambda item: item[1],
+    )
+
+
 def _select_composition_preserving_matching(
     scenario_object, unit_type_by_id, slot_records, unit_positions
 ):
@@ -341,6 +441,12 @@ def _select_composition_preserving_matching(
             source_groups.append(
                 (unit_ids, [unit_type_by_id[unit_id] for unit_id in unit_ids])
             )
+
+    optimized_assignment = _optimize_composition_preserving_matching(
+        unit_type_by_id, slot_records, source_groups
+    )
+    if optimized_assignment is not None:
+        return optimized_assignment
 
     # Reuse complete incoming compositions where possible before assigning the
     # remaining units with the existing order-preserving matcher.
