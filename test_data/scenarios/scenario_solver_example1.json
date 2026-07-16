@@ -3,8 +3,8 @@
         "trains": [
             {
                 "entryTrackPart": "42",
-                "arrival": "600",
-                "departure": "600",
+                "arrival": "1383",
+                "departure": "1383",
                 "id": "2000",
                 "members": [
                     {
@@ -36,8 +36,8 @@
             },
             {
                 "entryTrackPart": "42",
-                "arrival": "900",
-                "departure": "900",
+                "arrival": "1984",
+                "departure": "1984",
                 "id": "3000",
                 "members": [
                     {

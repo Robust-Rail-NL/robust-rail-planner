@@ -154,6 +154,12 @@ def evaluate(scenario_path, plan_path):
     if result.returncode != 0:
         raise RuntimeError(f"TORS evaluation failed with exit code {result.returncode}")
 
+    if result.stdout:
+        if "The plan is not valid" in result.stdout:
+            raise RuntimeError("TORS evaluation failed: plan is not valid")
+        if "Scenario failed." in result.stdout:
+            raise RuntimeError("TORS evaluation failed: scenario failed")
+
     if os.path.exists(eval_result_path):
         with open(eval_result_path, "r", encoding="utf-8") as f:
             stored_result = f.read()

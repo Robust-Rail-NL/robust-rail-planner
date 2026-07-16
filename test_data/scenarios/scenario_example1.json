@@ -1,7 +1,7 @@
 {
     "in": [
         {
-            "time": "600",
+            "time": "1383",
             "id": "2000",
             "sideTrackPart": "42",
             "parkingTrackPart": "15",
@@ -28,7 +28,7 @@
             "minimumDuration": "60"
         },
         {
-            "time": "900",
+            "time": "1984",
             "id": "3000",
             "sideTrackPart": "42",
             "parkingTrackPart": "15",
