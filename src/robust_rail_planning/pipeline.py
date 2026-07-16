@@ -427,7 +427,7 @@ def process_scenario(scenario_path, idx, total, run_id, use_examples, planner):
     return row, records
 
 
-def process_simple_scenario():
+def process_simple_scenario(planner="astar"):
     """Convert, plan, and evaluate the simple scenario using TORS."""
     solver_scenario_path = os.path.join(SCENARIOS_DIR, "scenario_solver_simple.json")
     tors_scenario_path = os.path.join(SCENARIOS_DIR, "scenario_simple.json")
@@ -448,7 +448,10 @@ def process_simple_scenario():
 
     # Step 2: Plan
     logger.info("Planning simple scenario")
-    plan_found, plan_path, plan_length, planner_status = plan(pddl_path, timeout=600)
+    if planner == "enhsp":
+        plan_found, plan_path, plan_length, planner_status = plan(pddl_path, timeout=600)
+    else:
+        plan_found, plan_path, plan_length, planner_status = plan_with_julia(pddl_path)
 
     if not plan_found:
         logger.error("  no plan found for simple scenario (status=%s)", planner_status)
@@ -478,8 +481,187 @@ def process_simple_scenario():
         logger.error("  TORS evaluation failed: %s", exc)
 
 
+def _is_tors_plan(path):
+    """Check if a JSON file is a TORS plan (has 'actions' key)."""
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return isinstance(data, dict) and "actions" in data
+    except Exception:
+        return False
+
+
+def _find_matching_scenario(scenarios_dir, label):
+    """Find a TORS scenario matching a label.
+
+    Tries exact match, then strips 'solver_' and globs for scenario_*.json.
+    Searches in the scenarios/ subdirectory of test_data.
+    """
+    import fnmatch
+    # Exact match (skip solver scenarios - those are not TORS scenarios)
+    exact = os.path.join(scenarios_dir, f"{label}.json")
+    if os.path.isfile(exact) and not _is_tors_plan(exact) and "solver_" not in os.path.basename(exact):
+        return exact
+    # Strip 'solver_' if present and try exact
+    if "solver_" in label:
+        stripped = label.replace("solver_", "", 1)
+        exact2 = os.path.join(scenarios_dir, f"{stripped}.json")
+        if os.path.isfile(exact2) and "solver_" not in os.path.basename(exact2):
+            return exact2
+    # Glob: find scenario_<stripped_base>*.json (non-solver)
+    stripped = label.replace("solver_", "", 1) if "solver_" in label else label
+    base = stripped.replace("scenario_", "", 1) if stripped.startswith("scenario_") else stripped
+    for name in sorted(os.listdir(scenarios_dir)):
+        if fnmatch.fnmatch(name, f"scenario_{base}*.json") and "solver_" not in name:
+            return os.path.join(scenarios_dir, name)
+    return None
+
+
+def _find_matching_solver_scenario(scenarios_dir, label):
+    """Find a solver scenario matching a label.
+
+    Looks for scenario_solver_<base>*.json files that are NOT TORS plans.
+    Searches in the scenarios/ subdirectory of test_data.
+    """
+    import fnmatch
+    base = label.replace("scenario_solver_", "", 1) if "scenario_solver_" in label else label
+    for name in sorted(os.listdir(scenarios_dir)):
+        if not fnmatch.fnmatch(name, f"scenario_solver_{base}*.json"):
+            continue
+        path = os.path.join(scenarios_dir, name)
+        if _is_tors_plan(path):
+            continue
+        return path
+    return None
+
+
+def run_test_eval():
+    """Run pre-made plans from test_data/ through converter and/or TORS.
+
+    Directory layout:
+      test_data/plans/     - .plan files and .json TORS plan files
+      test_data/scenarios/ - .json solver scenarios and TORS scenarios
+
+    Scans plans/ for plan files and scenarios/ for matching scenarios:
+      - .plan files  -> converter (using solver scenario + location file) -> TORS JSON -> TORS eval
+      - .json TORS plans (have 'actions' key) -> TORS eval directly
+      - .json TORS scenarios (have 'in'/'out' keys) -> used for evaluation
+      - .json solver scenarios -> used for conversion
+
+    Matching convention:
+      scenario_solver_<name>.plan  -> solver scenario: scenario_solver_<name>_*.json
+                                   -> TORS scenario:  scenario_<name>_*.json
+      scenario_solver_<name>.json  -> TORS scenario:  scenario_<name>_*.json
+
+    Only the location file (LOCATION_FILE) is loaded from outside test_data/.
+    """
+    test_data_dir = os.path.join(BASE_DIR, "test_data")
+    plans_dir = os.path.join(test_data_dir, "plans")
+    scenarios_dir = os.path.join(test_data_dir, "scenarios")
+
+    if not os.path.isdir(plans_dir):
+        logger.error("test_data/plans directory not found: %s", plans_dir)
+        return
+    if not os.path.isdir(scenarios_dir):
+        logger.error("test_data/scenarios directory not found: %s", scenarios_dir)
+        return
+
+    all_plan_files = sorted(glob.glob(os.path.join(plans_dir, "*")))
+    plan_files = [f for f in all_plan_files if f.endswith(".plan")]
+    json_plan_files = [f for f in all_plan_files if f.endswith(".json") and _is_tors_plan(f)]
+
+    logger.info("[test-eval] Found %d .plan files, %d .json plan files in test_data/plans/",
+                len(plan_files), len(json_plan_files))
+
+    results = []
+
+    # --- .json TORS plans: evaluate directly ---
+    for path in json_plan_files:
+        label = os.path.splitext(os.path.basename(path))[0]
+        tors_scenario = _find_matching_scenario(scenarios_dir, label)
+
+        if not tors_scenario:
+            logger.info("")
+            logger.info("[test-eval] %s (json plan)", label)
+            logger.warning("      no matching TORS scenario found, skipping")
+            results.append((label, False, "SKIP: no scenario"))
+            continue
+
+        logger.info("")
+        logger.info("[test-eval] %s (json plan -> TORS)", label)
+        passed = False
+        detail = ""
+        try:
+            logger.info("      evaluating with scenario %s",
+                        os.path.basename(tors_scenario))
+            evaluate(tors_scenario, path)
+            passed = True
+            detail = "PASS"
+        except Exception as exc:
+            detail = f"FAIL: {exc}"
+            logger.error("      %s", detail)
+
+        results.append((label, passed, detail))
+        logger.info("      -> %s", "PASS" if passed else "FAIL")
+
+    # --- .plan files: converter -> TORS JSON -> TORS eval ---
+    for path in plan_files:
+        label = os.path.splitext(os.path.basename(path))[0]
+        solver_scenario = _find_matching_solver_scenario(scenarios_dir, label)
+        tors_scenario = _find_matching_scenario(scenarios_dir, label)
+
+        if not solver_scenario:
+            logger.info("")
+            logger.info("[test-eval] %s (plan)", label)
+            logger.warning("      solver scenario not found, skipping")
+            results.append((label, False, "SKIP: no solver scenario"))
+            continue
+        if not tors_scenario:
+            logger.info("")
+            logger.info("[test-eval] %s (plan)", label)
+            logger.warning("      TORS scenario not found, skipping")
+            results.append((label, False, "SKIP: no TORS scenario"))
+            continue
+
+        logger.info("")
+        logger.info("[test-eval] %s (plan -> converter -> TORS)", label)
+        passed = False
+        detail = ""
+        json_path = os.path.join(plans_dir, f"{label}_converted.json")
+        try:
+            logger.info("      converting with solver scenario %s",
+                        os.path.basename(solver_scenario))
+            result = converter.convert_plan(path, solver_scenario, LOCATION_FILE)
+            with open(json_path, "w") as f:
+                json.dump(result, f, indent=4)
+            logger.info("      evaluating with TORS scenario %s",
+                        os.path.basename(tors_scenario))
+            evaluate(tors_scenario, json_path)
+            passed = True
+            detail = "PASS"
+        except Exception as exc:
+            detail = f"FAIL: {exc}"
+            logger.error("      %s", detail)
+        finally:
+            if os.path.isfile(json_path):
+                os.remove(json_path)
+
+        results.append((label, passed, detail))
+        logger.info("      -> %s", "PASS" if passed else "FAIL")
+
+    # Summary
+    logger.info("")
+    logger.info("[test-eval] === Summary ===")
+    n_pass = sum(1 for _, p, _ in results if p)
+    n_fail = sum(1 for _, p, _ in results if not p)
+    for label, passed, detail in results:
+        logger.info("  %s  %s", label, detail)
+    logger.info("  %d passed, %d failed, %d total", n_pass, n_fail, len(results))
+
+
 def run_pipeline(do_generate=False, use_examples=False, planner="astar",
-                 do_local_search=False, max_workers=10, simple_scenario=False):
+                 do_local_search=False, max_workers=10, simple_scenario=False,
+                 test_eval=False):
     if do_generate:
         logger.info("Generating scenarios...")
         generate()
@@ -491,7 +673,11 @@ def run_pipeline(do_generate=False, use_examples=False, planner="astar",
     )
 
     if simple_scenario:
-        process_simple_scenario()
+        process_simple_scenario(planner=planner)
+        return
+
+    if test_eval:
+        run_test_eval()
         return
 
     if do_local_search:

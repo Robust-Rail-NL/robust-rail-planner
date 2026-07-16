@@ -1,0 +1,74 @@
+{
+    "in": {
+        "trains": [
+            {
+                "entryTrackPart": "42",
+                "arrival": "0",
+                "departure": "0",
+                "id": "1000",
+                "members": [
+                    {
+                        "trainUnit": {
+                            "id": "1001",
+                            "type": {
+                                "displayName": "SLT",
+                                "carriages": 4,
+                                "length": 69.36,
+                                "combineDuration": "180",
+                                "splitDuration": "120",
+                                "backNormTime": "120",
+                                "backAdditionTime": "16",
+                                "reversalDuration": "0"
+                            }
+                        },
+                        "tasks": [
+                            {
+                                "type": {
+                                    "other": "Reinigingsperron"
+                                },
+                                "priority": 1,
+                                "duration": "900"
+                            }
+                        ]
+                    }
+                ],
+                "firstParkingTrackPart": "15"
+            }
+        ]
+    },
+    "out": {
+        "trainRequests": [
+            {
+                "leaveTrackPart": "42",
+                "arrival": "2100",
+                "departure": "2100",
+                "displayName": "2000",
+                "trainUnits": [
+                    {
+                        "type": {
+                            "displayName": "SLT",
+                            "carriages": 4,
+                            "length": 69.36,
+                            "combineDuration": "180",
+                            "splitDuration": "120",
+                            "reversalDuration": "0",
+                            "backNormTime": "120",
+                            "backAdditionTime": "16"
+                        },
+                        "id": ""
+                    }
+                ],
+                "lastParkingTrackPart": "41",
+                "standingIndex": 0.0
+            }
+        ]
+    },
+    "inStanding": {
+        "trains": []
+    },
+    "outStanding": {
+        "trainRequests": []
+    },
+    "startTime": "0",
+    "endTime": "3600"
+}

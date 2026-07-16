@@ -432,79 +432,68 @@ def get_train_duration(train_id, train_lookup, unit_lookup=None, duration_type="
 
 
 # =====================================================
-# GRAPH/Topology (same as original)
+# GRAPH/Topology
 # =====================================================
+
+def _is_switch_like_track_part(track_part):
+    if track_part.get("parkingAllowed", False):
+        return False
+    length = track_part.get("length", 0)
+    neighbors = set(track_part.get("aSide", [])) | set(track_part.get("bSide", []))
+    return length == 0 and len(neighbors) >= 2
+
 
 def build_switch_sets(location):
     return {
         tp["id"]
         for tp in location["trackParts"]
-        if tp["type"] in ("Switch", "EnglishSwitch", "Intersection")
+        if _is_switch_like_track_part(tp)
     }
 
 
-def get_all_aside(track_part, switch_like_ids, id_to_tp):
-    neighbors = set()
-    for nb_id in track_part.get("aSide", []):
-        nb_id = str(nb_id)
-        if nb_id in switch_like_ids:
-            neighbors.update(
-                get_all_aside(id_to_tp[nb_id], switch_like_ids, id_to_tp)
-            )
-        else:
-            neighbors.add(nb_id)
-    return neighbors
-
-
-def get_all_bside(track_part, switch_like_ids, id_to_tp):
-    neighbors = set()
-    for nb_id in track_part.get("bSide", []):
-        nb_id = str(nb_id)
-        if nb_id in switch_like_ids:
-            neighbors.update(
-                get_all_bside(id_to_tp[nb_id], switch_like_ids, id_to_tp)
-            )
-        else:
-            neighbors.add(nb_id)
-    return neighbors
-
-
-def build_graph(location):
-    id_to_tp = {tp["id"]: tp for tp in location["trackParts"]}
-    graph = {}
+def build_directed_adj(location, side_key):
+    adj = {tp["id"]: [] for tp in location["trackParts"]}
     for tp in location["trackParts"]:
-        src = tp["id"]
-        neighbors = set()
-        for nb_id in tp.get("aSide", []):
-            neighbors.add(str(nb_id))
-        for nb_id in tp.get("bSide", []):
-            neighbors.add(str(nb_id))
-        graph[src] = neighbors
-    return graph
+        for nb_id in tp.get(side_key, []):
+            nb_id = str(nb_id)
+            if nb_id in adj:
+                adj[tp["id"]].append(nb_id)
+    return adj
 
 
-def bfs(graph, start, goal):
-    queue = deque([[start]])
-    visited = set()
-    while queue:
-        path = queue.popleft()
-        node = path[-1]
-        if node == goal:
-            return path
-        if node in visited:
-            continue
-        visited.add(node)
-        for nb in graph.get(node, []):
-            queue.append(path + [nb])
-    return [start, goal]
+def bfs_through_switches(a_adj, b_adj, start, goal, switch_ids):
+    """Directed BFS: try a-side path, then b-side path, return the shorter one.
+    Only traverses through switch-like intermediate nodes."""
+    if start == goal:
+        return [start]
+
+    def _bfs(adj, start, goal):
+        visited = {start}
+        queue = deque([[start]])
+        while queue:
+            path = queue.popleft()
+            node = path[-1]
+            for nb in adj.get(node, []):
+                if nb == goal:
+                    return path + [nb]
+                if nb not in visited and nb in switch_ids:
+                    visited.add(nb)
+                    queue.append(path + [nb])
+        return []
+
+    a_path = _bfs(a_adj, start, goal)
+    b_path = _bfs(b_adj, start, goal)
+    if a_path and b_path:
+        return a_path if len(a_path) <= len(b_path) else b_path
+    return a_path or b_path or [start, goal]
 
 
-def expand_path(path, graph):
+def expand_path(path, a_adj, b_adj, switch_ids):
     if not path:
         return path
     expanded = [path[0]]
     for i in range(len(path) - 1):
-        segment = bfs(graph, path[i], path[i + 1])
+        segment = bfs_through_switches(a_adj, b_adj, path[i], path[i + 1], switch_ids)
         expanded.extend(segment[1:])
     return expanded
 
@@ -588,7 +577,8 @@ def convert_plan(plan_file, scenario_file, location_file):
     request_lookup = build_request_lookup(scenario)
     track_lookup = build_track_lookup(location)
     track_id_lookup = build_track_id_lookup(location)
-    graph = build_graph(location)
+    a_adj = build_directed_adj(location, "aSide")
+    b_adj = build_directed_adj(location, "bSide")
     switch_ids = build_switch_sets(location)
     parkable_tracks = {tp["id"] for tp in location["trackParts"] if tp.get("parkingAllowed")}
     zero_length_tracks = {tp["id"] for tp in location["trackParts"] if tp.get("length", 0) == 0}
@@ -741,7 +731,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                 if not state["path"] and train in train_locations:
                     state["path"] = [train_locations[train], dest_track]
                 
-                expanded_path = _strip_trailing_zero_length(expand_path(state["path"], graph))
+                expanded_path = _strip_trailing_zero_length(expand_path(state["path"], a_adj, b_adj, switch_ids))
                 duration = compute_move_duration(expanded_path, switch_ids)
                 end_time = current_time + duration
                 if len(expanded_path) > 1:
@@ -776,7 +766,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                 if not state["path"] and train in train_locations:
                     state["path"] = [train_locations[train], track_id]
                 
-                expanded_path = _strip_trailing_zero_length(expand_path(state["path"], graph))
+                expanded_path = _strip_trailing_zero_length(expand_path(state["path"], a_adj, b_adj, switch_ids))
                 duration = compute_move_duration(expanded_path, switch_ids)
                 end_time = current_time + duration
                 if len(expanded_path) > 1:
@@ -837,7 +827,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                 
                 expanded_path = []
                 if state["path"]:
-                    expanded_path = _strip_for_departure(expand_path(state["path"], graph))
+                    expanded_path = _strip_for_departure(expand_path(state["path"], a_adj, b_adj, switch_ids))
                     duration = compute_move_duration(expanded_path, switch_ids)
                     end_time = current_time + duration
                     if len(expanded_path) > 1:
@@ -980,7 +970,7 @@ def convert_plan(plan_file, scenario_file, location_file):
             # End active move if the train is currently moving
             if su_id in active_trains:
                 state = active_trains[su_id]
-                expanded_path = expand_path(state["path"], graph)
+                expanded_path = expand_path(state["path"], a_adj, b_adj, switch_ids)
                 duration = compute_move_duration(expanded_path, switch_ids)
                 end_time = current_time + duration
                 
@@ -1198,27 +1188,12 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
             )
             processed_actions.append(arrive_action)
             
-            # Add Wait if arrival time is before the actual action start.
-            # Only insert Wait on parkable tracks to avoid TORS rejecting
-            # Wait actions on through-tracks / non-parking locations.
-            if (arrive_time < int(action["startTime"])
-                    and parkable_tracks is not None
-                    and arrive_location in parkable_tracks):
-                wait_action = create_wait_action(
-                    cur_su_id,
-                    arrive_time,
-                    int(action["startTime"]),
-                    arrive_location,
-                    train_lookup,
-                    unit_lookup
-                )
-                processed_actions.append(wait_action)
+
         elif cur_su_id not in su_first_action:
             # SU was created by Combine/Split - just mark it as seen
             su_first_action[cur_su_id] = int(action["startTime"])
         
         # TORS handles action-to-action time gaps internally via its own Wait mechanism.
-        # We only add explicit Wait actions for the Arrive-to-first-action gap (above).
         
         # Update last position
         if "location" in action:
