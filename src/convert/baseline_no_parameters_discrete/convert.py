@@ -140,8 +140,6 @@ def _train_task_types(train):
 
 
 def _select_precomputed_matching(unit_type_by_id, slot_records, matching_variant):
-    # Enumerate deterministic one-to-one, type-compatible assignments. The
-    # variant selects a specific assignment when several matchings are valid.
     if matching_variant < 0:
         raise ValueError("matching_variant must be non-negative")
 
@@ -472,6 +470,10 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     request_su_for_request = problem.add_fluent(up.Fluent("request_su_for_request", up.BoolType(), shunting_unit=shunting_unit_type, request=departure_request_type), default_initial_value=False)
     request_departed = problem.add_fluent(up.Fluent("request_departed", up.BoolType(), request=departure_request_type), default_initial_value=False)
     su_length        = problem.add_fluent(up.Fluent("su_length", up.RealType(), shunting_unit=shunting_unit_type), default_initial_value=up.Real(Fraction(0)))
+    occupied_length = problem.add_fluent(up.Fluent("occupied_length", up.RealType(), trackpart=track_part_type), default_initial_value=up.Real(Fraction(0)))
+    frontmost_a_su   = problem.add_fluent(up.Fluent("frontmost_a_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
+    frontmost_b_su   = problem.add_fluent(up.Fluent("frontmost_b_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
+    behind_su        = problem.add_fluent(up.Fluent("behind_su", up.BoolType(), back=shunting_unit_type, front=shunting_unit_type), default_initial_value=False)
     su_aside_distance = problem.add_fluent(up.Fluent("su_aside_distance", up.RealType(), shunting_unit=shunting_unit_type), default_initial_value=up.Real(Fraction(0)))
     allowed_to_move_su = problem.add_fluent(up.Fluent("allowed_to_move_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
     su_may_move       = problem.add_fluent(up.Fluent("su_may_move", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
@@ -522,11 +524,20 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     arrive_su.add_effect(su_has_arrived(arrive_su.su), True)
     arrive_su.add_effect(at_su(arrive_su.su, phantom_track), False)
     arrive_su.add_effect(at_su(arrive_su.su, arrive_su.l), True)
-    arrive_su.add_effect(su_aside_distance(arrive_su.su), bstack_distance(arrive_su.l))
+    pass
     arrive_su.add_effect(number_of_trains_on_track(arrive_su.l), number_of_trains_on_track(arrive_su.l) + 1)
-    arrive_su.add_effect(bstack_distance(arrive_su.l), bstack_distance(arrive_su.l) + su_length(arrive_su.su))
+    pass
     next_su = up.Variable("next_su", shunting_unit_type)
     arrive_su.add_effect(fluent=su_previous_arrived(next_su), value=True, condition=su_arrival_immediately_before(arrive_su.su, next_su), forall=[next_su])
+    # Insert the arriving SU at the B-side end of the arrival track. It becomes
+    # B-side frontmost and is linked behind the previous B-side frontmost SU.
+    _arrq = up.Variable("arrq", shunting_unit_type)
+    arrive_su.add_precondition(occupied_length(arrive_su.l) + su_length(arrive_su.su) <= track_length(arrive_su.l))
+    arrive_su.add_effect(occupied_length(arrive_su.l), occupied_length(arrive_su.l) + su_length(arrive_su.su))
+    arrive_su.add_effect(frontmost_b_su(arrive_su.su), True)
+    arrive_su.add_effect(fluent=frontmost_a_su(arrive_su.su), value=True, condition=up.Equals(number_of_trains_on_track(arrive_su.l), 0))
+    arrive_su.add_effect(fluent=frontmost_b_su(_arrq), value=False, condition=up.And(at_su(_arrq, arrive_su.l), frontmost_b_su(_arrq)), forall=[_arrq])
+    arrive_su.add_effect(fluent=behind_su(arrive_su.su, _arrq), value=True, condition=up.And(at_su(_arrq, arrive_su.l), frontmost_b_su(_arrq)), forall=[_arrq])
     problem.add_action(arrive_su)
 
     park_su = up.InstantaneousAction('park_su', su=shunting_unit_type, l=track_part_type)
@@ -557,17 +568,28 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_aside_empty_su.add_precondition(allowed_to_move_su(move_aside_empty_su.su))
     move_aside_empty_su.add_precondition(at_su(move_aside_empty_su.su, move_aside_empty_su.l_from))
     move_aside_empty_su.add_precondition(connected_aside(move_aside_empty_su.l_from, move_aside_empty_su.l_to))
-    move_aside_empty_su.add_precondition(su_aside_distance(move_aside_empty_su.su) <= astack_distance(move_aside_empty_su.l_from))
+    move_aside_empty_su.add_precondition(occupied_length(move_aside_empty_su.l_to) + su_length(move_aside_empty_su.su) <= track_length(move_aside_empty_su.l_to))
+    pass
     move_aside_empty_su.add_precondition(up.Equals(number_of_trains_on_track(move_aside_empty_su.l_to), 0))
     move_aside_empty_su.add_precondition(su_length(move_aside_empty_su.su) <= track_length(move_aside_empty_su.l_to))
     move_aside_empty_su.add_effect(number_of_trains_on_track(move_aside_empty_su.l_from), number_of_trains_on_track(move_aside_empty_su.l_from) - 1)
     move_aside_empty_su.add_effect(number_of_trains_on_track(move_aside_empty_su.l_to), 1)
-    move_aside_empty_su.add_effect(su_aside_distance(move_aside_empty_su.su), 0)
-    move_aside_empty_su.add_effect(astack_distance(move_aside_empty_su.l_from), astack_distance(move_aside_empty_su.l_from) + su_length(move_aside_empty_su.su))
-    move_aside_empty_su.add_effect(astack_distance(move_aside_empty_su.l_to), 0)
-    move_aside_empty_su.add_effect(bstack_distance(move_aside_empty_su.l_to), su_length(move_aside_empty_su.su))
+    pass
+    pass
+    pass
+    pass
+    move_aside_empty_su.add_effect(occupied_length(move_aside_empty_su.l_from), occupied_length(move_aside_empty_su.l_from) - su_length(move_aside_empty_su.su))
+    move_aside_empty_su.add_effect(occupied_length(move_aside_empty_su.l_to), occupied_length(move_aside_empty_su.l_to) + su_length(move_aside_empty_su.su))
     move_aside_empty_su.add_effect(at_su(move_aside_empty_su.su, move_aside_empty_su.l_to), True)
     move_aside_empty_su.add_effect(at_su(move_aside_empty_su.su, move_aside_empty_su.l_from), False)
+    # Removing an SU through the A-side exposes its immediate neighbour. An SU
+    # entering an empty track is then accessible from both track ends.
+    _maev = up.Variable("maev", shunting_unit_type)
+    move_aside_empty_su.add_precondition(frontmost_a_su(move_aside_empty_su.su))
+    move_aside_empty_su.add_effect(fluent=frontmost_a_su(_maev), value=True, condition=behind_su(_maev, move_aside_empty_su.su), forall=[_maev])
+    move_aside_empty_su.add_effect(fluent=behind_su(_maev, move_aside_empty_su.su), value=False, condition=behind_su(_maev, move_aside_empty_su.su), forall=[_maev])
+    move_aside_empty_su.add_effect(frontmost_a_su(move_aside_empty_su.su), True)
+    move_aside_empty_su.add_effect(frontmost_b_su(move_aside_empty_su.su), True)
     problem.add_action(move_aside_empty_su)
 
     move_aside_occupied_su = up.InstantaneousAction('move_aside_occupied_su', su=shunting_unit_type, l_from=track_part_type, l_to=track_part_type)
@@ -575,16 +597,30 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_aside_occupied_su.add_precondition(allowed_to_move_su(move_aside_occupied_su.su))
     move_aside_occupied_su.add_precondition(at_su(move_aside_occupied_su.su, move_aside_occupied_su.l_from))
     move_aside_occupied_su.add_precondition(connected_aside(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to))
-    move_aside_occupied_su.add_precondition(su_aside_distance(move_aside_occupied_su.su) <= astack_distance(move_aside_occupied_su.l_from))
+    move_aside_occupied_su.add_precondition(occupied_length(move_aside_occupied_su.l_to) + su_length(move_aside_occupied_su.su) <= track_length(move_aside_occupied_su.l_to))
+    pass
     move_aside_occupied_su.add_precondition(number_of_trains_on_track(move_aside_occupied_su.l_to) > 0)
-    move_aside_occupied_su.add_precondition(su_length(move_aside_occupied_su.su) <= track_length(move_aside_occupied_su.l_to) - bstack_distance(move_aside_occupied_su.l_to))
+    pass
     move_aside_occupied_su.add_effect(number_of_trains_on_track(move_aside_occupied_su.l_from), number_of_trains_on_track(move_aside_occupied_su.l_from) - 1)
     move_aside_occupied_su.add_effect(number_of_trains_on_track(move_aside_occupied_su.l_to), number_of_trains_on_track(move_aside_occupied_su.l_to) + 1)
-    move_aside_occupied_su.add_effect(su_aside_distance(move_aside_occupied_su.su), bstack_distance(move_aside_occupied_su.l_to))
-    move_aside_occupied_su.add_effect(astack_distance(move_aside_occupied_su.l_from), astack_distance(move_aside_occupied_su.l_from) + su_length(move_aside_occupied_su.su))
-    move_aside_occupied_su.add_effect(bstack_distance(move_aside_occupied_su.l_to), bstack_distance(move_aside_occupied_su.l_to) + su_length(move_aside_occupied_su.su))
+    pass
+    pass
+    pass
+    move_aside_occupied_su.add_effect(occupied_length(move_aside_occupied_su.l_from), occupied_length(move_aside_occupied_su.l_from) - su_length(move_aside_occupied_su.su))
+    move_aside_occupied_su.add_effect(occupied_length(move_aside_occupied_su.l_to), occupied_length(move_aside_occupied_su.l_to) + su_length(move_aside_occupied_su.su))
     move_aside_occupied_su.add_effect(at_su(move_aside_occupied_su.su, move_aside_occupied_su.l_to), True)
     move_aside_occupied_su.add_effect(at_su(move_aside_occupied_su.su, move_aside_occupied_su.l_from), False)
+    # Removing an SU through the A-side exposes its immediate neighbour. On the
+    # destination track, the moving SU becomes the new A-side frontmost SU.
+    _maov = up.Variable("maov", shunting_unit_type)
+    _maop = up.Variable("maop", shunting_unit_type)
+    move_aside_occupied_su.add_precondition(frontmost_a_su(move_aside_occupied_su.su))
+    move_aside_occupied_su.add_effect(fluent=frontmost_a_su(_maov), value=True, condition=behind_su(_maov, move_aside_occupied_su.su), forall=[_maov])
+    move_aside_occupied_su.add_effect(fluent=behind_su(_maov, move_aside_occupied_su.su), value=False, condition=behind_su(_maov, move_aside_occupied_su.su), forall=[_maov])
+    move_aside_occupied_su.add_effect(fluent=frontmost_a_su(_maop), value=False, condition=up.And(at_su(_maop, move_aside_occupied_su.l_to), frontmost_a_su(_maop)), forall=[_maop])
+    move_aside_occupied_su.add_effect(fluent=behind_su(_maop, move_aside_occupied_su.su), value=True, condition=up.And(at_su(_maop, move_aside_occupied_su.l_to), frontmost_a_su(_maop)), forall=[_maop])
+    move_aside_occupied_su.add_effect(frontmost_a_su(move_aside_occupied_su.su), True)
+    move_aside_occupied_su.add_effect(frontmost_b_su(move_aside_occupied_su.su), False)
     problem.add_action(move_aside_occupied_su)
 
     move_bside_empty_su = up.InstantaneousAction('move_bside_empty_su', su=shunting_unit_type, l_from=track_part_type, l_to=track_part_type)
@@ -592,17 +628,28 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_bside_empty_su.add_precondition(allowed_to_move_su(move_bside_empty_su.su))
     move_bside_empty_su.add_precondition(at_su(move_bside_empty_su.su, move_bside_empty_su.l_from))
     move_bside_empty_su.add_precondition(connected_bside(move_bside_empty_su.l_from, move_bside_empty_su.l_to))
-    move_bside_empty_su.add_precondition(su_aside_distance(move_bside_empty_su.su) >= bstack_distance(move_bside_empty_su.l_from) - su_length(move_bside_empty_su.su))
+    move_bside_empty_su.add_precondition(occupied_length(move_bside_empty_su.l_to) + su_length(move_bside_empty_su.su) <= track_length(move_bside_empty_su.l_to))
+    pass
     move_bside_empty_su.add_precondition(up.Equals(number_of_trains_on_track(move_bside_empty_su.l_to), 0))
     move_bside_empty_su.add_precondition(su_length(move_bside_empty_su.su) <= track_length(move_bside_empty_su.l_to))
     move_bside_empty_su.add_effect(number_of_trains_on_track(move_bside_empty_su.l_from), number_of_trains_on_track(move_bside_empty_su.l_from) - 1)
     move_bside_empty_su.add_effect(number_of_trains_on_track(move_bside_empty_su.l_to), 1)
-    move_bside_empty_su.add_effect(su_aside_distance(move_bside_empty_su.su), track_length(move_bside_empty_su.l_to) - su_length(move_bside_empty_su.su))
-    move_bside_empty_su.add_effect(bstack_distance(move_bside_empty_su.l_from), bstack_distance(move_bside_empty_su.l_from) - su_length(move_bside_empty_su.su))
-    move_bside_empty_su.add_effect(astack_distance(move_bside_empty_su.l_to), track_length(move_bside_empty_su.l_to) - su_length(move_bside_empty_su.su))
-    move_bside_empty_su.add_effect(bstack_distance(move_bside_empty_su.l_to), track_length(move_bside_empty_su.l_to))
+    pass
+    pass
+    pass
+    pass
+    move_bside_empty_su.add_effect(occupied_length(move_bside_empty_su.l_from), occupied_length(move_bside_empty_su.l_from) - su_length(move_bside_empty_su.su))
+    move_bside_empty_su.add_effect(occupied_length(move_bside_empty_su.l_to), occupied_length(move_bside_empty_su.l_to) + su_length(move_bside_empty_su.su))
     move_bside_empty_su.add_effect(at_su(move_bside_empty_su.su, move_bside_empty_su.l_to), True)
     move_bside_empty_su.add_effect(at_su(move_bside_empty_su.su, move_bside_empty_su.l_from), False)
+    # Removing an SU through the B-side exposes its immediate neighbour. An SU
+    # entering an empty track is then accessible from both track ends.
+    _mbev = up.Variable("mbev", shunting_unit_type)
+    move_bside_empty_su.add_precondition(frontmost_b_su(move_bside_empty_su.su))
+    move_bside_empty_su.add_effect(fluent=frontmost_b_su(_mbev), value=True, condition=behind_su(move_bside_empty_su.su, _mbev), forall=[_mbev])
+    move_bside_empty_su.add_effect(fluent=behind_su(move_bside_empty_su.su, _mbev), value=False, condition=behind_su(move_bside_empty_su.su, _mbev), forall=[_mbev])
+    move_bside_empty_su.add_effect(frontmost_a_su(move_bside_empty_su.su), True)
+    move_bside_empty_su.add_effect(frontmost_b_su(move_bside_empty_su.su), True)
     problem.add_action(move_bside_empty_su)
 
     move_bside_occupied_su = up.InstantaneousAction('move_bside_occupied_su', su=shunting_unit_type, l_from=track_part_type, l_to=track_part_type)
@@ -610,16 +657,30 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     move_bside_occupied_su.add_precondition(allowed_to_move_su(move_bside_occupied_su.su))
     move_bside_occupied_su.add_precondition(at_su(move_bside_occupied_su.su, move_bside_occupied_su.l_from))
     move_bside_occupied_su.add_precondition(connected_bside(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to))
-    move_bside_occupied_su.add_precondition(su_aside_distance(move_bside_occupied_su.su) >= bstack_distance(move_bside_occupied_su.l_from) - su_length(move_bside_occupied_su.su))
+    move_bside_occupied_su.add_precondition(occupied_length(move_bside_occupied_su.l_to) + su_length(move_bside_occupied_su.su) <= track_length(move_bside_occupied_su.l_to))
+    pass
     move_bside_occupied_su.add_precondition(number_of_trains_on_track(move_bside_occupied_su.l_to) > 0)
-    move_bside_occupied_su.add_precondition(su_length(move_bside_occupied_su.su) <= astack_distance(move_bside_occupied_su.l_to))
+    pass
     move_bside_occupied_su.add_effect(number_of_trains_on_track(move_bside_occupied_su.l_from), number_of_trains_on_track(move_bside_occupied_su.l_from) - 1)
     move_bside_occupied_su.add_effect(number_of_trains_on_track(move_bside_occupied_su.l_to), number_of_trains_on_track(move_bside_occupied_su.l_to) + 1)
-    move_bside_occupied_su.add_effect(su_aside_distance(move_bside_occupied_su.su), astack_distance(move_bside_occupied_su.l_to) - su_length(move_bside_occupied_su.su))
-    move_bside_occupied_su.add_effect(bstack_distance(move_bside_occupied_su.l_from), bstack_distance(move_bside_occupied_su.l_from) - su_length(move_bside_occupied_su.su))
-    move_bside_occupied_su.add_effect(astack_distance(move_bside_occupied_su.l_to), astack_distance(move_bside_occupied_su.l_to) - su_length(move_bside_occupied_su.su))
+    pass
+    pass
+    pass
+    move_bside_occupied_su.add_effect(occupied_length(move_bside_occupied_su.l_from), occupied_length(move_bside_occupied_su.l_from) - su_length(move_bside_occupied_su.su))
+    move_bside_occupied_su.add_effect(occupied_length(move_bside_occupied_su.l_to), occupied_length(move_bside_occupied_su.l_to) + su_length(move_bside_occupied_su.su))
     move_bside_occupied_su.add_effect(at_su(move_bside_occupied_su.su, move_bside_occupied_su.l_to), True)
     move_bside_occupied_su.add_effect(at_su(move_bside_occupied_su.su, move_bside_occupied_su.l_from), False)
+    # Removing an SU through the B-side exposes its immediate neighbour. On the
+    # destination track, the moving SU becomes the new B-side frontmost SU.
+    _mbov = up.Variable("mbov", shunting_unit_type)
+    _mbop = up.Variable("mbop", shunting_unit_type)
+    move_bside_occupied_su.add_precondition(frontmost_b_su(move_bside_occupied_su.su))
+    move_bside_occupied_su.add_effect(fluent=frontmost_b_su(_mbov), value=True, condition=behind_su(move_bside_occupied_su.su, _mbov), forall=[_mbov])
+    move_bside_occupied_su.add_effect(fluent=behind_su(move_bside_occupied_su.su, _mbov), value=False, condition=behind_su(move_bside_occupied_su.su, _mbov), forall=[_mbov])
+    move_bside_occupied_su.add_effect(fluent=frontmost_b_su(_mbop), value=False, condition=up.And(at_su(_mbop, move_bside_occupied_su.l_to), frontmost_b_su(_mbop)), forall=[_mbop])
+    move_bside_occupied_su.add_effect(fluent=behind_su(move_bside_occupied_su.su, _mbop), value=True, condition=up.And(at_su(_mbop, move_bside_occupied_su.l_to), frontmost_b_su(_mbop)), forall=[_mbop])
+    move_bside_occupied_su.add_effect(frontmost_b_su(move_bside_occupied_su.su), True)
+    move_bside_occupied_su.add_effect(frontmost_a_su(move_bside_occupied_su.su), False)
     problem.add_action(move_bside_occupied_su)
 
     depart_aside_su = up.InstantaneousAction('depart_aside_su', su=shunting_unit_type, l=track_part_type)
@@ -627,17 +688,25 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     depart_aside_su.add_precondition(allowed_to_move_su(depart_aside_su.su))
     depart_aside_su.add_precondition(at_su(depart_aside_su.su, depart_aside_su.l))
     depart_aside_su.add_precondition(departure_exit_a(depart_aside_su.l))
-    depart_aside_su.add_precondition(su_aside_distance(depart_aside_su.su) <= astack_distance(depart_aside_su.l))
+    pass
     depart_aside_su.add_effect(active_su(depart_aside_su.su), False)
     depart_aside_su.add_effect(at_su(depart_aside_su.su, depart_aside_su.l), False)
     depart_aside_su.add_effect(at_su(depart_aside_su.su, phantom_track), True)
     depart_aside_su.add_effect(departed_su(depart_aside_su.su), True)
+    depart_aside_su.add_effect(occupied_length(depart_aside_su.l), occupied_length(depart_aside_su.l) - su_length(depart_aside_su.su))
     depart_aside_su.add_effect(number_of_trains_on_track(depart_aside_su.l), number_of_trains_on_track(depart_aside_su.l) - 1)
-    depart_aside_su.add_effect(su_aside_distance(depart_aside_su.su), 0)
-    depart_aside_su.add_effect(astack_distance(depart_aside_su.l), astack_distance(depart_aside_su.l) + su_length(depart_aside_su.su))
+    pass
+    pass
     depart_aside_su.add_effect(concurrent_movements, concurrent_movements - 1)
     depart_aside_su.add_effect(allowed_to_move_su(depart_aside_su.su), False)
     depart_aside_su.add_effect(num_of_departed_trains(), num_of_departed_trains() + 1)
+    # Remove the departing A-side SU from the order and expose the SU directly
+    # behind it as the new A-side frontmost SU.
+    _v_depart_aside_su = up.Variable("v_depart_aside_su", shunting_unit_type)
+    depart_aside_su.add_precondition(frontmost_a_su(depart_aside_su.su))
+    depart_aside_su.add_effect(fluent=frontmost_a_su(_v_depart_aside_su), value=True, condition=behind_su(_v_depart_aside_su, depart_aside_su.su), forall=[_v_depart_aside_su])
+    depart_aside_su.add_effect(fluent=behind_su(_v_depart_aside_su, depart_aside_su.su), value=False, condition=behind_su(_v_depart_aside_su, depart_aside_su.su), forall=[_v_depart_aside_su])
+    depart_aside_su.add_effect(frontmost_a_su(depart_aside_su.su), False)
     problem.add_action(depart_aside_su)
 
     depart_bside_su = up.InstantaneousAction('depart_bside_su', su=shunting_unit_type, l=track_part_type)
@@ -645,17 +714,25 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     depart_bside_su.add_precondition(allowed_to_move_su(depart_bside_su.su))
     depart_bside_su.add_precondition(at_su(depart_bside_su.su, depart_bside_su.l))
     depart_bside_su.add_precondition(departure_exit_b(depart_bside_su.l))
-    depart_bside_su.add_precondition(su_aside_distance(depart_bside_su.su) >= bstack_distance(depart_bside_su.l) - su_length(depart_bside_su.su))
+    pass
     depart_bside_su.add_effect(active_su(depart_bside_su.su), False)
     depart_bside_su.add_effect(at_su(depart_bside_su.su, depart_bside_su.l), False)
     depart_bside_su.add_effect(at_su(depart_bside_su.su, phantom_track), True)
     depart_bside_su.add_effect(departed_su(depart_bside_su.su), True)
+    depart_bside_su.add_effect(occupied_length(depart_bside_su.l), occupied_length(depart_bside_su.l) - su_length(depart_bside_su.su))
     depart_bside_su.add_effect(number_of_trains_on_track(depart_bside_su.l), number_of_trains_on_track(depart_bside_su.l) - 1)
-    depart_bside_su.add_effect(su_aside_distance(depart_bside_su.su), 0)
-    depart_bside_su.add_effect(bstack_distance(depart_bside_su.l), bstack_distance(depart_bside_su.l) - su_length(depart_bside_su.su))
+    pass
+    pass
     depart_bside_su.add_effect(concurrent_movements, concurrent_movements - 1)
     depart_bside_su.add_effect(allowed_to_move_su(depart_bside_su.su), False)
     depart_bside_su.add_effect(num_of_departed_trains(), num_of_departed_trains() + 1)
+    # Remove the departing B-side SU from the order and expose the SU directly
+    # in front of it as the new B-side frontmost SU.
+    _v_depart_bside_su = up.Variable("v_depart_bside_su", shunting_unit_type)
+    depart_bside_su.add_precondition(frontmost_b_su(depart_bside_su.su))
+    depart_bside_su.add_effect(fluent=frontmost_b_su(_v_depart_bside_su), value=True, condition=behind_su(depart_bside_su.su, _v_depart_bside_su), forall=[_v_depart_bside_su])
+    depart_bside_su.add_effect(fluent=behind_su(depart_bside_su.su, _v_depart_bside_su), value=False, condition=behind_su(depart_bside_su.su, _v_depart_bside_su), forall=[_v_depart_bside_su])
+    depart_bside_su.add_effect(frontmost_b_su(depart_bside_su.su), False)
     problem.add_action(depart_bside_su)
 
     depart_aside_su_for_request = up.InstantaneousAction(
@@ -674,18 +751,26 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     depart_aside_su_for_request.add_precondition(slot_for_request(depart_aside_su_for_request.slot, depart_aside_su_for_request.request))
     depart_aside_su_for_request.add_precondition(at_su(depart_aside_su_for_request.su, depart_aside_su_for_request.l))
     depart_aside_su_for_request.add_precondition(departure_exit_a(depart_aside_su_for_request.l))
-    depart_aside_su_for_request.add_precondition(su_aside_distance(depart_aside_su_for_request.su) <= astack_distance(depart_aside_su_for_request.l))
+    pass
     depart_aside_su_for_request.add_effect(active_su(depart_aside_su_for_request.su), False)
     depart_aside_su_for_request.add_effect(at_su(depart_aside_su_for_request.su, depart_aside_su_for_request.l), False)
     depart_aside_su_for_request.add_effect(at_su(depart_aside_su_for_request.su, phantom_track), True)
     depart_aside_su_for_request.add_effect(departed_su(depart_aside_su_for_request.su), True)
+    depart_aside_su_for_request.add_effect(occupied_length(depart_aside_su_for_request.l), occupied_length(depart_aside_su_for_request.l) - su_length(depart_aside_su_for_request.su))
     depart_aside_su_for_request.add_effect(request_departed(depart_aside_su_for_request.request), True)
     depart_aside_su_for_request.add_effect(num_of_departed_trains(), num_of_departed_trains() + 1)
     depart_aside_su_for_request.add_effect(number_of_trains_on_track(depart_aside_su_for_request.l), number_of_trains_on_track(depart_aside_su_for_request.l) - 1)
-    depart_aside_su_for_request.add_effect(su_aside_distance(depart_aside_su_for_request.su), 0)
-    depart_aside_su_for_request.add_effect(astack_distance(depart_aside_su_for_request.l), astack_distance(depart_aside_su_for_request.l) + su_length(depart_aside_su_for_request.su))
+    pass
+    pass
     depart_aside_su_for_request.add_effect(concurrent_movements, concurrent_movements - 1)
     depart_aside_su_for_request.add_effect(allowed_to_move_su(depart_aside_su_for_request.su), False)
+    # Request departures apply the same A-side order update as regular SU
+    # departures, exposing the immediate neighbour after the train leaves.
+    _v_depart_aside_su_for_request = up.Variable("v_depart_aside_su_for_request", shunting_unit_type)
+    depart_aside_su_for_request.add_precondition(frontmost_a_su(depart_aside_su_for_request.su))
+    depart_aside_su_for_request.add_effect(fluent=frontmost_a_su(_v_depart_aside_su_for_request), value=True, condition=behind_su(_v_depart_aside_su_for_request, depart_aside_su_for_request.su), forall=[_v_depart_aside_su_for_request])
+    depart_aside_su_for_request.add_effect(fluent=behind_su(_v_depart_aside_su_for_request, depart_aside_su_for_request.su), value=False, condition=behind_su(_v_depart_aside_su_for_request, depart_aside_su_for_request.su), forall=[_v_depart_aside_su_for_request])
+    depart_aside_su_for_request.add_effect(frontmost_a_su(depart_aside_su_for_request.su), False)
     problem.add_action(depart_aside_su_for_request)
 
     depart_bside_su_for_request = up.InstantaneousAction(
@@ -704,18 +789,26 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     depart_bside_su_for_request.add_precondition(slot_for_request(depart_bside_su_for_request.slot, depart_bside_su_for_request.request))
     depart_bside_su_for_request.add_precondition(at_su(depart_bside_su_for_request.su, depart_bside_su_for_request.l))
     depart_bside_su_for_request.add_precondition(departure_exit_b(depart_bside_su_for_request.l))
-    depart_bside_su_for_request.add_precondition(su_aside_distance(depart_bside_su_for_request.su) >= bstack_distance(depart_bside_su_for_request.l) - su_length(depart_bside_su_for_request.su))
+    pass
     depart_bside_su_for_request.add_effect(active_su(depart_bside_su_for_request.su), False)
     depart_bside_su_for_request.add_effect(at_su(depart_bside_su_for_request.su, depart_bside_su_for_request.l), False)
     depart_bside_su_for_request.add_effect(at_su(depart_bside_su_for_request.su, phantom_track), True)
     depart_bside_su_for_request.add_effect(departed_su(depart_bside_su_for_request.su), True)
+    depart_bside_su_for_request.add_effect(occupied_length(depart_bside_su_for_request.l), occupied_length(depart_bside_su_for_request.l) - su_length(depart_bside_su_for_request.su))
     depart_bside_su_for_request.add_effect(request_departed(depart_bside_su_for_request.request), True)
     depart_bside_su_for_request.add_effect(num_of_departed_trains(), num_of_departed_trains() + 1)
     depart_bside_su_for_request.add_effect(number_of_trains_on_track(depart_bside_su_for_request.l), number_of_trains_on_track(depart_bside_su_for_request.l) - 1)
-    depart_bside_su_for_request.add_effect(su_aside_distance(depart_bside_su_for_request.su), 0)
-    depart_bside_su_for_request.add_effect(bstack_distance(depart_bside_su_for_request.l), bstack_distance(depart_bside_su_for_request.l) - su_length(depart_bside_su_for_request.su))
+    pass
+    pass
     depart_bside_su_for_request.add_effect(concurrent_movements, concurrent_movements - 1)
     depart_bside_su_for_request.add_effect(allowed_to_move_su(depart_bside_su_for_request.su), False)
+    # Request departures apply the same B-side order update as regular SU
+    # departures, exposing the immediate neighbour after the train leaves.
+    _v_depart_bside_su_for_request = up.Variable("v_depart_bside_su_for_request", shunting_unit_type)
+    depart_bside_su_for_request.add_precondition(frontmost_b_su(depart_bside_su_for_request.su))
+    depart_bside_su_for_request.add_effect(fluent=frontmost_b_su(_v_depart_bside_su_for_request), value=True, condition=behind_su(depart_bside_su_for_request.su, _v_depart_bside_su_for_request), forall=[_v_depart_bside_su_for_request])
+    depart_bside_su_for_request.add_effect(fluent=behind_su(depart_bside_su_for_request.su, _v_depart_bside_su_for_request), value=False, condition=behind_su(depart_bside_su_for_request.su, _v_depart_bside_su_for_request), forall=[_v_depart_bside_su_for_request])
+    depart_bside_su_for_request.add_effect(frontmost_b_su(depart_bside_su_for_request.su), False)
     problem.add_action(depart_bside_su_for_request)
 
     part_of_composition = problem.add_fluent(up.Fluent("part_of_composition", up.BoolType(), unit=train_unit_type, composition=arrival_composition_type), default_initial_value=False)
@@ -762,13 +855,26 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     split_two_unit_su.add_effect(at_su(split_two_unit_su.parent_su, split_two_unit_su.track), False)
     split_two_unit_su.add_effect(at_su(split_two_unit_su.left_su, split_two_unit_su.track), True)
     split_two_unit_su.add_effect(at_su(split_two_unit_su.right_su, split_two_unit_su.track), True)
-    split_two_unit_su.add_effect(su_aside_distance(split_two_unit_su.left_su), su_aside_distance(split_two_unit_su.parent_su))
-    split_two_unit_su.add_effect(su_aside_distance(split_two_unit_su.right_su), su_aside_distance(split_two_unit_su.parent_su) + su_length(split_two_unit_su.left_su))
+    pass
+    pass
     split_two_unit_su.add_effect(number_of_trains_on_track(split_two_unit_su.track), number_of_trains_on_track(split_two_unit_su.track) + 1)
     split_two_unit_su.add_effect(available(split_two_unit_su.unit_a), True)
     split_two_unit_su.add_effect(available(split_two_unit_su.unit_b), True)
     split_two_unit_su.add_effect(part_of_composition(split_two_unit_su.unit_a, split_two_unit_su.composition), False)
     split_two_unit_su.add_effect(part_of_composition(split_two_unit_su.unit_b, split_two_unit_su.composition), False)
+    # Replace the parent SU with two adjacent children while preserving the
+    # parent's external neighbours and accessible track ends.
+    _s2f = up.Variable("s2f", shunting_unit_type)
+    _s2b = up.Variable("s2b", shunting_unit_type)
+    split_two_unit_su.add_effect(fluent=frontmost_a_su(split_two_unit_su.left_su), value=True, condition=frontmost_a_su(split_two_unit_su.parent_su))
+    split_two_unit_su.add_effect(fluent=frontmost_b_su(split_two_unit_su.right_su), value=True, condition=frontmost_b_su(split_two_unit_su.parent_su))
+    split_two_unit_su.add_effect(frontmost_a_su(split_two_unit_su.parent_su), False)
+    split_two_unit_su.add_effect(frontmost_b_su(split_two_unit_su.parent_su), False)
+    split_two_unit_su.add_effect(behind_su(split_two_unit_su.right_su, split_two_unit_su.left_su), True)
+    split_two_unit_su.add_effect(fluent=behind_su(split_two_unit_su.parent_su, _s2f), value=False, condition=behind_su(split_two_unit_su.parent_su, _s2f), forall=[_s2f])
+    split_two_unit_su.add_effect(fluent=behind_su(split_two_unit_su.left_su, _s2f), value=True, condition=behind_su(split_two_unit_su.parent_su, _s2f), forall=[_s2f])
+    split_two_unit_su.add_effect(fluent=behind_su(_s2b, split_two_unit_su.parent_su), value=False, condition=behind_su(_s2b, split_two_unit_su.parent_su), forall=[_s2b])
+    split_two_unit_su.add_effect(fluent=behind_su(_s2b, split_two_unit_su.right_su), value=True, condition=behind_su(_s2b, split_two_unit_su.parent_su), forall=[_s2b])
     problem.add_action(split_two_unit_su)
 
     split_three_unit_su = up.InstantaneousAction(
@@ -817,9 +923,9 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     split_three_unit_su.add_effect(at_su(split_three_unit_su.first_su, split_three_unit_su.track), True)
     split_three_unit_su.add_effect(at_su(split_three_unit_su.second_su, split_three_unit_su.track), True)
     split_three_unit_su.add_effect(at_su(split_three_unit_su.third_su, split_three_unit_su.track), True)
-    split_three_unit_su.add_effect(su_aside_distance(split_three_unit_su.first_su), su_aside_distance(split_three_unit_su.parent_su))
-    split_three_unit_su.add_effect(su_aside_distance(split_three_unit_su.second_su), su_aside_distance(split_three_unit_su.parent_su) + su_length(split_three_unit_su.first_su))
-    split_three_unit_su.add_effect(su_aside_distance(split_three_unit_su.third_su), su_aside_distance(split_three_unit_su.parent_su) + su_length(split_three_unit_su.first_su) + su_length(split_three_unit_su.second_su))
+    pass
+    pass
+    pass
     split_three_unit_su.add_effect(number_of_trains_on_track(split_three_unit_su.track), number_of_trains_on_track(split_three_unit_su.track) + 2)
     split_three_unit_su.add_effect(available(split_three_unit_su.unit_a), True)
     split_three_unit_su.add_effect(available(split_three_unit_su.unit_b), True)
@@ -827,6 +933,20 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     split_three_unit_su.add_effect(part_of_composition(split_three_unit_su.unit_a, split_three_unit_su.composition), False)
     split_three_unit_su.add_effect(part_of_composition(split_three_unit_su.unit_b, split_three_unit_su.composition), False)
     split_three_unit_su.add_effect(part_of_composition(split_three_unit_su.unit_c, split_three_unit_su.composition), False)
+    # Replace the parent SU with three adjacent children in unit order while
+    # preserving the parent's external neighbours and accessible track ends.
+    _s3f = up.Variable("s3f", shunting_unit_type)
+    _s3b = up.Variable("s3b", shunting_unit_type)
+    split_three_unit_su.add_effect(fluent=frontmost_a_su(split_three_unit_su.first_su), value=True, condition=frontmost_a_su(split_three_unit_su.parent_su))
+    split_three_unit_su.add_effect(fluent=frontmost_b_su(split_three_unit_su.third_su), value=True, condition=frontmost_b_su(split_three_unit_su.parent_su))
+    split_three_unit_su.add_effect(frontmost_a_su(split_three_unit_su.parent_su), False)
+    split_three_unit_su.add_effect(frontmost_b_su(split_three_unit_su.parent_su), False)
+    split_three_unit_su.add_effect(behind_su(split_three_unit_su.second_su, split_three_unit_su.first_su), True)
+    split_three_unit_su.add_effect(behind_su(split_three_unit_su.third_su, split_three_unit_su.second_su), True)
+    split_three_unit_su.add_effect(fluent=behind_su(split_three_unit_su.parent_su, _s3f), value=False, condition=behind_su(split_three_unit_su.parent_su, _s3f), forall=[_s3f])
+    split_three_unit_su.add_effect(fluent=behind_su(split_three_unit_su.first_su, _s3f), value=True, condition=behind_su(split_three_unit_su.parent_su, _s3f), forall=[_s3f])
+    split_three_unit_su.add_effect(fluent=behind_su(_s3b, split_three_unit_su.parent_su), value=False, condition=behind_su(_s3b, split_three_unit_su.parent_su), forall=[_s3b])
+    split_three_unit_su.add_effect(fluent=behind_su(_s3b, split_three_unit_su.third_su), value=True, condition=behind_su(_s3b, split_three_unit_su.parent_su), forall=[_s3b])
     problem.add_action(split_three_unit_su)
 
     slot_coupled = problem.add_fluent(up.Fluent("slot_coupled", up.BoolType(), slot=request_slot_type), default_initial_value=False)
@@ -874,7 +994,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     couple_two_sus.add_effect(at_su(couple_two_sus.su_a, couple_two_sus.track), False)
     couple_two_sus.add_effect(at_su(couple_two_sus.su_b, couple_two_sus.track), False)
     couple_two_sus.add_effect(at_su(couple_two_sus.su_result, couple_two_sus.track), True)
-    couple_two_sus.add_effect(su_aside_distance(couple_two_sus.su_result), su_aside_distance(couple_two_sus.su_a))
+    pass
     couple_two_sus.add_effect(su_length(couple_two_sus.su_result), su_length(couple_two_sus.su_a) + su_length(couple_two_sus.su_b))
     couple_two_sus.add_effect(number_of_trains_on_track(couple_two_sus.track), number_of_trains_on_track(couple_two_sus.track) - 1)
     couple_two_sus.add_effect(contains_su(couple_two_sus.su_result, couple_two_sus.unit_a), True)
@@ -885,6 +1005,22 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     couple_two_sus.add_effect(coupled_to_request(couple_two_sus.unit_b, couple_two_sus.request), True)
     couple_two_sus.add_effect(physically_coupled(couple_two_sus.unit_a, couple_two_sus.unit_b), True)
     couple_two_sus.add_effect(request_assembled(couple_two_sus.request), True)
+    # Replace two adjacent input SUs with their coupled result. The result
+    # inherits their external neighbours and accessible track ends.
+    _cpn = up.Variable("cpn", shunting_unit_type)
+    couple_two_sus.add_precondition(up.Or(behind_su(couple_two_sus.su_a, couple_two_sus.su_b), behind_su(couple_two_sus.su_b, couple_two_sus.su_a)))
+    couple_two_sus.add_effect(fluent=frontmost_a_su(couple_two_sus.su_result), value=True, condition=up.Or(frontmost_a_su(couple_two_sus.su_a), frontmost_a_su(couple_two_sus.su_b)))
+    couple_two_sus.add_effect(fluent=frontmost_b_su(couple_two_sus.su_result), value=True, condition=up.Or(frontmost_b_su(couple_two_sus.su_a), frontmost_b_su(couple_two_sus.su_b)))
+    couple_two_sus.add_effect(frontmost_a_su(couple_two_sus.su_a), False)
+    couple_two_sus.add_effect(frontmost_b_su(couple_two_sus.su_a), False)
+    couple_two_sus.add_effect(frontmost_a_su(couple_two_sus.su_b), False)
+    couple_two_sus.add_effect(frontmost_b_su(couple_two_sus.su_b), False)
+    couple_two_sus.add_effect(fluent=behind_su(_cpn, couple_two_sus.su_result), value=True, condition=up.And(up.Or(behind_su(_cpn, couple_two_sus.su_a), behind_su(_cpn, couple_two_sus.su_b)), up.Not(up.Equals(_cpn, couple_two_sus.su_a)), up.Not(up.Equals(_cpn, couple_two_sus.su_b))), forall=[_cpn])
+    couple_two_sus.add_effect(fluent=behind_su(couple_two_sus.su_result, _cpn), value=True, condition=up.And(up.Or(behind_su(couple_two_sus.su_a, _cpn), behind_su(couple_two_sus.su_b, _cpn)), up.Not(up.Equals(_cpn, couple_two_sus.su_a)), up.Not(up.Equals(_cpn, couple_two_sus.su_b))), forall=[_cpn])
+    couple_two_sus.add_effect(fluent=behind_su(_cpn, couple_two_sus.su_a), value=False, condition=behind_su(_cpn, couple_two_sus.su_a), forall=[_cpn])
+    couple_two_sus.add_effect(fluent=behind_su(couple_two_sus.su_a, _cpn), value=False, condition=behind_su(couple_two_sus.su_a, _cpn), forall=[_cpn])
+    couple_two_sus.add_effect(fluent=behind_su(_cpn, couple_two_sus.su_b), value=False, condition=behind_su(_cpn, couple_two_sus.su_b), forall=[_cpn])
+    couple_two_sus.add_effect(fluent=behind_su(couple_two_sus.su_b, _cpn), value=False, condition=behind_su(couple_two_sus.su_b, _cpn), forall=[_cpn])
     problem.add_action(couple_two_sus)
 
     service_su = up.InstantaneousAction('service_su', su=shunting_unit_type, l=track_part_type, f=facility_type_type)
@@ -914,8 +1050,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     match.add_effect(slot_filled(match.slot), True)
     match.add_effect(available(match.unit), False)
     match.add_effect(slot_open(match.slot), False)
-    # Keep matching planner-controlled by default; prematched problems encode
-    # the equivalent action effects directly in their initial state.
     if not precompute_matching:
         problem.add_action(match)
 
@@ -1082,8 +1216,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     # Write back initial stacking distances for tracks that start occupied.
     for track_id, occupied_length_value in track_occupancies.items():
         track_obj = id_to_track_part[track_id]
-        problem.set_initial_value(astack_distance(track_obj), up.Real(Fraction(0)))
-        problem.set_initial_value(bstack_distance(track_obj), up.Real(occupied_length_value))
+        pass
+        problem.set_initial_value(occupied_length(track_obj), up.Real(occupied_length_value))
         problem.set_initial_value(number_of_trains_on_track(track_obj), up.Int(track_train_counts.get(track_id, 0)))
 
     # --- Create shunting units for all trains ---
@@ -1092,6 +1226,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     # single-unit SUs for the split action to activate.
 
     in_train_sus = []
+    track_initial_su_order = {}
     for source, index, train in all_trains_with_source(scenario_object):
         preferred_track_keys = ["firstParkingTrackPart", "entryTrackPart"] if source == "inStanding" else ["entryTrackPart", "firstParkingTrackPart"]
         initial_track_id = _train_initial_track_id(train, preferred_track_keys)
@@ -1119,8 +1254,9 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 problem.set_initial_value(su_arrival_track(shunting_unit, id_to_track_part[initial_track_id]), True)
         elif initial_track_id in id_to_track_part:
             problem.set_initial_value(at_su(shunting_unit, id_to_track_part[initial_track_id]), True)
+            track_initial_su_order.setdefault(initial_track_id, []).append(shunting_unit)
             su_aside = train_initial_aside.get(_train_object_name(source, index, train), Fraction(0))
-            problem.set_initial_value(su_aside_distance(shunting_unit), up.Real(su_aside))
+            pass
         composition_obj = None
         if len(train_members) > 1:
             composition_obj = problem.add_object("composition" + train["id"], arrival_composition_type)
@@ -1158,6 +1294,14 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     # Enforce arrival order: sort inbound trains by arrival time and chain the
     # arrival-precedence fluents so each train can only arrive after the previous one.
+    # Initialize each occupied track from A-side to B-side. The first and last
+    # SUs are frontmost at their ends, and consecutive SUs become neighbours.
+    for _tid, _sus in track_initial_su_order.items():
+        problem.set_initial_value(frontmost_a_su(_sus[0]), True)
+        problem.set_initial_value(frontmost_b_su(_sus[-1]), True)
+        for _front, _back in zip(_sus, _sus[1:]):
+            problem.set_initial_value(behind_su(_back, _front), True)
+
     if in_train_sus:
         in_train_sus.sort(key=lambda p: p[0])
         problem.set_initial_value(su_previous_arrived(in_train_sus[0][1]), True)
@@ -1190,7 +1334,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     # Single-unit requests require a departure action; two-unit requests require
     # assembly (couple) followed by departure of the assembled SU.
     request_objs = {}
-    # Preserve slot order and requested types for deterministic pre-matching.
     departure_slot_records = []
     for request in out_requests:
         if len(request["trainUnits"]) > 2:
@@ -1233,8 +1376,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             problem.add_goal(request_assembled(request_obj))
             problem.add_goal(departed_su(request_su))
 
-    # Apply the selected assignment exactly as the omitted match actions would:
-    # matched units become unavailable and their filled slots become closed.
     if precompute_matching:
         assignment = _select_precomputed_matching(
             unit_type_by_id, departure_slot_records, matching_variant

@@ -111,8 +111,6 @@ def setup_logging(level=logging.INFO):
     root.addHandler(console_handler)
     root.addHandler(file_handler)
 
-    logging.getLogger("unified_planning").setLevel(logging.WARNING)
-
     logger.info("Log file: %s", log_file)
 
 
@@ -231,7 +229,7 @@ def _find_java():
 def plan(pddl_path, timeout=None):
     """
     Solve one PDDL instance with ENHSP.
-    Tries the local ENHSP jar first, falls back to unified-planning OneshotPlanner.
+    Always uses the local ENHSP jar. Unified Planning fallback is intentionally disabled.
 
     Returns:
         tuple: (plan_found, plan_path, plan_length, planner_status)
@@ -242,6 +240,14 @@ def plan(pddl_path, timeout=None):
 
     enhsp_jar = _find_enhsp_jar()
     java = _find_java()
+
+    if not enhsp_jar:
+        logger.error("  local ENHSP jar not available; expected tools/planners/enhsp/enhsp.jar")
+        return False, None, 0, "MISSING_ENHSP_JAR"
+
+    if not java:
+        logger.error("  Java not available; install Java 17+ or set JAVA_HOME")
+        return False, None, 0, "MISSING_JAVA"
 
     if enhsp_jar and java:
         cmd = [java, "-jar", enhsp_jar, "-sp", plan_path, "-h", ENHSP_HEURISTIC, "-s", "wa_star_4",
@@ -279,49 +285,8 @@ def plan(pddl_path, timeout=None):
             logger.warning("  no plan found by ENHSP (unknown reason)")
             return False, None, 0, "UNKNOWN"
 
-    # Fallback: use unified-planning's OneshotPlanner
-    logger.info("  local ENHSP jar not available, falling back to OneshotPlanner")
-    try:
-        from unified_planning.io import PDDLReader
-        from unified_planning.shortcuts import OneshotPlanner
-        from unified_planning.engines import PlanGenerationResultStatus
-
-        reader = PDDLReader()
-        problem = reader.parse_problem(DOMAIN_FILE, pddl_path)
-        timeout_sec = timeout if timeout else 300
-
-        with OneshotPlanner(name="enhsp") as planner:
-            result = planner.solve(problem, timeout=timeout_sec)
-
-        status = result.status
-        status_name = status.name  # actual UP code, e.g. "SOLVED_SATISFICING"
-
-        SUCCESS = (
-            PlanGenerationResultStatus.SOLVED_SATISFICING,
-            PlanGenerationResultStatus.SOLVED_OPTIMALLY,
-        )
-
-        if status in SUCCESS and result.plan is not None:
-            os.makedirs(os.path.dirname(plan_path), exist_ok=True)
-            with open(plan_path, "w") as f:
-                f.write(str(result.plan))
-            plan_lines = str(result.plan).strip().split("\n")
-            plan_length = len([l for l in plan_lines if l.strip()])
-            logger.info("      solved by OneshotPlanner (%s): %d actions",
-                        status_name, plan_length)
-            logger.debug("Plan written to %s", plan_path)
-            return True, plan_path, plan_length, status_name
-        else:
-            logger.warning("  no plan from OneshotPlanner: %s (status=%s)",
-                        rel, status_name)
-            return False, None, 0, status_name
-
-    except Exception as e:
-        logger.exception("  OneshotPlanner fallback failed for %s: %s", rel, e)
-        return False, None, 0, "ERROR"
-
 def plan_with_julia(pddl_path, timeout=300):
-    """Solve one PDDL instance with SymbolicPlanners.jl."""
+    """Solve one PDDL instance with SymbolicPlanners.jl A*."""
 
     rel = os.path.relpath(pddl_path, DATA_DIR)
 
@@ -406,7 +371,7 @@ def process_scenario(scenario_path, idx, total, run_id, use_examples, planner):
         pddl_path = convert(scenario_path, use_examples=use_examples, write_domain=False)
 
         if planner == "enhsp":
-            plan_found, plan_path, plan_length, planner_status = plan(pddl_path, timeout = 600)
+            plan_found, plan_path, plan_length, planner_status = plan(pddl_path, timeout=600)
         else:
             plan_found, plan_path, plan_length, planner_status = plan_with_julia(pddl_path)
 

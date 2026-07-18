@@ -5,6 +5,7 @@ Discover locations and scenarios, then convert to PDDL and/or run the planner.
 import os
 import sys
 import subprocess
+import shutil
 import time
 import questionary
 from questionary import Style
@@ -23,7 +24,16 @@ JULIA = "julia"
 
 
 def _find_enhsp_jar():
-    """Return path to enhsp.jar, checking the venv-installed up_enhsp package first."""
+    """Return path to enhsp.jar, preferring the local project copy."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(here, "tools", "planners", "enhsp", "enhsp.jar"),
+        os.path.join(here, "tools", "planners", "enhsp", "enhsp-dist", "enhsp.jar"),
+    ]
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+
     import importlib.util
     spec = importlib.util.find_spec("up_enhsp")
     if spec:
@@ -38,6 +48,8 @@ def _find_java17():
     java_home = os.environ.get("JAVA_HOME", "")
     candidates = [
         os.path.join(java_home, "bin", "java") if java_home else None,
+        shutil.which("java"),
+        r"C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot\bin\java.exe",
         "/opt/homebrew/opt/openjdk@17/bin/java",
         "/usr/local/opt/openjdk@17/bin/java",
     ]
@@ -207,7 +219,6 @@ def run_planner(location, scenario_name, run_num, planner_backend="enhsp"):
     env = os.environ.copy()
     if planner_backend == "enhsp":
         jar = _find_enhsp_jar()
-        jar = False
         if jar:
             env["ENHSP_JAR"] = jar
         else:
