@@ -157,13 +157,13 @@ def build_track_lookup(location):
         name_lower = track_name.lower()
         
         lookup["o_" + name_lower] = {
-            "name": track["id"],
+            "name": track["name"],
             "trackPartId": track["id"]
         }
         
         # Also add bare name for tracks referenced without "o_" prefix (e.g. stootblok906b)
         lookup[name_lower] = {
-            "name": track["id"],
+            "name": track["name"],
             "trackPartId": track["id"]
         }
 
@@ -173,7 +173,7 @@ def build_track_lookup(location):
 def build_track_id_lookup(location):
     """Build reverse lookup from track ID to track info"""
     return {
-        tp["id"]: {"name": tp["id"], "trackPartId": tp["id"]}
+        tp["id"]: {"name": tp["name"], "trackPartId": tp["id"]}
         for tp in location["trackParts"]
     }
 
@@ -231,7 +231,7 @@ def convert_track(track_name, track_lookup):
     if track_name in track_lookup:
         info = track_lookup[track_name]
         return {
-            "name": info["trackPartId"],
+            "name": info["name"],
             "trackPartId": info["trackPartId"]
         }
 
