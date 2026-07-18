@@ -1,0 +1,74 @@
+{
+    "in": [
+        {
+            "time": "0",
+            "id": "1000",
+            "sideTrackPart": "42",
+            "parkingTrackPart": "15",
+            "members": [
+                {
+                    "id": "1001",
+                    "typeDisplayName": "SLT-4",
+                    "tasks": [
+                        {
+                            "type": {
+                                "other": "Reinigingsperron"
+                            },
+                            "priority": 1,
+                            "duration": "900",
+                            "requiredSkills": [
+                                "inwendige_reiniging"
+                            ]
+                        }
+                    ]
+                }
+            ],
+            "canDepartFromAnyTrack": true,
+            "standingIndex": 1.0,
+            "minimumDuration": "60"
+        }
+    ],
+    "out": [
+        {
+            "time": "2100",
+            "id": "1000",
+            "sideTrackPart": "41",
+            "parkingTrackPart": "41",
+            "members": [
+                {
+                    "id": "****",
+                    "typeDisplayName": "SLT-4",
+                    "tasks": []
+                }
+            ],
+            "standingIndex": 1.0,
+            "minimumDuration": "60",
+            "canDepartFromAnyTrack": false
+        }
+    ],
+    "inStanding": [],
+    "outStanding": [],
+    "trainUnitTypes": [
+        {
+            "displayName": "SLT-4",
+            "carriages": 4,
+            "length": 69.36,
+            "combineDuration": "180",
+            "splitDuration": "120",
+            "backNormTime": "120",
+            "backAdditionTime": "16",
+            "travelSpeed": "10",
+            "typePrefix": "SLT",
+            "needsElectricity": true,
+            "startUpTime": "0",
+            "needsLoco": false,
+            "isLoco": false,
+            "idPrefix": 0
+        }
+    ],
+    "nonServiceTraffic": [],
+    "disabledTrackPart": [],
+    "workers": [],
+    "startTime": "0",
+    "endTime": "3600"
+}

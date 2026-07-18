@@ -5,6 +5,7 @@ Discover locations and scenarios, then convert to PDDL and/or run the planner.
 import os
 import sys
 import subprocess
+import shutil
 import time
 import questionary
 from questionary import Style
@@ -17,12 +18,22 @@ DATA_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data")
 _CONVERT_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "convert")
 CONVERT_SCRIPT = os.path.join(_CONVERT_DIR, "convert.py")
 PLANNER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "plan", "planner.jl")
+VALIDATE_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "src", "plan", "validate_plan.py")
 PYTHON = sys.executable
 JULIA = "julia"
 
 
 def _find_enhsp_jar():
-    """Return path to enhsp.jar, checking the venv-installed up_enhsp package first."""
+    """Return path to enhsp.jar, preferring the local project copy."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    candidates = [
+        os.path.join(here, "tools", "planners", "enhsp", "enhsp.jar"),
+        os.path.join(here, "tools", "planners", "enhsp", "enhsp-dist", "enhsp.jar"),
+    ]
+    for candidate in candidates:
+        if os.path.isfile(candidate):
+            return candidate
+
     import importlib.util
     spec = importlib.util.find_spec("up_enhsp")
     if spec:
@@ -37,6 +48,8 @@ def _find_java17():
     java_home = os.environ.get("JAVA_HOME", "")
     candidates = [
         os.path.join(java_home, "bin", "java") if java_home else None,
+        shutil.which("java"),
+        r"C:\Program Files\Microsoft\jdk-17.0.18.8-hotspot\bin\java.exe",
         "/opt/homebrew/opt/openjdk@17/bin/java",
         "/usr/local/opt/openjdk@17/bin/java",
     ]
@@ -206,7 +219,6 @@ def run_planner(location, scenario_name, run_num, planner_backend="enhsp"):
     env = os.environ.copy()
     if planner_backend == "enhsp":
         jar = _find_enhsp_jar()
-        jar = False
         if jar:
             env["ENHSP_JAR"] = jar
         else:
@@ -248,6 +260,36 @@ def run_planner(location, scenario_name, run_num, planner_backend="enhsp"):
     return True
 
 
+def run_validation(location, scenario_name, run_num):
+    problem_file, domain_file, plan_file = run_paths(location, scenario_name, run_num)
+
+    if not os.path.exists(problem_file):
+        print(f"  Problem file not found: {os.path.relpath(problem_file, REPO_ROOT)}")
+        return False
+    if not os.path.exists(domain_file):
+        print(f"  Domain file not found: {os.path.relpath(domain_file, REPO_ROOT)}")
+        return False
+    if not os.path.exists(plan_file):
+        print(f"  Plan file not found: {os.path.relpath(plan_file, REPO_ROOT)}")
+        return False
+
+    print(f"\n  Validating  {os.path.relpath(plan_file, REPO_ROOT)}")
+    print(f"  Domain      {os.path.relpath(domain_file, REPO_ROOT)}")
+    print(f"  Problem     {os.path.relpath(problem_file, REPO_ROOT)}\n")
+
+    result = subprocess.run(
+        [PYTHON, VALIDATE_SCRIPT, domain_file, problem_file, plan_file],
+        capture_output=True, text=True,
+    )
+    print(result.stdout)
+    if result.returncode != 0:
+        print(result.stderr)
+        print("  [validation FAILED]")
+        return False
+    print("  [validation OK]")
+    return True
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -275,7 +317,7 @@ def main():
 
     action = questionary.select(
         "Action:",
-        choices=["Convert to PDDL", "Run planner", "Convert then plan"],
+        choices=["Convert to PDDL", "Run planner", "Convert then plan", "Validate plan", "Convert then plan then validate"],
         style=STYLE,
     ).ask()
     if action is None:
@@ -285,7 +327,7 @@ def main():
     print()
 
     planner_backend = "enhsp"
-    if action in ("Run planner", "Convert then plan"):
+    if action in ("Run planner", "Convert then plan", "Convert then plan then validate"):
         selected_planner_backend = questionary.select(
             "Planner backend:",
             choices=list(PLANNER_BACKEND_CHOICES.keys()),
@@ -295,7 +337,7 @@ def main():
             return
         planner_backend = PLANNER_BACKEND_CHOICES[selected_planner_backend]
 
-    if action in ("Convert to PDDL", "Convert then plan"):
+    if action in ("Convert to PDDL", "Convert then plan", "Convert then plan then validate"):
         converters = discover_converters()
         if not converters:
             print("  No converter scripts found under src/convert/")
@@ -311,11 +353,13 @@ def main():
 
         run_num = next_run_number(location, scenario_name)
         ok = run_convert(location, scenario, run_num, convert_script=convert_script)
-        if not ok and action == "Convert then plan":
+        if not ok and action in ("Convert then plan", "Convert then plan then validate"):
             print()
             return
-        if action == "Convert then plan":
-            run_planner(location, scenario_name, run_num, planner_backend=planner_backend)
+        if action in ("Convert then plan", "Convert then plan then validate"):
+            ok = run_planner(location, scenario_name, run_num, planner_backend=planner_backend)
+            if ok and action == "Convert then plan then validate":
+                run_validation(location, scenario_name, run_num)
 
     elif action == "Run planner":
         existing = discover_runs(location, scenario_name)
@@ -330,6 +374,20 @@ def main():
             return
         run_num = int(chosen[3:])
         run_planner(location, scenario_name, run_num, planner_backend=planner_backend)
+
+    elif action == "Validate plan":
+        existing = discover_runs(location, scenario_name)
+        if not existing:
+            print(f"  No existing runs found for {scenario_name}.")
+            print("  Run 'Convert to PDDL' and 'Run planner' first.")
+            print()
+            return
+        choices = [f"run{n}" for n in existing]
+        chosen = questionary.select("Run:", choices=choices, style=STYLE).ask()
+        if chosen is None:
+            return
+        run_num = int(chosen[3:])
+        run_validation(location, scenario_name, run_num)
 
     print()
 

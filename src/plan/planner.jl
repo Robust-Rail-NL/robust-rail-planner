@@ -37,10 +37,11 @@ function parse_args()
     domain_file = length(ARGS) > 0 ? ARGS[1] : joinpath(data_dir, "domain.pddl")
     problem_file = length(ARGS) > 1 ? ARGS[2] : joinpath(data_dir, "scenario_solver_example1.pddl")
     backend = length(ARGS) > 2 ? lowercase(ARGS[3]) : "symbolic"
-    return domain_file, problem_file, backend
+    plan_file = length(ARGS) > 3 ? ARGS[4] : nothing
+    return domain_file, problem_file, backend, plan_file
 end
 
-function run_symbolic_planner(domain_file, problem_file)
+function run_symbolic_planner(domain_file, problem_file, plan_file=nothing)
     println("Planner backend: SymbolicPlanners.jl AStarPlanner(HAdd())")
     println("Loading domain from: ", domain_file)
     domain = load_domain(domain_file)
@@ -49,12 +50,12 @@ function run_symbolic_planner(domain_file, problem_file)
     problem = load_problem(problem_file)
 
     println("Planning...")
-    planner = AStarPlanner(HAdd())
+    planner = WeightedAStarPlanner(HAdd(), 4)
     sol = planner(domain, problem)
 
     if sol.status == :success
         println("Solved problem $(problem.name), plan length $(length(sol.plan))")
-        out_file = replace(problem_file, ".pddl" => ".plan")
+        out_file = plan_file !== nothing ? plan_file : replace(problem_file, ".pddl" => ".plan")
         open(out_file, "w") do file
             write(file, join(sol.plan, '\n'))
         end
@@ -92,10 +93,10 @@ function run_enhsp_planner(domain_file, problem_file)
 end
 
 function run_planner()
-    domain_file, problem_file, backend = parse_args()
+    domain_file, problem_file, backend, plan_file = parse_args()
 
     if backend == "symbolic"
-        ok = run_symbolic_planner(domain_file, problem_file)
+        ok = run_symbolic_planner(domain_file, problem_file, plan_file)
     elseif backend == "enhsp"
         ok = run_enhsp_planner(domain_file, problem_file)
     else

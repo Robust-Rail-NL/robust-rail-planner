@@ -1,0 +1,269 @@
+{
+    "actions": [
+        {
+            "startTime": "0",
+            "endTime": "0",
+            "taskType": {
+                "predefined": "Arrive"
+            },
+            "shuntingUnit": {
+                "id": "0",
+                "members": [
+                    {
+                        "id": "1001",
+                        "type": {
+                            "displayName": "SLT",
+                            "carriages": 4,
+                            "length": 69.36,
+                            "combineDuration": "180",
+                            "splitDuration": "120",
+                            "backNormTime": "120",
+                            "backAdditionTime": "16",
+                            "reversalDuration": "0"
+                        }
+                    }
+                ],
+                "parentIDs": [],
+                "childIDs": [],
+                "standingType": ""
+            },
+            "location": "42",
+            "resources": [
+                {
+                    "name": "Sein70",
+                    "trackPartId": "42"
+                }
+            ],
+            "trainUnitIds": []
+        },
+        {
+            "startTime": "0",
+            "endTime": "600",
+            "taskType": {
+                "predefined": "Move"
+            },
+            "shuntingUnit": {
+                "id": "0",
+                "members": [
+                    {
+                        "id": "1001",
+                        "type": {
+                            "displayName": "SLT",
+                            "carriages": 4,
+                            "length": 69.36,
+                            "combineDuration": "180",
+                            "splitDuration": "120",
+                            "backNormTime": "120",
+                            "backAdditionTime": "16",
+                            "reversalDuration": "0"
+                        }
+                    }
+                ],
+                "parentIDs": [],
+                "childIDs": [],
+                "standingType": ""
+            },
+            "location": "42",
+            "resources": [
+                {
+                    "name": "906a",
+                    "trackPartId": "15"
+                },
+                {
+                    "name": "Wissel963",
+                    "trackPartId": "59"
+                },
+                {
+                    "name": "961_963",
+                    "trackPartId": "24"
+                },
+                {
+                    "name": "Wissel961",
+                    "trackPartId": "58"
+                },
+                {
+                    "name": "960_961",
+                    "trackPartId": "23"
+                },
+                {
+                    "name": "Wissel960",
+                    "trackPartId": "57"
+                },
+                {
+                    "name": "959_960",
+                    "trackPartId": "22"
+                },
+                {
+                    "name": "Wissel959",
+                    "trackPartId": "56"
+                },
+                {
+                    "name": "958_959",
+                    "trackPartId": "20"
+                },
+                {
+                    "name": "Wissel958",
+                    "trackPartId": "55"
+                },
+                {
+                    "name": "958_978",
+                    "trackPartId": "21"
+                },
+                {
+                    "name": "Wissel978",
+                    "trackPartId": "66"
+                },
+                {
+                    "name": "59",
+                    "trackPartId": "8"
+                },
+                {
+                    "name": "Wissel979",
+                    "trackPartId": "67"
+                },
+                {
+                    "name": "969_979",
+                    "trackPartId": "27"
+                },
+                {
+                    "name": "Engels968_969",
+                    "trackPartId": "69"
+                },
+                {
+                    "name": "967_968",
+                    "trackPartId": "26"
+                },
+                {
+                    "name": "Engels966_967",
+                    "trackPartId": "68"
+                },
+                {
+                    "name": "62",
+                    "trackPartId": "11"
+                }
+            ],
+            "trainUnitIds": []
+        },
+        {
+            "startTime": "601",
+            "endTime": "1201",
+            "taskType": {
+                "other": "Reinigingsperron"
+            },
+            "shuntingUnit": {
+                "id": "0",
+                "members": [
+                    {
+                        "id": "1001",
+                        "type": {
+                            "displayName": "SLT",
+                            "carriages": 4,
+                            "length": 69.36,
+                            "combineDuration": "180",
+                            "splitDuration": "120",
+                            "backNormTime": "120",
+                            "backAdditionTime": "16",
+                            "reversalDuration": "0"
+                        }
+                    }
+                ],
+                "parentIDs": [],
+                "childIDs": [],
+                "standingType": ""
+            },
+            "location": "11",
+            "resources": [
+                {
+                    "name": "72",
+                    "facilityId": "72"
+                }
+            ],
+            "trainUnitIds": []
+        },
+        {
+            "startTime": "1202",
+            "endTime": "1802",
+            "taskType": {
+                "predefined": "Move"
+            },
+            "shuntingUnit": {
+                "id": "0",
+                "members": [
+                    {
+                        "id": "1001",
+                        "type": {
+                            "displayName": "SLT",
+                            "carriages": 4,
+                            "length": 69.36,
+                            "combineDuration": "180",
+                            "splitDuration": "120",
+                            "backNormTime": "120",
+                            "backAdditionTime": "16",
+                            "reversalDuration": "0"
+                        }
+                    }
+                ],
+                "parentIDs": [],
+                "childIDs": [],
+                "standingType": ""
+            },
+            "location": "11",
+            "resources": [
+                {
+                    "name": "Engels966_967",
+                    "trackPartId": "68"
+                },
+                {
+                    "name": "967_968",
+                    "trackPartId": "26"
+                },
+                {
+                    "name": "Engels968_969",
+                    "trackPartId": "69"
+                },
+                {
+                    "name": "58",
+                    "trackPartId": "7"
+                }
+            ],
+            "trainUnitIds": []
+        },
+        {
+            "startTime": "2100",
+            "endTime": "2100",
+            "taskType": {
+                "predefined": "Exit"
+            },
+            "shuntingUnit": {
+                "id": "0",
+                "members": [
+                    {
+                        "id": "1001",
+                        "type": {
+                            "displayName": "SLT",
+                            "carriages": 4,
+                            "length": 69.36,
+                            "combineDuration": "180",
+                            "splitDuration": "120",
+                            "backNormTime": "120",
+                            "backAdditionTime": "16",
+                            "reversalDuration": "0"
+                        }
+                    }
+                ],
+                "parentIDs": [],
+                "childIDs": [],
+                "standingType": ""
+            },
+            "location": "7",
+            "resources": [
+                {
+                    "name": "58",
+                    "trackPartId": "7"
+                }
+            ],
+            "trainUnitIds": []
+        }
+    ],
+    "trackParts": []
+}

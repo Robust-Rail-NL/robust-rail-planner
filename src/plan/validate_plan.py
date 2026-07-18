@@ -28,12 +28,17 @@ def parse_plan_file(problem, plan_file):
         if "(" not in line or not line.endswith(")"):
             raise ValueError(f"Invalid syntax at line {line_no}: {line}")
 
-        action_name = line[:line.index("(")]
-        args_string = line[line.index("(")+1:-1]
-
-        args = []
-        if args_string.strip():
-            args = [a.strip() for a in args_string.split(",")]
+        if line.startswith("("):
+            # PDDL-style: (action_name arg1 arg2)
+            inner = line[1:-1]
+            parts = inner.split(None, 1)
+            action_name = parts[0]
+            args = [a.strip() for a in parts[1].split()] if len(parts) > 1 else []
+        else:
+            # Python-style: action_name(arg1, arg2)
+            action_name = line[:line.index("(")]
+            args_string = line[line.index("(")+1:-1]
+            args = [a.strip() for a in args_string.split(",")] if args_string.strip() else []
 
         if action_name not in action_map:
             raise ValueError(f"Unknown action '{action_name}' at line {line_no}")

@@ -48,17 +48,45 @@ robust-rail-plan
 
 Examples
 
-```robust-rail-plan --generate``` 
+```robust-rail-plan --generate```
 
-```robust-rail-plan --examples``` TYCHO USE THIS
+```robust-rail-plan --examples```
 
-```robust-rail-plan --subproblem parking```
+```robust-rail-plan --simple```
 
-```robust-rail-plan --subproblem matching```
+<!-- ```robust-rail-plan --subproblem parking``` -->
 
-```robust-rail-plan --subproblem combined```
+<!-- ```robust-rail-plan --subproblem matching``` -->
+
+<!-- ```robust-rail-plan --subproblem combined``` -->
 
 ```robust-rail-plan --log-level DEBUG```
+
+## Converter variants
+
+| Converter | Main difference |
+| --- | --- |
+| `baseline_no_parameters` | Baseline model with planner-controlled matching and continuous metre-based train positions. |
+| `corridor_no_switch_unlimited_order_servicing_discrete` | Replaces continuous positions with occupied track length and discrete A/B-side blocking, while retaining planner-controlled matching. |
+| `corridor_no_switch_unlimited_order_servicing_discrete_ordered_matching` | Uses the discrete model and precomputes an order-preserving matching before planning. |
+| `corridor_no_switch_unlimited_order_servicing_discrete_compiled_matching` | Uses composition-preserving pre-matching and lower-arity request actions. Complete incoming compositions are reused where possible; other compositions can be uncoupled, moved, and assembled from the front or back. It produces a scenario-specific domain for the selected request sequence. |
+
+### Compiled-matching results
+
+ENHSP runs using the compiled-matching converter produced the following search
+results:
+
+| Scenario | Planning time | Plan length | Expanded nodes |
+| --- | ---: | ---: | ---: |
+| `scenario_solver_example1.json` | 3.429 s | 41 | 617 |
+| `scenario_solver_example2.json` | 0.236 s | 24 | 29 |
+| `scenario_solver_example3.json` | 0.239 s | 21 | 24 |
+| `scenario_solver_random1.json` | 1.934 s | 93 | 169 |
+
+The plans can also be checked with the AI-generated `validate_plan.py` and
+`audit_discrete_plan.py` scripts. These validation scripts have not yet been
+thoroughly independently verified. The two random-distribution scenarios are
+not included in these results.
 
 ## Previous work
 Thesis:
