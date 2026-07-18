@@ -27,7 +27,7 @@
                 "childIDs": [],
                 "standingType": "InStanding"
             },
-            "location": "54",
+            "location": "2",
             "resources": [
                 {
                     "name": "2",
@@ -63,7 +63,7 @@
                 "childIDs": [],
                 "standingType": "InStanding"
             },
-            "location": "56",
+            "location": "3",
             "resources": [
                 {
                     "name": "3",
@@ -556,7 +556,7 @@
         },
         {
             "startTime": "3186",
-            "endTime": "4086",
+            "endTime": "3786",
             "taskType": {
                 "other": "Reinigingsperron"
             },
@@ -591,44 +591,8 @@
             "trainUnitIds": []
         },
         {
-            "startTime": "4087",
-            "endTime": "4087",
-            "taskType": {
-                "predefined": "Exit"
-            },
-            "shuntingUnit": {
-                "id": "3",
-                "members": [
-                    {
-                        "id": "2401",
-                        "type": {
-                            "displayName": "SLT",
-                            "carriages": 4,
-                            "length": 69.36,
-                            "combineDuration": "180",
-                            "splitDuration": "120",
-                            "backNormTime": "120",
-                            "backAdditionTime": "16",
-                            "reversalDuration": "0"
-                        }
-                    }
-                ],
-                "parentIDs": [],
-                "childIDs": [],
-                "standingType": "OutStanding"
-            },
-            "location": "11",
-            "resources": [
-                {
-                    "name": "11",
-                    "trackPartId": "11"
-                }
-            ],
-            "trainUnitIds": []
-        },
-        {
-            "startTime": "4088",
-            "endTime": "4688",
+            "startTime": "3787",
+            "endTime": "4388",
             "taskType": {
                 "predefined": "Move"
             },
@@ -683,8 +647,8 @@
             "trainUnitIds": []
         },
         {
-            "startTime": "4689",
-            "endTime": "5589",
+            "startTime": "4389",
+            "endTime": "4989",
             "taskType": {
                 "other": "Reinigingsperron"
             },
@@ -714,42 +678,6 @@
                 {
                     "name": "72",
                     "facilityId": "72"
-                }
-            ],
-            "trainUnitIds": []
-        },
-        {
-            "startTime": "5590",
-            "endTime": "5590",
-            "taskType": {
-                "predefined": "Exit"
-            },
-            "shuntingUnit": {
-                "id": "4",
-                "members": [
-                    {
-                        "id": "2601",
-                        "type": {
-                            "displayName": "SLT",
-                            "carriages": 6,
-                            "length": 100.54,
-                            "combineDuration": "180",
-                            "splitDuration": "120",
-                            "backNormTime": "120",
-                            "backAdditionTime": "15",
-                            "reversalDuration": "0"
-                        }
-                    }
-                ],
-                "parentIDs": [],
-                "childIDs": [],
-                "standingType": "OutStanding"
-            },
-            "location": "10",
-            "resources": [
-                {
-                    "name": "68",
-                    "trackPartId": "68"
                 }
             ],
             "trainUnitIds": []
@@ -802,6 +730,78 @@
                 {
                     "name": "41",
                     "trackPartId": "41"
+                }
+            ],
+            "trainUnitIds": []
+        },
+        {
+            "startTime": "6200",
+            "endTime": "6200",
+            "taskType": {
+                "predefined": "Exit"
+            },
+            "shuntingUnit": {
+                "id": "3",
+                "members": [
+                    {
+                        "id": "2401",
+                        "type": {
+                            "displayName": "SLT",
+                            "carriages": 4,
+                            "length": 69.36,
+                            "combineDuration": "180",
+                            "splitDuration": "120",
+                            "backNormTime": "120",
+                            "backAdditionTime": "16",
+                            "reversalDuration": "0"
+                        }
+                    }
+                ],
+                "parentIDs": [],
+                "childIDs": [],
+                "standingType": "OutStanding"
+            },
+            "location": "11",
+            "resources": [
+                {
+                    "name": "11",
+                    "trackPartId": "11"
+                }
+            ],
+            "trainUnitIds": []
+        },
+        {
+            "startTime": "6200",
+            "endTime": "6200",
+            "taskType": {
+                "predefined": "Exit"
+            },
+            "shuntingUnit": {
+                "id": "4",
+                "members": [
+                    {
+                        "id": "2601",
+                        "type": {
+                            "displayName": "SLT",
+                            "carriages": 6,
+                            "length": 100.54,
+                            "combineDuration": "180",
+                            "splitDuration": "120",
+                            "backNormTime": "120",
+                            "backAdditionTime": "15",
+                            "reversalDuration": "0"
+                        }
+                    }
+                ],
+                "parentIDs": [],
+                "childIDs": [],
+                "standingType": "OutStanding"
+            },
+            "location": "10",
+            "resources": [
+                {
+                    "name": "10",
+                    "trackPartId": "10"
                 }
             ],
             "trainUnitIds": []

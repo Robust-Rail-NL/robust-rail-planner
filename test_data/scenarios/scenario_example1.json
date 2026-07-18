@@ -128,7 +128,7 @@
             "canDepartFromAnyTrack": true,
             "standingIndex": 1.0,
             "minimumDuration": "60",
-            "time": "4087"
+            "time": "6200"
         },
         {
             "id": "3001",
@@ -144,7 +144,7 @@
             "canDepartFromAnyTrack": true,
             "standingIndex": 1.0,
             "minimumDuration": "60",
-            "time": "5590"
+            "time": "6200"
         }
     ],
     "trainUnitTypes": [

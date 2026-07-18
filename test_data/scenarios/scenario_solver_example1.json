@@ -184,8 +184,8 @@
                     }
                 ],
                 "lastParkingTrackPart": "11",
-                "arrival": "4087",
-                "departure": "4087",
+                "arrival": "6200",
+                "departure": "6200",
                 "standingIndex": 0.0
             },
             {
@@ -207,8 +207,8 @@
                     }
                 ],
                 "lastParkingTrackPart": "10",
-                "arrival": "5590",
-                "departure": "5590",
+                "arrival": "6200",
+                "departure": "6200",
                 "standingIndex": 0.0
             }
         ]
