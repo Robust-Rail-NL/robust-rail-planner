@@ -662,7 +662,9 @@ def run_test_eval():
         logger.info("[test-eval] %s (plan -> converter -> TORS)", label)
         passed = False
         detail = ""
-        json_path = os.path.join(plans_dir, f"{label}_converted.json")
+        converted_dir = os.path.join(test_data_dir, "plans_converted")
+        os.makedirs(converted_dir, exist_ok=True)
+        json_path = os.path.join(converted_dir, f"{label}_converted.json")
         try:
             logger.info("      converting with solver scenario %s",
                         os.path.basename(solver_scenario))
@@ -677,9 +679,6 @@ def run_test_eval():
         except Exception as exc:
             detail = f"FAIL: {exc}"
             logger.error("      %s", detail)
-        # finally:
-            # if os.path.isfile(json_path):
-                # os.remove(json_path)
 
         results.append((label, passed, detail))
         logger.info("      -> %s", "PASS" if passed else "FAIL")
