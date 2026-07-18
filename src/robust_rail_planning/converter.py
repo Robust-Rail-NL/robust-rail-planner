@@ -226,10 +226,17 @@ def make_shunting_unit(train_id, train_lookup, unit_lookup=None, members=None):
     }
 
 
-def convert_track(track_name, track_lookup):
+def convert_track(track_name, track_lookup, track_id_lookup=None):
     """Convert track name to track info"""
     if track_name in track_lookup:
         info = track_lookup[track_name]
+        return {
+            "name": info["name"],
+            "trackPartId": info["trackPartId"]
+        }
+
+    if track_id_lookup and track_name in track_id_lookup:
+        info = track_id_lookup[track_name]
         return {
             "name": info["name"],
             "trackPartId": info["trackPartId"]
@@ -272,9 +279,9 @@ def create_move_action(train_id, start, end, path,
 
 def create_arrive_action(train_id, time, track,
                          train_lookup, track_lookup, unit_lookup=None, 
-                         standing_type=""):
+                         standing_type="", track_id_lookup=None):
     """Create an Arrive action"""
-    resource = convert_track(track, track_lookup)
+    resource = convert_track(track, track_lookup, track_id_lookup)
     shunting_unit = make_shunting_unit(train_id, train_lookup, unit_lookup)
     shunting_unit["standingType"] = standing_type
 
@@ -293,9 +300,9 @@ def create_arrive_action(train_id, time, track,
 
 def create_exit_action(train_id, time, track,
                        train_lookup, track_lookup, unit_lookup=None,
-                       standing_type=""):
+                       standing_type="", track_id_lookup=None):
     """Create an Exit action"""
-    resource = convert_track(track, track_lookup)
+    resource = convert_track(track, track_lookup, track_id_lookup)
     shunting_unit = make_shunting_unit(train_id, train_lookup, unit_lookup)
     shunting_unit["standingType"] = standing_type
 
@@ -314,9 +321,9 @@ def create_exit_action(train_id, time, track,
 
 def create_park_action(train_id, time, track,
                        train_lookup, track_lookup, unit_lookup=None,
-                       standing_type=""):
-    """Create a Park action"""
-    resource = convert_track(track, track_lookup)
+                       standing_type="", track_id_lookup=None):
+    """Create an Park action"""
+    resource = convert_track(track, track_lookup, track_id_lookup)
     shunting_unit = make_shunting_unit(train_id, train_lookup, unit_lookup)
     shunting_unit["standingType"] = standing_type
 
@@ -707,8 +714,8 @@ def convert_plan(plan_file, scenario_file, location_file):
                 }
             
             state = active_trains[train]
-            from_id = convert_track(from_track, track_lookup)["trackPartId"]
-            to_id = convert_track(to_track, track_lookup)["trackPartId"]
+            from_id = convert_track(from_track, track_lookup, track_id_lookup)["trackPartId"]
+            to_id = convert_track(to_track, track_lookup, track_id_lookup)["trackPartId"]
 
             if not state["path"]:
                 state["path"].append(from_id)
@@ -726,7 +733,7 @@ def convert_plan(plan_file, scenario_file, location_file):
             
             if train in active_trains:
                 state = active_trains[train]
-                dest_track = convert_track(track, track_lookup)["trackPartId"]
+                dest_track = convert_track(track, track_lookup, track_id_lookup)["trackPartId"]
                 
                 if not state["path"] and train in train_locations:
                     state["path"] = [train_locations[train], dest_track]
@@ -758,7 +765,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         m = PARK_SU_RE.match(line)
         if m:
             train, track = m.groups()
-            track_id = convert_track(track, track_lookup)["trackPartId"]
+            track_id = convert_track(track, track_lookup, track_id_lookup)["trackPartId"]
             
             if train in active_trains:
                 state = active_trains[train]
@@ -803,7 +810,8 @@ def convert_plan(plan_file, scenario_file, location_file):
                 train_lookup,
                 track_lookup,
                 unit_lookup,
-                standing_type="OutStanding"
+                standing_type="OutStanding",
+                track_id_lookup=track_id_lookup
             )
             actions.append(exit_action)
             current_time = current_time + 1
@@ -821,7 +829,7 @@ def convert_plan(plan_file, scenario_file, location_file):
             if train in active_trains:
                 state = active_trains[train]
                 
-                dest_track = convert_track(track, track_lookup)["trackPartId"]
+                dest_track = convert_track(track, track_lookup, track_id_lookup)["trackPartId"]
                 if not state["path"] and train in train_locations:
                     state["path"] = [train_locations[train], dest_track]
                 
@@ -880,7 +888,8 @@ def convert_plan(plan_file, scenario_file, location_file):
                 exit_track,
                 train_lookup,
                 track_lookup,
-                unit_lookup
+                unit_lookup,
+                track_id_lookup=track_id_lookup
             )
             actions.append(exit_action)
             current_time = max(current_time, exit_time) + 1
@@ -893,7 +902,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         if m:
             su_a, su_b, su_result, unit_a, unit_b, track, slot_a, slot_b, request = m.groups()
             
-            track_id = convert_track(track, track_lookup)["trackPartId"]
+            track_id = convert_track(track, track_lookup, track_id_lookup)["trackPartId"]
             action_loc = track_id
             
             combine_duration = max(
@@ -944,7 +953,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                 parent_su, first_su, second_su, third_su, unit_a, unit_b, unit_c, composition, track = groups
                 child_ids = [first_su, second_su, third_su]
             
-            track_id = convert_track(track, track_lookup)["trackPartId"]
+            track_id = convert_track(track, track_lookup, track_id_lookup)["trackPartId"]
             action_loc = track_id
             
             split_duration = get_train_duration(parent_su, train_lookup, unit_lookup, "split")
@@ -973,7 +982,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         if m:
             su_id, track, pddl_facility = m.groups()
             
-            track_id = convert_track(track, track_lookup)["trackPartId"]
+            track_id = convert_track(track, track_lookup, track_id_lookup)["trackPartId"]
             
             # End active move if the train is currently moving
             if su_id in active_trains:
@@ -1069,7 +1078,7 @@ def convert_plan(plan_file, scenario_file, location_file):
 
     # Post-process: Add Arrive actions and calculate Wait periods
     actions = post_process_actions(actions, train_lookup, unit_lookup, track_lookup, 
-                                   train_locations_int, train_arrival_times_int, scenario, get_su_id,
+                                   track_id_lookup, train_locations_int, train_arrival_times_int, scenario, get_su_id,
                                    parkable_tracks)
     
     # Fill in missing members/parentIDs/childIDs for actions that reference SUs
@@ -1114,7 +1123,7 @@ def convert_plan(plan_file, scenario_file, location_file):
 
 
 def post_process_actions(actions, train_lookup, unit_lookup, track_lookup, 
-                         train_locations, train_arrival_times, scenario, su_id_fn=None,
+                         track_id_lookup, train_locations, train_arrival_times, scenario, su_id_fn=None,
                          parkable_tracks=None):
     """Add Arrive actions and Wait periods to make the plan realistic"""
     
@@ -1185,15 +1194,21 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
                 standing_type = "OutStanding"
             
             # Add Arrive action
-            arrive_action = create_arrive_action(
-                cur_su_id,
-                arrive_time,
-                arrive_location,
-                train_lookup,
-                track_lookup,
-                unit_lookup,
-                standing_type
-            )
+            if arrive_location in track_id_lookup:
+                resource = track_id_lookup[arrive_location]
+            else:
+                resource = convert_track(arrive_location, track_lookup)
+            shunting_unit = make_shunting_unit(cur_su_id, train_lookup, unit_lookup)
+            shunting_unit["standingType"] = standing_type
+            arrive_action = {
+                "startTime": str(arrive_time),
+                "endTime": str(arrive_time),
+                "taskType": {"predefined": "Arrive"},
+                "shuntingUnit": shunting_unit,
+                "location": resource["trackPartId"],
+                "resources": [resource],
+                "trainUnitIds": []
+            }
             processed_actions.append(arrive_action)
             
 
