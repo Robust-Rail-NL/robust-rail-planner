@@ -677,9 +677,9 @@ def run_test_eval():
         except Exception as exc:
             detail = f"FAIL: {exc}"
             logger.error("      %s", detail)
-        finally:
-            if os.path.isfile(json_path):
-                os.remove(json_path)
+        # finally:
+            # if os.path.isfile(json_path):
+                # os.remove(json_path)
 
         results.append((label, passed, detail))
         logger.info("      -> %s", "PASS" if passed else "FAIL")

@@ -849,12 +849,20 @@ def convert_plan(plan_file, scenario_file, location_file):
             # Determine departure time: look up from request, but never before the move finishes
             exit_time = current_time
             if len(groups) > 4 and not train.startswith("su_request"):
-                # depart_*_for_request: group[3] is the request name
-                req_name_from_action = groups[3] if len(groups) > 3 else ""
+                # depart_*_for_request: group[4] is the request name
+                req_name_from_action = groups[4] if len(groups) > 4 else ""
                 if req_name_from_action in request_lookup:
                     dep = request_lookup[req_name_from_action].get("arrival")
                     if dep is not None:
                         exit_time = max(int(dep), current_time)
+                else:
+                    # Fallback: PDDL request names may differ from scenario names,
+                    # so use the departure time from the scenario's outgoing requests
+                    for req in scenario.get("out", {}).get("trainRequests", []):
+                        dep = req.get("arrival")
+                        if dep is not None:
+                            exit_time = max(int(dep), current_time)
+                            break
             elif train in su_departure_time:
                 exit_time = max(su_departure_time[train], current_time)
             elif train.startswith("su_request"):

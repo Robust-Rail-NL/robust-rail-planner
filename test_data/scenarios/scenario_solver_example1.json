@@ -73,8 +73,8 @@
         "trainRequests": [
             {
                 "leaveTrackPart": "42",
-                "arrival": "1500",
-                "departure": "1500",
+                "arrival": "6192",
+                "departure": "6192",
                 "displayName": "4000",
                 "trainUnits": [
                     {
@@ -184,8 +184,8 @@
                     }
                 ],
                 "lastParkingTrackPart": "11",
-                "arrival": "0",
-                "departure": "0",
+                "arrival": "4087",
+                "departure": "4087",
                 "standingIndex": 0.0
             },
             {
@@ -207,12 +207,12 @@
                     }
                 ],
                 "lastParkingTrackPart": "10",
-                "arrival": "0",
-                "departure": "0",
+                "arrival": "5590",
+                "departure": "5590",
                 "standingIndex": 0.0
             }
         ]
     },
-    "endTime": "3600",
+    "endTime": "6200",
     "startTime": "0"
 }

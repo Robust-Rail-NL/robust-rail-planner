@@ -57,7 +57,7 @@
     ],
     "out": [
         {
-            "time": "1500",
+            "time": "6192",
             "id": "4000",
             "sideTrackPart": "42",
             "parkingTrackPart": "15",
@@ -78,7 +78,7 @@
             "canDepartFromAnyTrack": false
         }
     ],
-    "endTime": "3600",
+    "endTime": "6200",
     "inStanding": [
         {
             "id": "4002",
@@ -128,7 +128,7 @@
             "canDepartFromAnyTrack": true,
             "standingIndex": 1.0,
             "minimumDuration": "60",
-            "time": "0"
+            "time": "4087"
         },
         {
             "id": "3001",
@@ -144,7 +144,7 @@
             "canDepartFromAnyTrack": true,
             "standingIndex": 1.0,
             "minimumDuration": "60",
-            "time": "0"
+            "time": "5590"
         }
     ],
     "trainUnitTypes": [
