@@ -11,11 +11,18 @@ import re
 import shutil
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from convert.baseline_no_parameters.convert import create_instance_from_scenario
 from .evaluate import evaluate
 from .generate import generate
 from . import converter
 from local_search.solve import solve, UnsolvableScenarioError
+
+def _load_converter(model):
+    """Dynamically import the create_instance_from_scenario function from the
+    chosen PDDL model directory."""
+    import importlib
+    module = importlib.import_module(f"convert.{model}.convert")
+    return module.create_instance_from_scenario
+
 
 # PATHS
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # planning-approach
@@ -159,7 +166,7 @@ def append_result(results_file, row, fieldnames=RESULTS_FIELDNAMES):
         writer.writerow(row)
 
 # CONVERT SCENARIO TO PDDL
-def convert(scenario_path, use_examples=False, write_domain=True):
+def convert(scenario_path, use_examples=False, write_domain=True, model="baseline_no_parameters"):
     """Convert a single scenario to PDDL. Returns the output .pddl path.
 
     Set write_domain=False to skip (re)writing the shared DOMAIN_FILE. The
@@ -177,6 +184,7 @@ def convert(scenario_path, use_examples=False, write_domain=True):
     os.makedirs(os.path.dirname(pddl_path), exist_ok=True)
     os.makedirs(os.path.dirname(DOMAIN_FILE), exist_ok=True)
 
+    create_instance_from_scenario = _load_converter(model)
     create_instance_from_scenario(
         scenario_file=scenario_path,
         output_file=pddl_path,
@@ -184,7 +192,7 @@ def convert(scenario_path, use_examples=False, write_domain=True):
         domain_file=DOMAIN_FILE if write_domain else None,
     )
 
-    logging.info("      converted scenario to PDDL")
+    logging.info("      converted scenario to PDDL (model=%s)", model)
     return pddl_path
 
 
@@ -344,7 +352,7 @@ def archive_plan(plan_path):
     return archived
 
 
-def process_scenario(scenario_path, idx, total, run_id, use_examples, planner):
+def process_scenario(scenario_path, idx, total, run_id, use_examples, planner, model="baseline_no_parameters", use_tors=False):
     """Run the full per-scenario pipeline (convert -> plan -> convert plan to
     TORS JSON -> evaluate) for one scenario.
 
@@ -368,7 +376,7 @@ def process_scenario(scenario_path, idx, total, run_id, use_examples, planner):
     error = ""
 
     try:
-        pddl_path = convert(scenario_path, use_examples=use_examples, write_domain=False)
+        pddl_path = convert(scenario_path, use_examples=use_examples, write_domain=False, model=model)
 
         if planner == "enhsp":
             plan_found, plan_path, plan_length, planner_status = plan(pddl_path, timeout=600)
@@ -393,6 +401,8 @@ def process_scenario(scenario_path, idx, total, run_id, use_examples, planner):
             )
 
             # evaluate(tors_scenario_path, json_path)
+            if use_tors:
+                evaluate(tors_scenario_path, json_path)
         else:
             logger.warning("  skipping evaluation because no plan was found")
 
@@ -427,17 +437,18 @@ def process_scenario(scenario_path, idx, total, run_id, use_examples, planner):
     return row, records
 
 
-def process_simple_scenario(planner="astar"):
+def process_simple_scenario(planner="enhsp", model="baseline_no_parameters"):
     """Convert, plan, and evaluate the simple scenario using TORS."""
     solver_scenario_path = os.path.join(SCENARIOS_DIR, "scenario_solver_simple.json")
     tors_scenario_path = os.path.join(SCENARIOS_DIR, "scenario_simple.json")
     location_path = LOCATION_FILE
 
     # Step 1: Convert to PDDL
-    logger.info("Converting simple scenario to PDDL")
+    logger.info("Converting simple scenario to PDDL (model=%s)", model)
     pddl_path = os.path.join(DATA_DIR, "scenario_solver_simple.pddl")
     os.makedirs(os.path.dirname(pddl_path), exist_ok=True)
 
+    create_instance_from_scenario = _load_converter(model)
     create_instance_from_scenario(
         scenario_file=solver_scenario_path,
         output_file=pddl_path,
@@ -658,9 +669,10 @@ def run_test_eval(ignore_time=False):
     logger.info("  %d passed, %d failed, %d total", n_pass, n_fail, len(results))
 
 
-def run_pipeline(do_generate=False, use_examples=False, planner="astar",
-                 do_local_search=False, max_workers=10, simple_scenario=False,
-                 test_eval=False, ignore_time=False):
+def run_pipeline(do_generate=False, use_examples=False, planner="enhsp",
+                 model="baseline_no_parameters", do_local_search=False,
+                 max_workers=10, simple_scenario=False,
+                 test_eval=False, ignore_time=False, use_tors=False):
     if do_generate:
         logger.info("Generating scenarios...")
         generate()
@@ -672,7 +684,7 @@ def run_pipeline(do_generate=False, use_examples=False, planner="astar",
     )
 
     if simple_scenario:
-        process_simple_scenario(planner=planner)
+        process_simple_scenario(planner=planner, model=model)
         return
 
     if test_eval:
@@ -699,8 +711,8 @@ def run_pipeline(do_generate=False, use_examples=False, planner="astar",
     # the write/write and write/read race on DOMAIN_FILE during parallel
     # planning. (This call also writes scenario 0's instance file, which its
     # worker harmlessly rewrites later.)
-    logger.info("Writing shared domain file before parallel planning")
-    convert(scenario_paths[0], use_examples=use_examples, write_domain=True)
+    logger.info("Writing shared domain file before parallel planning (model=%s)", model)
+    convert(scenario_paths[0], use_examples=use_examples, write_domain=True, model=model)
 
     logger.info("Running planner with up to %d parallel workers", max_workers)
     logger.info("Appending results to %s", RESULTS_FILE)
@@ -710,7 +722,7 @@ def run_pipeline(do_generate=False, use_examples=False, planner="astar",
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {
             executor.submit(process_scenario, scenario_path, i, total,
-                            run_id, use_examples, planner): scenario_path
+                            run_id, use_examples, planner, model, use_tors): scenario_path
             for i, scenario_path in enumerate(scenario_paths, start=1)
         }
 
