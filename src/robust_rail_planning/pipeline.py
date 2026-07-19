@@ -535,7 +535,7 @@ def _find_matching_solver_scenario(scenarios_dir, label):
     return None
 
 
-def run_test_eval():
+def run_test_eval(ignore_time=False):
     """Run pre-made plans from test_data/ through converter and/or TORS.
 
     Directory layout:
@@ -594,7 +594,7 @@ def run_test_eval():
         try:
             logger.info("      evaluating with scenario %s",
                         os.path.basename(tors_scenario))
-            evaluate(tors_scenario, path)
+            evaluate(tors_scenario, path, ignore_time=ignore_time)
             passed = True
             detail = "PASS"
         except Exception as exc:
@@ -638,7 +638,7 @@ def run_test_eval():
                 json.dump(result, f, indent=4)
             logger.info("      evaluating with TORS scenario %s",
                         os.path.basename(tors_scenario))
-            evaluate(tors_scenario, json_path)
+            evaluate(tors_scenario, json_path, ignore_time=ignore_time)
             passed = True
             detail = "PASS"
         except Exception as exc:
@@ -660,7 +660,7 @@ def run_test_eval():
 
 def run_pipeline(do_generate=False, use_examples=False, planner="astar",
                  do_local_search=False, max_workers=10, simple_scenario=False,
-                 test_eval=False):
+                 test_eval=False, ignore_time=False):
     if do_generate:
         logger.info("Generating scenarios...")
         generate()
@@ -676,7 +676,7 @@ def run_pipeline(do_generate=False, use_examples=False, planner="astar",
         return
 
     if test_eval:
-        run_test_eval()
+        run_test_eval(ignore_time=ignore_time)
         return
 
     if do_local_search:

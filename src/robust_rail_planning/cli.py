@@ -22,6 +22,8 @@ def main():
                         help="Run the pipeline on the simple scenario and evaluate with TORS")
     parser.add_argument("--test-eval", action="store_true",
                         help="Run pre-made plans through converter and/or TORS evaluation")
+    parser.add_argument("--ignore-time", action="store_true",
+                        help="Ignore timing constraints during TORS evaluation")
 
     args = parser.parse_args()
 
@@ -35,6 +37,7 @@ def main():
         do_local_search=args.solve,
         simple_scenario=args.simple,
         test_eval=args.test_eval,
+        ignore_time=args.ignore_time,
     )
 
 
