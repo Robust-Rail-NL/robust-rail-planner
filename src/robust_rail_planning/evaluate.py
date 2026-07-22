@@ -101,7 +101,7 @@ else:
         TORS_IMAGE,
     ]
 
-def evaluate(scenario_path, plan_path):
+def evaluate(scenario_path, plan_path, ignore_time=False):
     """Evaluate a single plan against its scenario with TORS, store result, and print output."""
 
     eval_results_dir = os.path.join(DATA_DIR, "tors_eval_results")
@@ -136,6 +136,9 @@ def evaluate(scenario_path, plan_path):
         "--departure_delay", "86400",
         "--plan_type", "Solver",
     ]
+
+    if ignore_time:
+        cmd = cmd + ["--ignoretime", "true"]
 
     logger.info("      evaluating plan with TORS and storing result")
     logger.debug("TORS command: %s", " ".join(cmd))
