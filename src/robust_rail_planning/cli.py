@@ -8,7 +8,6 @@ MODEL_CHOICES = [
     "corridor_no_switch_unlimited_order_servicing",
     "corridor_no_switch_unlimited_order_servicing_discrete",
     "corridor_no_switch_unlimited_order_servicing_discrete_compiled_matching",
-    "corridor_no_switch_unlimited_order_servicing_discrete_ordered_matching",
 ]
 
 

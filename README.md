@@ -145,7 +145,6 @@ python planning-approach/tools/plan_visualizer/run_existing_visualizer.py --port
 | --- | --- |
 | `baseline_no_parameters` | Baseline model with planner-controlled matching and continuous metre-based train positions. |
 | `corridor_no_switch_unlimited_order_servicing_discrete` | Replaces continuous positions with occupied track length and discrete A/B-side blocking, while retaining planner-controlled matching. |
-| `corridor_no_switch_unlimited_order_servicing_discrete_ordered_matching` | Uses the discrete model and precomputes an order-preserving matching before planning. |
 | `corridor_no_switch_unlimited_order_servicing_discrete_compiled_matching` | Uses composition-preserving pre-matching and lower-arity request actions. Complete incoming compositions are reused where possible; other compositions can be uncoupled, moved, and assembled from the front or back. It produces a scenario-specific domain for the selected request sequence. |
 
 ### Compiled-matching results
