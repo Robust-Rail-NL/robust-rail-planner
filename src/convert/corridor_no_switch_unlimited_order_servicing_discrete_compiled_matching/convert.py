@@ -1752,60 +1752,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     complete_request_composition.add_effect(must_depart_su(complete_request_composition.request_su), True)
     problem.add_action(complete_request_composition)
 
-    couple_two_sus = up.InstantaneousAction(
-        "couple_two_sus",
-        su_a=shunting_unit_type,
-        su_b=shunting_unit_type,
-        su_result=shunting_unit_type,
-        unit_a=train_unit_type,
-        unit_b=train_unit_type,
-        track=track_part_type,
-        slot_a=request_slot_type,
-        slot_b=request_slot_type,
-        request=departure_request_type,
-    )
-    couple_two_sus.add_precondition(active_su(couple_two_sus.su_a))
-    couple_two_sus.add_precondition(active_su(couple_two_sus.su_b))
-    couple_two_sus.add_precondition(up.Not(parked_su(couple_two_sus.su_a)))
-    couple_two_sus.add_precondition(up.Not(parked_su(couple_two_sus.su_b)))
-    couple_two_sus.add_precondition(up.Not(active_su(couple_two_sus.su_result)))
-    couple_two_sus.add_precondition(up.Not(up.Equals(couple_two_sus.su_a, couple_two_sus.su_b)))
-    couple_two_sus.add_precondition(contains_su(couple_two_sus.su_a, couple_two_sus.unit_a))
-    couple_two_sus.add_precondition(contains_su(couple_two_sus.su_b, couple_two_sus.unit_b))
-    couple_two_sus.add_precondition(single_unit_su(couple_two_sus.su_a, couple_two_sus.unit_a))
-    couple_two_sus.add_precondition(single_unit_su(couple_two_sus.su_b, couple_two_sus.unit_b))
-    couple_two_sus.add_precondition(request_su_for_request(couple_two_sus.su_result, couple_two_sus.request))
-    couple_two_sus.add_precondition(at_su(couple_two_sus.su_a, couple_two_sus.track))
-    couple_two_sus.add_precondition(at_su(couple_two_sus.su_b, couple_two_sus.track))
-    couple_two_sus.add_precondition(coupling_allowed(couple_two_sus.track))
-    couple_two_sus.add_precondition(coupling_track_for_request(couple_two_sus.request, couple_two_sus.track))
-    couple_two_sus.add_precondition(matched(couple_two_sus.unit_a, couple_two_sus.slot_a))
-    couple_two_sus.add_precondition(matched(couple_two_sus.unit_b, couple_two_sus.slot_b))
-    couple_two_sus.add_precondition(slot_for_request(couple_two_sus.slot_a, couple_two_sus.request))
-    couple_two_sus.add_precondition(slot_for_request(couple_two_sus.slot_b, couple_two_sus.request))
-    couple_two_sus.add_precondition(slot_before(couple_two_sus.slot_a, couple_two_sus.slot_b))
-    couple_two_sus.add_effect(active_su(couple_two_sus.su_a), False)
-    couple_two_sus.add_effect(active_su(couple_two_sus.su_b), False)
-    couple_two_sus.add_effect(active_su(couple_two_sus.su_result), True)
-    couple_two_sus.add_effect(su_may_move(couple_two_sus.su_result), True)
-    couple_two_sus.add_effect(must_depart_su(couple_two_sus.su_result), True)
-    couple_two_sus.add_effect(at_su(couple_two_sus.su_a, couple_two_sus.track), False)
-    couple_two_sus.add_effect(at_su(couple_two_sus.su_b, couple_two_sus.track), False)
-    couple_two_sus.add_effect(at_su(couple_two_sus.su_result, couple_two_sus.track), True)
-    pass
-    couple_two_sus.add_effect(su_length(couple_two_sus.su_result), su_length(couple_two_sus.su_a) + su_length(couple_two_sus.su_b))
-    couple_two_sus.add_effect(number_of_trains_on_track(couple_two_sus.track), number_of_trains_on_track(couple_two_sus.track) - 1)
-    couple_two_sus.add_effect(contains_su(couple_two_sus.su_result, couple_two_sus.unit_a), True)
-    couple_two_sus.add_effect(contains_su(couple_two_sus.su_result, couple_two_sus.unit_b), True)
-    couple_two_sus.add_effect(slot_coupled(couple_two_sus.slot_a), True)
-    couple_two_sus.add_effect(slot_coupled(couple_two_sus.slot_b), True)
-    couple_two_sus.add_effect(coupled_to_request(couple_two_sus.unit_a, couple_two_sus.request), True)
-    couple_two_sus.add_effect(coupled_to_request(couple_two_sus.unit_b, couple_two_sus.request), True)
-    couple_two_sus.add_effect(physically_coupled(couple_two_sus.unit_a, couple_two_sus.unit_b), True)
-    couple_two_sus.add_effect(request_assembled(couple_two_sus.request), True)
-    # Fixed two-unit coupling is kept for comparison but not registered; request
-    # compositions are built incrementally with start/couple-front/couple-back.
-
     service_su = up.InstantaneousAction('service_su', su=shunting_unit_type, l=track_part_type, f=facility_type_type)
     service_su.add_precondition(active_su(service_su.su))
     service_su.add_precondition(at_su(service_su.su, service_su.l))
@@ -1815,8 +1761,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     service_su.add_effect(serviced(service_su.su), True)
     problem.add_action(service_su)
 
-    couple_two_sus.add_precondition(serviced(couple_two_sus.su_a))
-    couple_two_sus.add_precondition(serviced(couple_two_sus.su_b))
     start_request_composition.add_precondition(serviced(start_request_composition.source_su))
     couple_front_to_request.add_precondition(serviced(couple_front_to_request.source_su))
     couple_front_to_request.add_precondition(serviced(couple_front_to_request.request_su))
