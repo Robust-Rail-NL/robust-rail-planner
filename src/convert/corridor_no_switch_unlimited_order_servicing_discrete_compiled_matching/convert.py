@@ -886,7 +886,6 @@ def create_instance_from_scenario(
     track_part_type = up.UserType("trackpart")
     train_unit_type = up.UserType("trainunit")
     departure_request_type = up.UserType("departurerequest")
-    request_slot_type = up.UserType("requestslot")
     arrival_composition_type = up.UserType("arrivalcomposition")
     shunting_unit_type = up.UserType("shuntingunit")
     parking_request_type = up.UserType("parkingrequest")
@@ -907,17 +906,7 @@ def create_instance_from_scenario(
     concurrent_movements = problem.add_fluent(up.Fluent("concurrent_movements", up.IntType()), default_initial_value=up.Int(0))
     max_concurrent_movements = 1
 
-    available      = problem.add_fluent(up.Fluent("available",      up.BoolType(), unit=train_unit_type),                               default_initial_value=False)
-    request_open   = problem.add_fluent(up.Fluent("request_open",   up.BoolType(), request=departure_request_type),                     default_initial_value=False)
-    slot_open      = problem.add_fluent(up.Fluent("slot_open",      up.BoolType(), slot=request_slot_type),                             default_initial_value=False)
-    slot_filled    = problem.add_fluent(up.Fluent("slot_filled",    up.BoolType(), slot=request_slot_type),                             default_initial_value=False)
-    compatible     = problem.add_fluent(up.Fluent("compatible",     up.BoolType(), unit=train_unit_type, slot=request_slot_type),        default_initial_value=False)
-    matched        = problem.add_fluent(up.Fluent("matched",        up.BoolType(), unit=train_unit_type, slot=request_slot_type),        default_initial_value=False)
-    slot_for_request = problem.add_fluent(up.Fluent("slot_for_request", up.BoolType(), slot=request_slot_type, request=departure_request_type), default_initial_value=False)
-    slot_before = problem.add_fluent(up.Fluent("slot_before", up.BoolType(), first=request_slot_type, second=request_slot_type), default_initial_value=False)
-    unit_before = problem.add_fluent(up.Fluent("unit_before", up.BoolType(), first=train_unit_type, second=train_unit_type), default_initial_value=False)
     coupling_allowed = problem.add_fluent(up.Fluent("coupling_allowed", up.BoolType(), trackpart=track_part_type), default_initial_value=False)
-    coupling_track_for_request = problem.add_fluent(up.Fluent("coupling_track_for_request", up.BoolType(), request=departure_request_type, trackpart=track_part_type), default_initial_value=False)
 
     active_su        = problem.add_fluent(up.Fluent("active_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
     contains_su      = problem.add_fluent(up.Fluent("contains_su", up.BoolType(), shunting_unit=shunting_unit_type, unit=train_unit_type), default_initial_value=False)
@@ -961,8 +950,6 @@ def create_instance_from_scenario(
     front_of = problem.add_fluent(up.Fluent("front_of", up.BoolType(), unit=train_unit_type, su=shunting_unit_type),default_initial_value=False)
     back_of = problem.add_fluent(up.Fluent("back_of", up.BoolType(), unit=train_unit_type, su=shunting_unit_type), default_initial_value=False)
     next_in_su = problem.add_fluent(up.Fluent("next_in_su", up.BoolType(), front=train_unit_type, back=train_unit_type, su=shunting_unit_type),default_initial_value=False,)
-    front_slot = problem.add_fluent(up.Fluent("front_slot", up.BoolType(), slot=request_slot_type, su=shunting_unit_type), default_initial_value=False)
-    back_slot = problem.add_fluent(up.Fluent("back_slot", up.BoolType(), slot=request_slot_type, su=shunting_unit_type), default_initial_value=False)
     su_unit_count = problem.add_fluent(up.Fluent("su_unit_count", up.IntType(), shunting_unit=shunting_unit_type), default_initial_value=up.Int(0))
     request_size = problem.add_fluent(up.Fluent("request_size", up.IntType(), request=departure_request_type), default_initial_value=up.Int(0))
 
@@ -992,9 +979,7 @@ def create_instance_from_scenario(
     arrive_su.add_effect(concurrent_movements, concurrent_movements + 1)
     arrive_su.add_effect(at_su(arrive_su.su, phantom_track), False)
     arrive_su.add_effect(at_su(arrive_su.su, arrive_su.l), True)
-    pass
     arrive_su.add_effect(number_of_trains_on_track(arrive_su.l), number_of_trains_on_track(arrive_su.l) + 1)
-    pass
     next_su = up.Variable("next_su", shunting_unit_type)
     arrive_su.add_effect(fluent=su_previous_arrived(next_su), value=True, condition=su_arrival_immediately_before(arrive_su.su, next_su), forall=[next_su])
     _arrq = up.Variable("arrq", shunting_unit_type)
@@ -1035,15 +1020,10 @@ def create_instance_from_scenario(
     move_aside_empty_su.add_precondition(at_su(move_aside_empty_su.su, move_aside_empty_su.l_from))
     move_aside_empty_su.add_precondition(connected_aside(move_aside_empty_su.l_from, move_aside_empty_su.l_to))
     move_aside_empty_su.add_precondition(occupied_length(move_aside_empty_su.l_to) + su_length(move_aside_empty_su.su) <= track_length(move_aside_empty_su.l_to))
-    pass
     move_aside_empty_su.add_precondition(up.Equals(number_of_trains_on_track(move_aside_empty_su.l_to), 0))
     move_aside_empty_su.add_precondition(su_length(move_aside_empty_su.su) <= track_length(move_aside_empty_su.l_to))
     move_aside_empty_su.add_effect(number_of_trains_on_track(move_aside_empty_su.l_from), number_of_trains_on_track(move_aside_empty_su.l_from) - 1)
     move_aside_empty_su.add_effect(number_of_trains_on_track(move_aside_empty_su.l_to), 1)
-    pass
-    pass
-    pass
-    pass
     move_aside_empty_su.add_effect(occupied_length(move_aside_empty_su.l_from), occupied_length(move_aside_empty_su.l_from) - su_length(move_aside_empty_su.su))
     move_aside_empty_su.add_effect(occupied_length(move_aside_empty_su.l_to), occupied_length(move_aside_empty_su.l_to) + su_length(move_aside_empty_su.su))
     move_aside_empty_su.add_effect(at_su(move_aside_empty_su.su, move_aside_empty_su.l_to), True)
@@ -1062,14 +1042,9 @@ def create_instance_from_scenario(
     move_aside_occupied_su.add_precondition(at_su(move_aside_occupied_su.su, move_aside_occupied_su.l_from))
     move_aside_occupied_su.add_precondition(connected_aside(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to))
     move_aside_occupied_su.add_precondition(occupied_length(move_aside_occupied_su.l_to) + su_length(move_aside_occupied_su.su) <= track_length(move_aside_occupied_su.l_to))
-    pass
     move_aside_occupied_su.add_precondition(number_of_trains_on_track(move_aside_occupied_su.l_to) > 0)
-    pass
     move_aside_occupied_su.add_effect(number_of_trains_on_track(move_aside_occupied_su.l_from), number_of_trains_on_track(move_aside_occupied_su.l_from) - 1)
     move_aside_occupied_su.add_effect(number_of_trains_on_track(move_aside_occupied_su.l_to), number_of_trains_on_track(move_aside_occupied_su.l_to) + 1)
-    pass
-    pass
-    pass
     move_aside_occupied_su.add_effect(occupied_length(move_aside_occupied_su.l_from), occupied_length(move_aside_occupied_su.l_from) - su_length(move_aside_occupied_su.su))
     move_aside_occupied_su.add_effect(occupied_length(move_aside_occupied_su.l_to), occupied_length(move_aside_occupied_su.l_to) + su_length(move_aside_occupied_su.su))
     move_aside_occupied_su.add_effect(at_su(move_aside_occupied_su.su, move_aside_occupied_su.l_to), True)
@@ -1091,15 +1066,10 @@ def create_instance_from_scenario(
     move_bside_empty_su.add_precondition(at_su(move_bside_empty_su.su, move_bside_empty_su.l_from))
     move_bside_empty_su.add_precondition(connected_bside(move_bside_empty_su.l_from, move_bside_empty_su.l_to))
     move_bside_empty_su.add_precondition(occupied_length(move_bside_empty_su.l_to) + su_length(move_bside_empty_su.su) <= track_length(move_bside_empty_su.l_to))
-    pass
     move_bside_empty_su.add_precondition(up.Equals(number_of_trains_on_track(move_bside_empty_su.l_to), 0))
     move_bside_empty_su.add_precondition(su_length(move_bside_empty_su.su) <= track_length(move_bside_empty_su.l_to))
     move_bside_empty_su.add_effect(number_of_trains_on_track(move_bside_empty_su.l_from), number_of_trains_on_track(move_bside_empty_su.l_from) - 1)
     move_bside_empty_su.add_effect(number_of_trains_on_track(move_bside_empty_su.l_to), 1)
-    pass
-    pass
-    pass
-    pass
     move_bside_empty_su.add_effect(occupied_length(move_bside_empty_su.l_from), occupied_length(move_bside_empty_su.l_from) - su_length(move_bside_empty_su.su))
     move_bside_empty_su.add_effect(occupied_length(move_bside_empty_su.l_to), occupied_length(move_bside_empty_su.l_to) + su_length(move_bside_empty_su.su))
     move_bside_empty_su.add_effect(at_su(move_bside_empty_su.su, move_bside_empty_su.l_to), True)
@@ -1118,14 +1088,9 @@ def create_instance_from_scenario(
     move_bside_occupied_su.add_precondition(at_su(move_bside_occupied_su.su, move_bside_occupied_su.l_from))
     move_bside_occupied_su.add_precondition(connected_bside(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to))
     move_bside_occupied_su.add_precondition(occupied_length(move_bside_occupied_su.l_to) + su_length(move_bside_occupied_su.su) <= track_length(move_bside_occupied_su.l_to))
-    pass
     move_bside_occupied_su.add_precondition(number_of_trains_on_track(move_bside_occupied_su.l_to) > 0)
-    pass
     move_bside_occupied_su.add_effect(number_of_trains_on_track(move_bside_occupied_su.l_from), number_of_trains_on_track(move_bside_occupied_su.l_from) - 1)
     move_bside_occupied_su.add_effect(number_of_trains_on_track(move_bside_occupied_su.l_to), number_of_trains_on_track(move_bside_occupied_su.l_to) + 1)
-    pass
-    pass
-    pass
     move_bside_occupied_su.add_effect(occupied_length(move_bside_occupied_su.l_from), occupied_length(move_bside_occupied_su.l_from) - su_length(move_bside_occupied_su.su))
     move_bside_occupied_su.add_effect(occupied_length(move_bside_occupied_su.l_to), occupied_length(move_bside_occupied_su.l_to) + su_length(move_bside_occupied_su.su))
     move_bside_occupied_su.add_effect(at_su(move_bside_occupied_su.su, move_bside_occupied_su.l_to), True)
@@ -1147,15 +1112,12 @@ def create_instance_from_scenario(
     depart_aside_su.add_precondition(must_depart_su(depart_aside_su.su))
     depart_aside_su.add_precondition(at_su(depart_aside_su.su, depart_aside_su.l))
     depart_aside_su.add_precondition(departure_exit_a(depart_aside_su.l))
-    pass
     depart_aside_su.add_effect(active_su(depart_aside_su.su), False)
     depart_aside_su.add_effect(at_su(depart_aside_su.su, depart_aside_su.l), False)
     depart_aside_su.add_effect(at_su(depart_aside_su.su, phantom_track), True)
     depart_aside_su.add_effect(departed_su(depart_aside_su.su), True)
     depart_aside_su.add_effect(occupied_length(depart_aside_su.l), occupied_length(depart_aside_su.l) - su_length(depart_aside_su.su))
     depart_aside_su.add_effect(number_of_trains_on_track(depart_aside_su.l), number_of_trains_on_track(depart_aside_su.l) - 1)
-    pass
-    pass
     depart_aside_su.add_effect(concurrent_movements, concurrent_movements - 1)
     depart_aside_su.add_effect(allowed_to_move_su(depart_aside_su.su), False)
     depart_aside_su.add_effect(num_of_departed_trains(), num_of_departed_trains() + 1)
@@ -1172,15 +1134,12 @@ def create_instance_from_scenario(
     depart_bside_su.add_precondition(must_depart_su(depart_bside_su.su))
     depart_bside_su.add_precondition(at_su(depart_bside_su.su, depart_bside_su.l))
     depart_bside_su.add_precondition(departure_exit_b(depart_bside_su.l))
-    pass
     depart_bside_su.add_effect(active_su(depart_bside_su.su), False)
     depart_bside_su.add_effect(at_su(depart_bside_su.su, depart_bside_su.l), False)
     depart_bside_su.add_effect(at_su(depart_bside_su.su, phantom_track), True)
     depart_bside_su.add_effect(departed_su(depart_bside_su.su), True)
     depart_bside_su.add_effect(occupied_length(depart_bside_su.l), occupied_length(depart_bside_su.l) - su_length(depart_bside_su.su))
     depart_bside_su.add_effect(number_of_trains_on_track(depart_bside_su.l), number_of_trains_on_track(depart_bside_su.l) - 1)
-    pass
-    pass
     depart_bside_su.add_effect(concurrent_movements, concurrent_movements - 1)
     depart_bside_su.add_effect(allowed_to_move_su(depart_bside_su.su), False)
     depart_bside_su.add_effect(num_of_departed_trains(), num_of_departed_trains() + 1)
@@ -1194,8 +1153,6 @@ def create_instance_from_scenario(
     part_of_composition = problem.add_fluent(up.Fluent("part_of_composition", up.BoolType(), unit=train_unit_type, composition=arrival_composition_type), default_initial_value=False)
     composition_needs_uncoupling = problem.add_fluent(up.Fluent("composition_needs_uncoupling", up.BoolType(), composition=arrival_composition_type), default_initial_value=False)
 
-    slot_coupled = problem.add_fluent(up.Fluent("slot_coupled", up.BoolType(), slot=request_slot_type), default_initial_value=False)
-    coupled_to_request = problem.add_fluent(up.Fluent("coupled_to_request", up.BoolType(), unit=train_unit_type, request=departure_request_type), default_initial_value=False)
     physically_coupled = problem.add_fluent(up.Fluent("physically_coupled", up.BoolType(), first=train_unit_type, second=train_unit_type), default_initial_value=False)
     request_assembled = problem.add_fluent(up.Fluent("request_assembled", up.BoolType(), request=departure_request_type), default_initial_value=False)
 
@@ -1377,7 +1334,6 @@ def create_instance_from_scenario(
             action.add_effect(front_of(action.unit, action.parent_su) if front else back_of(action.unit, action.parent_su), False)
             action.add_effect(front_of(action.unit, action.child_su), True)
             action.add_effect(back_of(action.unit, action.child_su), True)
-            action.add_effect(available(action.unit), True)
             # Promote the remaining end unit and release composition membership.
             uncoupled_neighbor_unit = up.Variable(f"{name}_neighbor_unit", train_unit_type)
             uncoupled_composition = up.Variable(f"{name}_composition", arrival_composition_type)
@@ -1391,7 +1347,6 @@ def create_instance_from_scenario(
                 action.add_effect(fluent=next_in_su(uncoupled_neighbor_unit, action.unit, action.parent_su), value=False, condition=neighbor_condition, forall=[uncoupled_neighbor_unit])
             pair_condition = up.And(neighbor_condition, up.Equals(su_unit_count(action.parent_su), 2))
             action.add_effect(fluent=single_unit_su(action.parent_su, uncoupled_neighbor_unit), value=True, condition=pair_condition, forall=[uncoupled_neighbor_unit])
-            action.add_effect(fluent=available(uncoupled_neighbor_unit), value=True, condition=pair_condition, forall=[uncoupled_neighbor_unit])
             action.add_effect(
                 fluent=part_of_composition(action.unit, uncoupled_composition),
                 value=False,
@@ -1599,7 +1554,6 @@ def create_instance_from_scenario(
     out_standing_trains = scenario_object.get("outStanding", {}).get("trainRequests", [])
     out_requests = scenario_object.get("out", {}).get("trainRequests", [])
     track_occupancies = {}
-    train_initial_aside = {}
     track_train_counts = {}
     coupling_candidate_track_ids = set()
 
@@ -1713,8 +1667,6 @@ def create_instance_from_scenario(
         initial_track_id = _train_initial_track_id(train, ["firstParkingTrackPart", "entryTrackPart"])
         if initial_track_id is not None:
             train_total_length = _train_total_length(train)
-            previous_length_on_track = track_occupancies.get(initial_track_id, Fraction(0))
-            train_initial_aside[_train_object_name("inStanding", index, train)] = previous_length_on_track
             track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
             track_train_counts[initial_track_id] = track_train_counts.get(initial_track_id, 0) + 1
 
@@ -1724,7 +1676,6 @@ def create_instance_from_scenario(
     # Write back initial stacking distances for tracks that start occupied.
     for track_id, occupied_length_value in track_occupancies.items():
         track_obj = id_to_track_part[track_id]
-        pass
         problem.set_initial_value(occupied_length(track_obj), up.Real(occupied_length_value))
         problem.set_initial_value(number_of_trains_on_track(track_obj), up.Int(track_train_counts.get(track_id, 0)))
 
@@ -1769,8 +1720,6 @@ def create_instance_from_scenario(
         elif initial_track_id in id_to_track_part:
             problem.set_initial_value(at_su(shunting_unit, id_to_track_part[initial_track_id]), True)
             track_initial_su_order.setdefault(initial_track_id, []).append(shunting_unit)
-            su_aside = train_initial_aside.get(_train_object_name(source, index, train), Fraction(0))
-            pass
         composition_obj = None
         if len(train_members) > 1:
             composition_obj = problem.add_object("composition" + train["id"], arrival_composition_type)
@@ -1809,9 +1758,7 @@ def create_instance_from_scenario(
                 problem.set_initial_value(su_unit_count(single_unit_su_obj), up.Int(1))
                 problem.set_initial_value(front_of(unit_obj, single_unit_su_obj), True)
                 problem.set_initial_value(back_of(unit_obj, single_unit_su_obj), True)
-            if composition_obj is None:
-                problem.set_initial_value(available(unit_obj), True)
-            else:
+            if composition_obj is not None:
                 problem.set_initial_value(part_of_composition(unit_obj, composition_obj), True)
 
         if member_unit_objs:
@@ -1822,11 +1769,6 @@ def create_instance_from_scenario(
             for first_obj, second_obj in zip(member_unit_objs, member_unit_objs[1:]):
                 problem.set_initial_value(next_in_su(first_obj, second_obj, shunting_unit), True)
             source_composition_records.append((shunting_unit, member_unit_objs))
-
-        for first, second in zip(train_members, train_members[1:]):
-            first_obj = id_to_unit[first["trainUnit"]["id"]]
-            second_obj = id_to_unit[second["trainUnit"]["id"]]
-            problem.set_initial_value(unit_before(first_obj, second_obj), True)
 
     # Enforce arrival order: sort inbound trains by arrival time and chain the
     # arrival-precedence fluents so each train can only arrive after the previous one.
@@ -1867,14 +1809,11 @@ def create_instance_from_scenario(
     # Create request objects with their coupling tracks, unit slots, and goals.
     # Single-unit requests require a departure action; two-unit requests require
     # assembly (couple) followed by departure of the assembled SU.
-    request_objs = {}
     departure_slot_records = []
     request_action_records = []
     for request in out_requests:
         request_name = "request" + request["displayName"]
         request_obj = problem.add_object(request_name, departure_request_type)
-        request_objs[request_name] = request_obj
-        problem.set_initial_value(request_open(request_obj), True)
         problem.set_initial_value(request_size(request_obj), up.Int(len(request["trainUnits"])))
 
         coupling_track_objects = []
@@ -1882,28 +1821,18 @@ def create_instance_from_scenario(
             if track_id in id_to_track_part:
                 coupling_track_object = id_to_track_part[track_id]
                 coupling_track_objects.append(coupling_track_object)
-                problem.set_initial_value(coupling_track_for_request(request_obj, coupling_track_object), True)
 
         slot_objects = []
         for index, requested_unit in enumerate(request["trainUnits"]):
-            slot_obj = problem.add_object(f"{request_name}_slot{index}", request_slot_type)
-            slot_objects.append(slot_obj)
+            slot_name = f"{request_name}_slot{index}"
+            slot_objects.append(slot_name)
             requested_key = train_unit_type_key(requested_unit)
 
-            problem.set_initial_value(slot_open(slot_obj), True)
-            problem.set_initial_value(slot_for_request(slot_obj, request_obj), True)
             departure_slot_records.append(
-                (slot_obj, requested_key, index, len(request["trainUnits"]))
+                (slot_name, requested_key, index, len(request["trainUnits"]))
             )
             if len(request["trainUnits"]) == 1:
                 problem.add_goal(request_departed(request_obj))
-
-            for unit_id, unit_obj in id_to_unit.items():
-                if unit_type_by_id[unit_id] == requested_key:
-                    problem.set_initial_value(compatible(unit_obj, slot_obj), True)
-
-        for first_slot, second_slot in zip(slot_objects, slot_objects[1:]):
-            problem.set_initial_value(slot_before(first_slot, second_slot), True)
 
         request_su = None
         if len(slot_objects) > 1:
@@ -1932,16 +1861,12 @@ def create_instance_from_scenario(
         )
         for unit_id, slot_index in assignment:
             unit_obj = id_to_unit[unit_id]
-            slot_obj, _, _, _ = departure_slot_records[slot_index]
-            problem.set_initial_value(matched(unit_obj, slot_obj), True)
-            problem.set_initial_value(slot_filled(slot_obj), True)
-            problem.set_initial_value(available(unit_obj), False)
-            problem.set_initial_value(slot_open(slot_obj), False)
-            print(f"Precomputed match: {unit_obj.name} -> {slot_obj.name}")
+            slot_name, _, _, _ = departure_slot_records[slot_index]
+            print(f"Precomputed match: {unit_obj.name} -> {slot_name}")
 
     if compile_precomputed_actions:
         assigned_unit_by_slot = {
-            departure_slot_records[slot_index][0].name: id_to_unit[unit_id]
+            departure_slot_records[slot_index][0]: id_to_unit[unit_id]
             for unit_id, slot_index in assignment
         }
 
@@ -1968,7 +1893,7 @@ def create_instance_from_scenario(
         compiled_request_sources = []
 
         for _, request_obj, request_su, slot_objects, coupling_tracks in request_action_records:
-            slot_units = [assigned_unit_by_slot[slot.name] for slot in slot_objects]
+            slot_units = [assigned_unit_by_slot[slot_name] for slot_name in slot_objects]
             compiled_request_sources.append(
                 (
                     request_obj,
