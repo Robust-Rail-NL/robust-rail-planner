@@ -1265,13 +1265,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     part_of_composition = problem.add_fluent(up.Fluent("part_of_composition", up.BoolType(), unit=train_unit_type, composition=arrival_composition_type), default_initial_value=False)
     composition_needs_uncoupling = problem.add_fluent(up.Fluent("composition_needs_uncoupling", up.BoolType(), composition=arrival_composition_type), default_initial_value=False)
-    uncouple = up.InstantaneousAction("uncouple", unit=train_unit_type, composition=arrival_composition_type)
-    uncouple.add_precondition(part_of_composition(uncouple.unit, uncouple.composition))
-    uncouple.add_precondition(composition_needs_uncoupling(uncouple.composition))
-    uncouple.add_effect(available(uncouple.unit), True)
-    uncouple.add_effect(part_of_composition(uncouple.unit, uncouple.composition), False)
-    if not compile_precomputed_actions:
-        problem.add_action(uncouple)
 
     uncouple_front_su = up.InstantaneousAction(
         "uncouple_front_su",
