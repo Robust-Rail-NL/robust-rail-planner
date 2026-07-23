@@ -851,9 +851,17 @@ def _train_object_name(source, index, train):
     return "train" + train["id"]
 
 
-def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None, precompute_matching=False, matching_variant=0, matching_strategy="stable", compile_precomputed_actions=False):
-    if compile_precomputed_actions and not precompute_matching:
-        raise ValueError("Compiled request actions require precomputed matching")
+def create_instance_from_scenario(
+    path_to_folder=None,
+    scenario_file=None,
+    location_file=None,
+    output_file=None,
+    domain_file=None,
+    matching_variant=0,
+):
+    precompute_matching = True
+    matching_strategy = "composition_preserving"
+    compile_precomputed_actions = True
     if path_to_folder is None:
         path_to_folder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "scenario-planning-inputs", "Location_KleineBinckhorst")
 
@@ -873,12 +881,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     location_object = json.load(open(location_file))
     scenario_object = json.load(open(scenario_file))
-
-    if precompute_matching and matching_strategy == "order_preserving_auto":
-        precompute_matching = _has_order_sensitive_matching(scenario_object)
-        matching_strategy = "order_preserving"
-        mode = "precomputed" if precompute_matching else "planner-controlled"
-        print(f"Matching mode: {mode}")
 
     problem = up.Problem(scenario_name)
     track_part_type = up.UserType("trackpart")
@@ -1189,80 +1191,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     depart_bside_su.add_effect(frontmost_b_su(depart_bside_su.su), False)
     problem.add_action(depart_bside_su)
 
-    depart_aside_su_for_request = up.InstantaneousAction(
-        'depart_aside_su_for_request',
-        su=shunting_unit_type,
-        unit=train_unit_type,
-        slot=request_slot_type,
-        request=departure_request_type,
-        l=track_part_type,
-    )
-    depart_aside_su_for_request.add_precondition(active_su(depart_aside_su_for_request.su))
-    depart_aside_su_for_request.add_precondition(allowed_to_move_su(depart_aside_su_for_request.su))
-    depart_aside_su_for_request.add_precondition(contains_su(depart_aside_su_for_request.su, depart_aside_su_for_request.unit))
-    depart_aside_su_for_request.add_precondition(single_unit_su(depart_aside_su_for_request.su, depart_aside_su_for_request.unit))
-    depart_aside_su_for_request.add_precondition(matched(depart_aside_su_for_request.unit, depart_aside_su_for_request.slot))
-    depart_aside_su_for_request.add_precondition(slot_for_request(depart_aside_su_for_request.slot, depart_aside_su_for_request.request))
-    depart_aside_su_for_request.add_precondition(at_su(depart_aside_su_for_request.su, depart_aside_su_for_request.l))
-    depart_aside_su_for_request.add_precondition(departure_exit_a(depart_aside_su_for_request.l))
-    pass
-    depart_aside_su_for_request.add_effect(active_su(depart_aside_su_for_request.su), False)
-    depart_aside_su_for_request.add_effect(at_su(depart_aside_su_for_request.su, depart_aside_su_for_request.l), False)
-    depart_aside_su_for_request.add_effect(at_su(depart_aside_su_for_request.su, phantom_track), True)
-    depart_aside_su_for_request.add_effect(departed_su(depart_aside_su_for_request.su), True)
-    depart_aside_su_for_request.add_effect(occupied_length(depart_aside_su_for_request.l), occupied_length(depart_aside_su_for_request.l) - su_length(depart_aside_su_for_request.su))
-    depart_aside_su_for_request.add_effect(request_departed(depart_aside_su_for_request.request), True)
-    depart_aside_su_for_request.add_effect(num_of_departed_trains(), num_of_departed_trains() + 1)
-    depart_aside_su_for_request.add_effect(number_of_trains_on_track(depart_aside_su_for_request.l), number_of_trains_on_track(depart_aside_su_for_request.l) - 1)
-    pass
-    pass
-    depart_aside_su_for_request.add_effect(concurrent_movements, concurrent_movements - 1)
-    depart_aside_su_for_request.add_effect(allowed_to_move_su(depart_aside_su_for_request.su), False)
-    _v_depart_aside_su_for_request = up.Variable("v_depart_aside_su_for_request", shunting_unit_type)
-    depart_aside_su_for_request.add_precondition(frontmost_a_su(depart_aside_su_for_request.su))
-    depart_aside_su_for_request.add_effect(fluent=frontmost_a_su(_v_depart_aside_su_for_request), value=True, condition=behind_su(_v_depart_aside_su_for_request, depart_aside_su_for_request.su), forall=[_v_depart_aside_su_for_request])
-    depart_aside_su_for_request.add_effect(fluent=behind_su(_v_depart_aside_su_for_request, depart_aside_su_for_request.su), value=False, condition=behind_su(_v_depart_aside_su_for_request, depart_aside_su_for_request.su), forall=[_v_depart_aside_su_for_request])
-    depart_aside_su_for_request.add_effect(frontmost_a_su(depart_aside_su_for_request.su), False)
-    if not compile_precomputed_actions:
-        problem.add_action(depart_aside_su_for_request)
-
-    depart_bside_su_for_request = up.InstantaneousAction(
-        'depart_bside_su_for_request',
-        su=shunting_unit_type,
-        unit=train_unit_type,
-        slot=request_slot_type,
-        request=departure_request_type,
-        l=track_part_type,
-    )
-    depart_bside_su_for_request.add_precondition(active_su(depart_bside_su_for_request.su))
-    depart_bside_su_for_request.add_precondition(allowed_to_move_su(depart_bside_su_for_request.su))
-    depart_bside_su_for_request.add_precondition(contains_su(depart_bside_su_for_request.su, depart_bside_su_for_request.unit))
-    depart_bside_su_for_request.add_precondition(single_unit_su(depart_bside_su_for_request.su, depart_bside_su_for_request.unit))
-    depart_bside_su_for_request.add_precondition(matched(depart_bside_su_for_request.unit, depart_bside_su_for_request.slot))
-    depart_bside_su_for_request.add_precondition(slot_for_request(depart_bside_su_for_request.slot, depart_bside_su_for_request.request))
-    depart_bside_su_for_request.add_precondition(at_su(depart_bside_su_for_request.su, depart_bside_su_for_request.l))
-    depart_bside_su_for_request.add_precondition(departure_exit_b(depart_bside_su_for_request.l))
-    pass
-    depart_bside_su_for_request.add_effect(active_su(depart_bside_su_for_request.su), False)
-    depart_bside_su_for_request.add_effect(at_su(depart_bside_su_for_request.su, depart_bside_su_for_request.l), False)
-    depart_bside_su_for_request.add_effect(at_su(depart_bside_su_for_request.su, phantom_track), True)
-    depart_bside_su_for_request.add_effect(departed_su(depart_bside_su_for_request.su), True)
-    depart_bside_su_for_request.add_effect(occupied_length(depart_bside_su_for_request.l), occupied_length(depart_bside_su_for_request.l) - su_length(depart_bside_su_for_request.su))
-    depart_bside_su_for_request.add_effect(request_departed(depart_bside_su_for_request.request), True)
-    depart_bside_su_for_request.add_effect(num_of_departed_trains(), num_of_departed_trains() + 1)
-    depart_bside_su_for_request.add_effect(number_of_trains_on_track(depart_bside_su_for_request.l), number_of_trains_on_track(depart_bside_su_for_request.l) - 1)
-    pass
-    pass
-    depart_bside_su_for_request.add_effect(concurrent_movements, concurrent_movements - 1)
-    depart_bside_su_for_request.add_effect(allowed_to_move_su(depart_bside_su_for_request.su), False)
-    _v_depart_bside_su_for_request = up.Variable("v_depart_bside_su_for_request", shunting_unit_type)
-    depart_bside_su_for_request.add_precondition(frontmost_b_su(depart_bside_su_for_request.su))
-    depart_bside_su_for_request.add_effect(fluent=frontmost_b_su(_v_depart_bside_su_for_request), value=True, condition=behind_su(depart_bside_su_for_request.su, _v_depart_bside_su_for_request), forall=[_v_depart_bside_su_for_request])
-    depart_bside_su_for_request.add_effect(fluent=behind_su(depart_bside_su_for_request.su, _v_depart_bside_su_for_request), value=False, condition=behind_su(depart_bside_su_for_request.su, _v_depart_bside_su_for_request), forall=[_v_depart_bside_su_for_request])
-    depart_bside_su_for_request.add_effect(frontmost_b_su(depart_bside_su_for_request.su), False)
-    if not compile_precomputed_actions:
-        problem.add_action(depart_bside_su_for_request)
-
     part_of_composition = problem.add_fluent(up.Fluent("part_of_composition", up.BoolType(), unit=train_unit_type, composition=arrival_composition_type), default_initial_value=False)
     composition_needs_uncoupling = problem.add_fluent(up.Fluent("composition_needs_uncoupling", up.BoolType(), composition=arrival_composition_type), default_initial_value=False)
 
@@ -1270,157 +1198,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     coupled_to_request = problem.add_fluent(up.Fluent("coupled_to_request", up.BoolType(), unit=train_unit_type, request=departure_request_type), default_initial_value=False)
     physically_coupled = problem.add_fluent(up.Fluent("physically_coupled", up.BoolType(), first=train_unit_type, second=train_unit_type), default_initial_value=False)
     request_assembled = problem.add_fluent(up.Fluent("request_assembled", up.BoolType(), request=departure_request_type), default_initial_value=False)
-
-    start_request_composition = up.InstantaneousAction(
-        "start_request_composition",
-        source_su=shunting_unit_type,
-        request_su=shunting_unit_type,
-        unit=train_unit_type,
-        slot=request_slot_type,
-        request=departure_request_type,
-        track=track_part_type,
-    )
-    start_request_composition.add_precondition(active_su(start_request_composition.source_su))
-    start_request_composition.add_precondition(up.Not(parked_su(start_request_composition.source_su)))
-    start_request_composition.add_precondition(up.Not(active_su(start_request_composition.request_su)))
-    start_request_composition.add_precondition(contains_su(start_request_composition.source_su, start_request_composition.unit))
-    start_request_composition.add_precondition(single_unit_su(start_request_composition.source_su, start_request_composition.unit))
-    start_request_composition.add_precondition(request_su_for_request(start_request_composition.request_su, start_request_composition.request))
-    start_request_composition.add_precondition(at_su(start_request_composition.source_su, start_request_composition.track))
-    start_request_composition.add_precondition(coupling_allowed(start_request_composition.track))
-    start_request_composition.add_precondition(coupling_track_for_request(start_request_composition.request, start_request_composition.track))
-    start_request_composition.add_precondition(matched(start_request_composition.unit, start_request_composition.slot))
-    start_request_composition.add_precondition(slot_for_request(start_request_composition.slot, start_request_composition.request))
-    start_request_composition.add_effect(active_su(start_request_composition.source_su), False)
-    start_request_composition.add_effect(active_su(start_request_composition.request_su), True)
-    # start_request_composition.add_effect(su_may_move(start_request_composition.request_su), True)
-    start_request_composition.add_effect(at_su(start_request_composition.source_su, start_request_composition.track), False)
-    start_request_composition.add_effect(at_su(start_request_composition.request_su, start_request_composition.track), True)
-    pass
-    start_request_composition.add_effect(su_length(start_request_composition.request_su), su_length(start_request_composition.source_su))
-    start_request_composition.add_effect(su_unit_count(start_request_composition.request_su), 1)
-    start_request_composition.add_effect(contains_su(start_request_composition.request_su, start_request_composition.unit), True)
-    start_request_composition.add_effect(front_of(start_request_composition.unit, start_request_composition.request_su), True)
-    start_request_composition.add_effect(back_of(start_request_composition.unit, start_request_composition.request_su), True)
-    start_request_composition.add_effect(front_slot(start_request_composition.slot, start_request_composition.request_su), True)
-    start_request_composition.add_effect(back_slot(start_request_composition.slot, start_request_composition.request_su), True)
-    start_request_composition.add_effect(slot_coupled(start_request_composition.slot), True)
-    start_request_composition.add_effect(coupled_to_request(start_request_composition.unit, start_request_composition.request), True)
-    _srcn = up.Variable("srcn", shunting_unit_type)
-    start_request_composition.add_effect(fluent=frontmost_a_su(start_request_composition.request_su), value=True, condition=frontmost_a_su(start_request_composition.source_su))
-    start_request_composition.add_effect(fluent=frontmost_b_su(start_request_composition.request_su), value=True, condition=frontmost_b_su(start_request_composition.source_su))
-    start_request_composition.add_effect(frontmost_a_su(start_request_composition.source_su), False)
-    start_request_composition.add_effect(frontmost_b_su(start_request_composition.source_su), False)
-    start_request_composition.add_effect(fluent=behind_su(_srcn, start_request_composition.request_su), value=True, condition=behind_su(_srcn, start_request_composition.source_su), forall=[_srcn])
-    start_request_composition.add_effect(fluent=behind_su(_srcn, start_request_composition.source_su), value=False, condition=behind_su(_srcn, start_request_composition.source_su), forall=[_srcn])
-    start_request_composition.add_effect(fluent=behind_su(start_request_composition.request_su, _srcn), value=True, condition=behind_su(start_request_composition.source_su, _srcn), forall=[_srcn])
-    start_request_composition.add_effect(fluent=behind_su(start_request_composition.source_su, _srcn), value=False, condition=behind_su(start_request_composition.source_su, _srcn), forall=[_srcn])
-    if not compile_precomputed_actions:
-        problem.add_action(start_request_composition)
-
-    couple_front_to_request = up.InstantaneousAction(
-        "couple_front_to_request",
-        source_su=shunting_unit_type,
-        request_su=shunting_unit_type,
-        unit=train_unit_type,
-        old_front_unit=train_unit_type,
-        slot=request_slot_type,
-        old_front_slot=request_slot_type,
-        request=departure_request_type,
-        track=track_part_type,
-    )
-    couple_front_to_request.add_precondition(active_su(couple_front_to_request.source_su))
-    couple_front_to_request.add_precondition(active_su(couple_front_to_request.request_su))
-    couple_front_to_request.add_precondition(up.Not(parked_su(couple_front_to_request.source_su)))
-    couple_front_to_request.add_precondition(up.Not(parked_su(couple_front_to_request.request_su)))
-    couple_front_to_request.add_precondition(contains_su(couple_front_to_request.source_su, couple_front_to_request.unit))
-    couple_front_to_request.add_precondition(single_unit_su(couple_front_to_request.source_su, couple_front_to_request.unit))
-    couple_front_to_request.add_precondition(request_su_for_request(couple_front_to_request.request_su, couple_front_to_request.request))
-    couple_front_to_request.add_precondition(at_su(couple_front_to_request.source_su, couple_front_to_request.track))
-    couple_front_to_request.add_precondition(at_su(couple_front_to_request.request_su, couple_front_to_request.track))
-    couple_front_to_request.add_precondition(coupling_allowed(couple_front_to_request.track))
-    couple_front_to_request.add_precondition(coupling_track_for_request(couple_front_to_request.request, couple_front_to_request.track))
-    couple_front_to_request.add_precondition(matched(couple_front_to_request.unit, couple_front_to_request.slot))
-    couple_front_to_request.add_precondition(slot_for_request(couple_front_to_request.slot, couple_front_to_request.request))
-    couple_front_to_request.add_precondition(front_of(couple_front_to_request.old_front_unit, couple_front_to_request.request_su))
-    couple_front_to_request.add_precondition(front_slot(couple_front_to_request.old_front_slot, couple_front_to_request.request_su))
-    couple_front_to_request.add_precondition(slot_before(couple_front_to_request.slot, couple_front_to_request.old_front_slot))
-    couple_front_to_request.add_effect(active_su(couple_front_to_request.source_su), False)
-    couple_front_to_request.add_effect(at_su(couple_front_to_request.source_su, couple_front_to_request.track), False)
-    couple_front_to_request.add_effect(su_length(couple_front_to_request.request_su), su_length(couple_front_to_request.request_su) + su_length(couple_front_to_request.source_su))
-    couple_front_to_request.add_effect(su_unit_count(couple_front_to_request.request_su), su_unit_count(couple_front_to_request.request_su) + 1)
-    couple_front_to_request.add_effect(number_of_trains_on_track(couple_front_to_request.track), number_of_trains_on_track(couple_front_to_request.track) - 1)
-    couple_front_to_request.add_effect(contains_su(couple_front_to_request.request_su, couple_front_to_request.unit), True)
-    couple_front_to_request.add_effect(front_of(couple_front_to_request.old_front_unit, couple_front_to_request.request_su), False)
-    couple_front_to_request.add_effect(front_of(couple_front_to_request.unit, couple_front_to_request.request_su), True)
-    couple_front_to_request.add_effect(next_in_su(couple_front_to_request.unit, couple_front_to_request.old_front_unit, couple_front_to_request.request_su), True)
-    couple_front_to_request.add_effect(front_slot(couple_front_to_request.old_front_slot, couple_front_to_request.request_su), False)
-    couple_front_to_request.add_effect(front_slot(couple_front_to_request.slot, couple_front_to_request.request_su), True)
-    couple_front_to_request.add_effect(slot_coupled(couple_front_to_request.slot), True)
-    couple_front_to_request.add_effect(coupled_to_request(couple_front_to_request.unit, couple_front_to_request.request), True)
-    couple_front_to_request.add_effect(physically_coupled(couple_front_to_request.unit, couple_front_to_request.old_front_unit), True)
-    _cf = up.Variable("cf_cfr", shunting_unit_type)
-    couple_front_to_request.add_precondition(behind_su(couple_front_to_request.request_su, couple_front_to_request.source_su))
-    couple_front_to_request.add_effect(behind_su(couple_front_to_request.request_su, couple_front_to_request.source_su), False)
-    couple_front_to_request.add_effect(fluent=behind_su(couple_front_to_request.request_su, _cf), value=True, condition=behind_su(couple_front_to_request.source_su, _cf), forall=[_cf])
-    couple_front_to_request.add_effect(fluent=behind_su(couple_front_to_request.source_su, _cf), value=False, condition=behind_su(couple_front_to_request.source_su, _cf), forall=[_cf])
-    couple_front_to_request.add_effect(fluent=frontmost_a_su(couple_front_to_request.request_su), value=True, condition=frontmost_a_su(couple_front_to_request.source_su))
-    couple_front_to_request.add_effect(frontmost_a_su(couple_front_to_request.source_su), False)
-    couple_front_to_request.add_effect(frontmost_b_su(couple_front_to_request.source_su), False)
-    if not compile_precomputed_actions:
-        problem.add_action(couple_front_to_request)
-
-    couple_back_to_request = up.InstantaneousAction(
-        "couple_back_to_request",
-        request_su=shunting_unit_type,
-        source_su=shunting_unit_type,
-        old_back_unit=train_unit_type,
-        unit=train_unit_type,
-        old_back_slot=request_slot_type,
-        slot=request_slot_type,
-        request=departure_request_type,
-        track=track_part_type,
-    )
-    couple_back_to_request.add_precondition(active_su(couple_back_to_request.request_su))
-    couple_back_to_request.add_precondition(active_su(couple_back_to_request.source_su))
-    couple_back_to_request.add_precondition(up.Not(parked_su(couple_back_to_request.request_su)))
-    couple_back_to_request.add_precondition(up.Not(parked_su(couple_back_to_request.source_su)))
-    couple_back_to_request.add_precondition(contains_su(couple_back_to_request.source_su, couple_back_to_request.unit))
-    couple_back_to_request.add_precondition(single_unit_su(couple_back_to_request.source_su, couple_back_to_request.unit))
-    couple_back_to_request.add_precondition(request_su_for_request(couple_back_to_request.request_su, couple_back_to_request.request))
-    couple_back_to_request.add_precondition(at_su(couple_back_to_request.request_su, couple_back_to_request.track))
-    couple_back_to_request.add_precondition(at_su(couple_back_to_request.source_su, couple_back_to_request.track))
-    couple_back_to_request.add_precondition(coupling_allowed(couple_back_to_request.track))
-    couple_back_to_request.add_precondition(coupling_track_for_request(couple_back_to_request.request, couple_back_to_request.track))
-    couple_back_to_request.add_precondition(matched(couple_back_to_request.unit, couple_back_to_request.slot))
-    couple_back_to_request.add_precondition(slot_for_request(couple_back_to_request.slot, couple_back_to_request.request))
-    couple_back_to_request.add_precondition(back_of(couple_back_to_request.old_back_unit, couple_back_to_request.request_su))
-    couple_back_to_request.add_precondition(back_slot(couple_back_to_request.old_back_slot, couple_back_to_request.request_su))
-    couple_back_to_request.add_precondition(slot_before(couple_back_to_request.old_back_slot, couple_back_to_request.slot))
-    couple_back_to_request.add_effect(active_su(couple_back_to_request.source_su), False)
-    couple_back_to_request.add_effect(at_su(couple_back_to_request.source_su, couple_back_to_request.track), False)
-    couple_back_to_request.add_effect(su_length(couple_back_to_request.request_su), su_length(couple_back_to_request.request_su) + su_length(couple_back_to_request.source_su))
-    couple_back_to_request.add_effect(su_unit_count(couple_back_to_request.request_su), su_unit_count(couple_back_to_request.request_su) + 1)
-    couple_back_to_request.add_effect(number_of_trains_on_track(couple_back_to_request.track), number_of_trains_on_track(couple_back_to_request.track) - 1)
-    couple_back_to_request.add_effect(contains_su(couple_back_to_request.request_su, couple_back_to_request.unit), True)
-    couple_back_to_request.add_effect(back_of(couple_back_to_request.old_back_unit, couple_back_to_request.request_su), False)
-    couple_back_to_request.add_effect(back_of(couple_back_to_request.unit, couple_back_to_request.request_su), True)
-    couple_back_to_request.add_effect(next_in_su(couple_back_to_request.old_back_unit, couple_back_to_request.unit, couple_back_to_request.request_su), True)
-    couple_back_to_request.add_effect(back_slot(couple_back_to_request.old_back_slot, couple_back_to_request.request_su), False)
-    couple_back_to_request.add_effect(back_slot(couple_back_to_request.slot, couple_back_to_request.request_su), True)
-    couple_back_to_request.add_effect(slot_coupled(couple_back_to_request.slot), True)
-    couple_back_to_request.add_effect(coupled_to_request(couple_back_to_request.unit, couple_back_to_request.request), True)
-    couple_back_to_request.add_effect(physically_coupled(couple_back_to_request.old_back_unit, couple_back_to_request.unit), True)
-    _cb = up.Variable("cb_cbr", shunting_unit_type)
-    couple_back_to_request.add_precondition(behind_su(couple_back_to_request.source_su, couple_back_to_request.request_su))
-    couple_back_to_request.add_effect(behind_su(couple_back_to_request.source_su, couple_back_to_request.request_su), False)
-    couple_back_to_request.add_effect(fluent=behind_su(_cb, couple_back_to_request.request_su), value=True, condition=behind_su(_cb, couple_back_to_request.source_su), forall=[_cb])
-    couple_back_to_request.add_effect(fluent=behind_su(_cb, couple_back_to_request.source_su), value=False, condition=behind_su(_cb, couple_back_to_request.source_su), forall=[_cb])
-    couple_back_to_request.add_effect(fluent=frontmost_b_su(couple_back_to_request.request_su), value=True, condition=frontmost_b_su(couple_back_to_request.source_su))
-    couple_back_to_request.add_effect(frontmost_a_su(couple_back_to_request.source_su), False)
-    couple_back_to_request.add_effect(frontmost_b_su(couple_back_to_request.source_su), False)
-    if not compile_precomputed_actions:
-        problem.add_action(couple_back_to_request)
 
     complete_request_composition = up.InstantaneousAction(
         "complete_request_composition",
@@ -1445,15 +1222,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     service_su.add_effect(serviced(service_su.su), True)
     problem.add_action(service_su)
 
-    start_request_composition.add_precondition(serviced(start_request_composition.source_su))
-    couple_front_to_request.add_precondition(serviced(couple_front_to_request.source_su))
-    couple_front_to_request.add_precondition(serviced(couple_front_to_request.request_su))
-    couple_back_to_request.add_precondition(serviced(couple_back_to_request.source_su))
-    couple_back_to_request.add_precondition(serviced(couple_back_to_request.request_su))
     depart_aside_su.add_precondition(serviced(depart_aside_su.su))
     depart_bside_su.add_precondition(serviced(depart_bside_su.su))
-    depart_aside_su_for_request.add_precondition(serviced(depart_aside_su_for_request.su))
-    depart_bside_su_for_request.add_precondition(serviced(depart_bside_su_for_request.su))
     park_su.add_precondition(serviced(park_su.su))
 
     compiled_target_request_su = problem.add_fluent(
@@ -1792,17 +1562,6 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
         compiled_depart_aside = add_compiled_single_departure("compiled_depart_aside_for_request", True)
         compiled_depart_bside = add_compiled_single_departure("compiled_depart_bside_for_request", False)
-
-    match = up.InstantaneousAction("match", unit=train_unit_type, slot=request_slot_type)
-    match.add_precondition(available(match.unit))
-    match.add_precondition(slot_open(match.slot))
-    match.add_precondition(compatible(match.unit, match.slot))
-    match.add_effect(matched(match.unit, match.slot), True)
-    match.add_effect(slot_filled(match.slot), True)
-    match.add_effect(available(match.unit), False)
-    match.add_effect(slot_open(match.slot), False)
-    if not precompute_matching:
-        problem.add_action(match)
 
     parking_fulfill = up.InstantaneousAction("parking_fulfill", su=shunting_unit_type, unit=train_unit_type, slot=parking_slot_type, l=track_part_type)
     parking_fulfill.add_precondition(active_su(parking_fulfill.su))
@@ -2438,8 +2197,5 @@ if __name__ == "__main__":
         scenario_file=args.scenario_file,
         location_file=args.location_file,
         output_file=args.output_file,
-        precompute_matching=True,
         matching_variant=args.matching_variant,
-        matching_strategy="composition_preserving",
-        compile_precomputed_actions=True,
     )
