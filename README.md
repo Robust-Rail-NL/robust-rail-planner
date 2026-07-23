@@ -59,7 +59,7 @@ conda activate robust-rail-planning
 | `--simple` | Run the pipeline on the simple scenario and evaluate with TORS |
 | `--test-eval` | Run pre-made plans through the converter and/or TORS evaluation (see below) |
 | `--planner {astar,enhsp}` | Planner backend to use (default: `enhsp`) |
-| `--model MODEL` | PDDL model/converter to use (default: `baseline_no_parameters`). See *Converter variants* for all choices. |
+| `--model MODEL` | PDDL model/converter to use. |
 | `--ignore-time` | Ignore timing constraints during TORS evaluation (allows trains to exit after their incoming match arrives rather than at the exact scheduled time) |
 | `--solve` | Run the C# local-search solver on each scenario instead of the PDDL planner |
 | `--use-tors` | Run TORS evaluation after planning. Only needed for `--examples` and `--generate` modes; `--simple` and `--test-eval` always evaluate with TORS |
@@ -143,9 +143,11 @@ python planning-approach/tools/plan_visualizer/run_existing_visualizer.py --port
 
 | Converter | Main difference |
 | --- | --- |
-| `baseline_no_parameters` | Baseline model with planner-controlled matching and continuous metre-based train positions. |
-| `corridor_no_switch_unlimited_order_servicing_discrete` | Replaces continuous positions with occupied track length and discrete A/B-side blocking, while retaining planner-controlled matching. |
 | `corridor_no_switch_unlimited_order_servicing_discrete_compiled_matching` | Uses composition-preserving pre-matching and lower-arity request actions. Complete incoming compositions are reused where possible; other compositions can be uncoupled, moved, and assembled from the front or back. It produces a scenario-specific domain for the selected request sequence. |
+
+Earlier converter variants are retained under `src/convert/archive/` for
+reproducing older modelling experiments, but are not exposed by the planning
+pipeline.
 
 ### Compiled-matching results
 
