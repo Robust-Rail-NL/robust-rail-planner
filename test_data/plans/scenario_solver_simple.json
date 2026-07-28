@@ -1,8 +1,8 @@
 {
     "actions": [
         {
-            "startTime": "0",
-            "endTime": "0",
+            "startTime": "10",
+            "endTime": "10",
             "taskType": {
                 "predefined": "Arrive"
             },
@@ -37,7 +37,7 @@
             "trainUnitIds": []
         },
         {
-            "startTime": "0",
+            "startTime": "10",
             "endTime": "600",
             "taskType": {
                 "predefined": "Move"

@@ -58,7 +58,11 @@ conda activate robust-rail-planning
 | `--examples` | Run only `scenario_solver_example*.json` files |
 | `--simple` | Run the pipeline on the simple scenario and evaluate with TORS |
 | `--test-eval` | Run pre-made plans through the converter and/or TORS evaluation (see below) |
-| `--planner {astar,enhsp}` | Planner backend to use (default: `astar`) |
+| `--planner {astar,enhsp}` | Planner backend to use (default: `enhsp`) |
+| `--model MODEL` | PDDL model/converter to use (default: `baseline_no_parameters`). See *Converter variants* for all choices. |
+| `--ignore-time` | Ignore timing constraints during TORS evaluation (allows trains to exit after their incoming match arrives rather than at the exact scheduled time) |
+| `--solve` | Run the C# local-search solver on each scenario instead of the PDDL planner |
+| `--use-tors` | Run TORS evaluation after planning. Only needed for `--examples` and `--generate` modes; `--simple` and `--test-eval` always evaluate with TORS |
 | `--log-level LEVEL` | Set logging verbosity (default: `INFO`) |
 
 ```robust-rail-plan```
@@ -69,7 +73,9 @@ conda activate robust-rail-planning
 
 ```robust-rail-plan --simple```
 
-```robust-rail-plan --test-eval```
+```robust-rail-plan --examples --model corridor_no_switch_unlimited_order_servicing_discrete_compiled_matching --planner enhsp```
+
+```robust-rail-plan --test-eval --ignore-time```
 
 ```robust-rail-plan --log-level DEBUG```
 
