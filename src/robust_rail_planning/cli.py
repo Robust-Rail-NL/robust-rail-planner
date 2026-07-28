@@ -4,7 +4,6 @@ from robust_rail_planning import run_pipeline, setup_logging
 
 MODEL_CHOICES = [
     "baseline_no_parameters",
-    "corridor_no_switch_unlimited_order_servicing_discrete_compiled_matching",
 ]
 
 
@@ -21,7 +20,7 @@ def main():
                         default="enhsp",
                         help="Planner backend to use (default: enhsp)")
     parser.add_argument("--model", choices=MODEL_CHOICES,
-                        default="corridor_no_switch_unlimited_order_servicing_discrete_compiled_matching",
+                        default="baseline_no_parameters",
                         help="PDDL model/converter to use")
 
     parser.add_argument("--solve", action="store_true",

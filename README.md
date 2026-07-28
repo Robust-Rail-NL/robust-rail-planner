@@ -73,7 +73,7 @@ conda activate robust-rail-planning
 
 ```robust-rail-plan --simple```
 
-```robust-rail-plan --examples --model corridor_no_switch_unlimited_order_servicing_discrete_compiled_matching --planner enhsp```
+```robust-rail-plan --examples --model baseline_no_parameters --planner enhsp```
 
 ```robust-rail-plan --test-eval --ignore-time```
 
@@ -149,6 +149,10 @@ python planning-approach/tools/plan_visualizer/run_existing_visualizer.py --port
 Earlier converter variants are retained under `src/convert/archive/` for
 reproducing older modelling experiments, but are not exposed by the planning
 pipeline.
+
+The compiled-matching converter currently produces scenario-specific domains
+and should be selected through `run.py`, which keeps each generated problem
+paired with its corresponding domain.
 
 ### Compiled-matching results
 
