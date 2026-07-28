@@ -2077,7 +2077,7 @@ def create_instance_from_scenario(
                         problem.set_initial_value(
                             compiled_arrival_ready(source_object_by_name[source_name]), True
                         )
-                else:
+                elif needed_sources:
                     previous_name = request_schedule[request_index - 1]
                     previous_request, previous_su = request_completion[previous_name]
                     advance = up.InstantaneousAction(
