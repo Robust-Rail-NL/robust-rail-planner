@@ -75,7 +75,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             data = json.loads(body)
             layout_path = self.server.editor_data["layout_path"]
             current = load_json(layout_path)
-            current["tracks"] = data["tracks"]
+            tracks = data.get("tracks") or {}
+            out = {}
+            for tid, t in tracks.items():
+                entry = {"x": t["x"], "y": t["y"], "name": t.get("name", str(tid))}
+                if t.get("size"):
+                    entry["size"] = t["size"]
+                out[str(tid)] = entry
+            current["tracks"] = out
             with open(layout_path, "w", encoding="utf-8") as f:
                 json.dump(current, f, indent=2)
             self.send_response(200)
@@ -125,31 +132,33 @@ def main():
             if not abs_image.exists():
                 abs_image = None
 
-    # read all track names from location file
+    # read all track parts from location file
     location = load_json(location_path)
     all_tracks = []
     for part in location.get("trackParts", []):
-        name = str(part.get("name", ""))
-        if name:
-            entry = {"id": name, "name": name, "type": part.get("type", "")}
-            if name in layout_data.get("tracks", {}):
-                entry["x"] = layout_data["tracks"][name]["x"]
-                entry["y"] = layout_data["tracks"][name]["y"]
-            all_tracks.append(entry)
+        tid = str(part.get("id", ""))
+        if not tid:
+            continue
+        entry = {"id": tid, "name": str(part.get("name", "")), "type": part.get("type", "")}
+        if tid in layout_data.get("tracks", {}):
+            entry["x"] = layout_data["tracks"][tid]["x"]
+            entry["y"] = layout_data["tracks"][tid]["y"]
+            if layout_data["tracks"][tid].get("size"):
+                entry["size"] = layout_data["tracks"][tid]["size"]
+        all_tracks.append(entry)
 
     # build edges from aSide/bSide references
-    id_to_name = {tp["id"]: tp["name"] for tp in location.get("trackParts", [])}
     edge_set = set()
     for tp in location.get("trackParts", []):
-        name = tp["name"]
+        tid = str(tp["id"])
         for ref in tp.get("aSide", []):
-            other = id_to_name.get(ref)
-            if other and name != other:
-                edge_set.add(tuple(sorted([name, other])))
+            other = str(ref)
+            if other and tid != other:
+                edge_set.add(tuple(sorted([tid, other])))
         for ref in tp.get("bSide", []):
-            other = id_to_name.get(ref)
-            if other and name != other:
-                edge_set.add(tuple(sorted([name, other])))
+            other = str(ref)
+            if other and tid != other:
+                edge_set.add(tuple(sorted([tid, other])))
     edges = [{"from": a, "to": b} for a, b in sorted(edge_set)]
 
     # sort: positioned first, then unpositioned
@@ -217,8 +226,10 @@ body { font-family: system-ui, sans-serif; background: #1a1d23; color: #e2e8f8; 
 .track-item .dot.done { background: #10b981; }
 .track-item .dot.empty { background: #2a2f42; border: 1px solid #4a4f62; }
 .track-item .id { font-weight: 500; min-width: 80px; }
+.track-item .id-small { color: #6b7599; font-size: 10px; }
 .track-item .type { color: #6b7599; font-size: 10px; }
 .track-item .pos { color: #6b7599; font-size: 10px; margin-left: auto; }
+.track-item .size-badge { font-size: 9px; color: #6b7599; background: #1e2333; padding: 1px 5px; border-radius: 3px; margin-left: 4px; }
 
 #controls { padding: 8px 12px; border-bottom: 1px solid #2a2f42; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 #controls label { font-size: 11px; color: #6b7599; display: flex; align-items: center; gap: 4px; }
@@ -245,6 +256,8 @@ body { font-family: system-ui, sans-serif; background: #1a1d23; color: #e2e8f8; 
 .marker:hover { border-color: #fff !important; }
 .marker.done { background: rgba(16, 185, 129, 0.7); border: 2px solid #10b981; }
 .marker.active { background: rgba(59, 130, 246, 0.9); border: 2px solid #93c5fd; z-index: 10; }
+.marker.size-big { border-width: 4px; }
+.marker.size-small { opacity: 0.5; }
 .marker-label { position: absolute; transform: translate(-50%, -100%); margin-top: -6px; font-size: 10px; color: #e2e8f8; white-space: nowrap; cursor: pointer; pointer-events: auto; text-shadow: 0 0 4px #000; }
 </style>
 </head>
@@ -257,6 +270,7 @@ body { font-family: system-ui, sans-serif; background: #1a1d23; color: #e2e8f8; 
   <div id="controls">
     <button id="btn-labels">Labels: on</button>
     <label>Size: <input id="size-slider" type="range" min="4" max="28" value="14"></label>
+    <button id="btn-node-size">Node: default</button>
   </div>
   <div id="track-list"></div>
   <div class="actions">
@@ -304,6 +318,23 @@ document.getElementById('size-slider').oninput = () => {
   drawEdges();
 };
 
+document.getElementById('btn-node-size').onclick = () => {
+  if (!selectedId) {
+    document.getElementById('status').textContent = 'Select a track first.';
+    return;
+  }
+  const t = tracks.find(x => x.id === selectedId);
+  if (!t) return;
+  const next = t.size === 'big' ? 'small' : t.size === 'small' ? undefined : 'big';
+  t.size = next;
+  dirty = true;
+  document.getElementById('status').textContent = `${t.name} (#${t.id}) size set to ${next || 'default'}.`;
+  document.getElementById('btn-node-size').textContent = 'Size: ' + (next || 'default');
+  renderList();
+  renderMarkers();
+  drawEdges();
+};
+
 async function load() {
   const resp = await fetch('/api/data');
   const data = await resp.json();
@@ -345,12 +376,15 @@ function renderList() {
     if (q && !match) return;
     const div = document.createElement('div');
     div.className = 'track-item' + (t.id === selectedId ? ' selected' : '');
+    div.dataset.id = t.id;
     const hasPos = t.x !== undefined;
     div.innerHTML = `
       <span class="dot ${hasPos ? 'done' : 'empty'}"></span>
-      <span class="id">${t.id}</span>
+      <span class="id">${t.name}</span>
+      <span class="id-small">#${t.id}</span>
       <span class="type">${t.type}</span>
       <span class="pos">${hasPos ? '(' + t.x + ', ' + t.y + ')' : ''}</span>
+      ${t.size ? `<span class="size-badge">${t.size}</span>` : ''}
     `;
     div.onclick = () => selectTrack(t.id);
     listEl.appendChild(div);
@@ -373,18 +407,19 @@ function renderMarkers() {
     const sx = t.x * scaleX;
     const sy = t.y * scaleY;
     const mk = document.createElement('div');
-    mk.className = 'marker' + (t.id === selectedId ? ' active' : ' done');
+    mk.className = 'marker' + (t.id === selectedId ? ' active' : ' done') + (t.size === 'big' ? ' size-big' : '') + (t.size === 'small' ? ' size-small' : '');
     mk.style.left = sx + 'px';
     mk.style.top = sy + 'px';
-    mk.style.width = nodeSize + 'px';
-    mk.style.height = nodeSize + 'px';
+    const sz = t.size === 'big' ? nodeSize + 6 : t.size === 'small' ? nodeSize - 4 : nodeSize;
+    mk.style.width = sz + 'px';
+    mk.style.height = sz + 'px';
     mk.onclick = (e) => { e.stopPropagation(); selectTrack(t.id); };
     overlay.appendChild(mk);
     const lb = document.createElement('div');
     lb.className = 'marker-label';
     lb.style.left = sx + 'px';
     lb.style.top = sy + 'px';
-    lb.textContent = t.id;
+    lb.textContent = t.name || t.id;
     lb.onclick = (e) => { e.stopPropagation(); selectTrack(t.id); };
     overlay.appendChild(lb);
   });
@@ -427,17 +462,18 @@ function selectTrack(id) {
   renderList();
   const items = listEl.querySelectorAll('.track-item');
   for (const item of items) {
-    if (item.querySelector('.id').textContent === id) {
+    if (item.dataset.id === id) {
       item.scrollIntoView({ block: 'nearest' });
       break;
     }
   }
   const t = tracks.find(x => x.id === id);
   if (t && t.x !== undefined) {
-    document.getElementById('status').textContent = `Selected ${id} — currently at (${t.x}, ${t.y}). Click the image to move it, or click a different track.`;
+    document.getElementById('status').textContent = `Selected ${t.name} (#${t.id}) — currently at (${t.x}, ${t.y}). Click the image to move it, or click a different track.`;
   } else {
-    document.getElementById('status').textContent = `Selected ${id} — click on the image to set its position.`;
+    document.getElementById('status').textContent = `Selected ${t.name} (#${t.id}) — click on the image to set its position.`;
   }
+  document.getElementById('btn-node-size').textContent = 'Size: ' + (t && t.size ? t.size : 'default');
 }
 
 imgEl.onclick = (e) => {
@@ -453,7 +489,7 @@ imgEl.onclick = (e) => {
     t.x = x;
     t.y = y;
     dirty = true;
-    document.getElementById('status').textContent = `${selectedId} set to (${x}, ${y}).`;
+    document.getElementById('status').textContent = `${t.name} (#${t.id}) set to (${x}, ${y}).`;
     renderList();
     renderMarkers();
     drawEdges();
@@ -466,7 +502,8 @@ document.getElementById('btn-save').onclick = async () => {
   const payload = { tracks: {} };
   tracks.forEach(t => {
     if (t.x !== undefined) {
-      payload.tracks[t.id] = { x: t.x, y: t.y };
+      payload.tracks[t.id] = { x: t.x, y: t.y, name: t.name || t.id };
+      if (t.size) payload.tracks[t.id].size = t.size;
     }
   });
   const resp = await fetch('/api/save', {
@@ -492,7 +529,7 @@ document.getElementById('btn-reset').onclick = () => {
     delete t.x;
     delete t.y;
     dirty = true;
-    document.getElementById('status').textContent = `${selectedId} position cleared.`;
+    document.getElementById('status').textContent = `${t.name} (#${t.id}) position cleared.`;
     renderList();
     renderMarkers();
     drawEdges();

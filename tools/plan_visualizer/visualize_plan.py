@@ -27,34 +27,41 @@ def unsanitize_track_token(token):
     return token[2:] if token.startswith("o_") else token
 
 
-def track_aliases(track):
-    values = {str(track.get("id", "")), str(track.get("name", ""))}
-    return {value for item in values for value in (item, sanitize_pddl_name(item)) if value}
-
-
 def build_track_maps(location):
     tracks = location.get("trackParts", [])
     id_to_track = {str(track["id"]): track for track in tracks}
-    token_to_name = {}
-    name_to_track = {}
-    for track in tracks:
-        name = str(track["name"])
-        name_to_track[name] = track
-        for alias in track_aliases(track):
-            token_to_name[alias] = name
-    return id_to_track, token_to_name, name_to_track
+    name_to_track = {str(track["name"]): track for track in tracks}
+    return id_to_track, name_to_track
+
+
+def to_track_id(token, id_to_track, name_to_track):
+    token = str(token)
+    if token in id_to_track:
+        return token
+    track = name_to_track.get(token)
+    if track:
+        return str(track["id"])
+    stripped = unsanitize_track_token(token)
+    if stripped != token:
+        return to_track_id(stripped, id_to_track, name_to_track)
+    return token
+
+
+def track_name(track_id, id_to_track):
+    track = id_to_track.get(str(track_id))
+    return str(track["name"]) if track else str(track_id)
 
 
 def build_edges(location, id_to_track):
     edges = []
     seen = set()
     for track in location.get("trackParts", []):
-        src = str(track["name"])
+        src = str(track["id"])
         for nb_id in track.get("aSide", []) + track.get("bSide", []):
             nb = id_to_track.get(str(nb_id))
             if not nb:
                 continue
-            tgt = str(nb["name"])
+            tgt = str(nb["id"])
             key = tuple(sorted([src, tgt]))
             if key not in seen:
                 edges.append({"source": src, "target": tgt})
@@ -62,9 +69,9 @@ def build_edges(location, id_to_track):
     return edges
 
 
-def parse_plan(path):
+def parse_plan(path, id_to_track=None):
     if str(path).lower().endswith(".json"):
-        return parse_solver_plan(path)
+        return parse_solver_plan(path, id_to_track)
     steps = []
     with open(path, "r", encoding="utf-8") as handle:
         for raw_line in handle:
@@ -109,12 +116,16 @@ def action_path_resources(action):
     return [str(r["trackPartId"]) for r in resources if r.get("trackPartId") is not None]
 
 
-def parse_solver_plan(path):
+def parse_solver_plan(path, id_to_track=None):
     plan = load_json(path)
     actions = sorted(
         plan.get("actions", []),
         key=lambda a: (int(a.get("startTime", 0)), int(a.get("endTime", 0))),
     )
+
+    def display(track_id):
+        return track_name(track_id, id_to_track) if id_to_track else str(track_id)
+
     steps = []
     for action in actions:
         task_name = task_type_name(action)
@@ -128,20 +139,32 @@ def parse_solver_plan(path):
         if task_name == "Wait":
             steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: Wait {train}", "action": "wait", "args": [train]})
         elif task_name == "Combine":
-            steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: Combine {train}", "action": "combine", "args": [train]})
+            child_ids = action.get("shuntingUnit", {}).get("childIDs", [])
+            combined_train = train
+            for cid in child_ids:
+                for a in actions:
+                    if a.get("shuntingUnit", {}).get("id") == cid:
+                        cm = a.get("shuntingUnit", {}).get("members", [])
+                        if cm:
+                            combined_train = "+".join(str(m["id"]) for m in cm)
+                            break
+            args = [combined_train]
+            if track:
+                args.append(track)
+            steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: Combine {combined_train}", "action": "combine", "args": args})
         elif not track:
             continue
         elif task_name == "Move":
-            steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: Move {train} \u2192 {track}", "action": "move_to", "args": [train, track], "path": path_raw})
+            steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: Move {train} \u2192 {display(track)}", "action": "move_to", "args": [train, track], "path": path_raw})
         elif task_name == "Arrive":
-            steps.append({"raw": f"{action.get('startTime')}: Arrive {train} @ {track}", "action": "arrive", "args": [train, track], "path": path_raw})
+            steps.append({"raw": f"{action.get('startTime')}: Arrive {train} @ {display(track)}", "action": "arrive", "args": [train, track], "path": path_raw})
         elif task_name == "Exit":
             standing_type = action.get("shuntingUnit", {}).get("standingType", "")
             action_name = "park" if standing_type == "OutStanding" else "depart"
             label = "Park" if action_name == "park" else "Depart"
-            steps.append({"raw": f"{action.get('startTime')}: {label} {train} @ {track}", "action": action_name, "args": [train, track], "path": path_raw})
+            steps.append({"raw": f"{action.get('startTime')}: {label} {train} @ {display(track)}", "action": action_name, "args": [train, track], "path": path_raw})
         else:
-            steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: {task_name} {train} @ {track}", "action": "service", "args": [train, track], "path": path_raw})
+            steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: {task_name} {train} @ {display(track)}", "action": "service", "args": [train, track], "path": path_raw})
     return steps
 
 
@@ -159,27 +182,20 @@ def initial_train_positions(scenario, id_to_track):
     for train in scenario.get("inStanding", {}).get("trains", []):
         track_id = train.get("firstParkingTrackPart") or train.get("entryTrackPart")
         if track_id and str(track_id) in id_to_track:
-            trains[member_name(train)] = {"track": str(id_to_track[str(track_id)]["name"]), "status": "active"}
+            trains[member_name(train)] = {"track": str(track_id), "status": "active"}
     return trains
 
 
-def normalize_track(token, token_to_name):
-    if token in token_to_name:
-        return token_to_name[token]
-    stripped = unsanitize_track_token(token)
-    return token_to_name.get(stripped, stripped)
-
-
-def normalize_path(raw_path, token_to_name):
+def dedupe_consecutive(raw_path):
     seen = []
     for t in raw_path:
-        norm = normalize_track(t, token_to_name)
-        if norm and (not seen or norm != seen[-1]):
-            seen.append(norm)
+        t = str(t)
+        if t and (not seen or t != seen[-1]):
+            seen.append(t)
     return seen
 
 
-def simulate_steps(initial_trains, steps, token_to_name):
+def simulate_steps(initial_trains, steps, id_to_track):
     states = [{"index": 0, "action": "initial", "action_type": "initial", "train": None, "raw": "Initial state", "trains": json.loads(json.dumps(initial_trains))}]
     trains = json.loads(json.dumps(initial_trains))
 
@@ -191,43 +207,43 @@ def simulate_steps(initial_trains, steps, token_to_name):
         raw_path = step.get("path")
 
         if raw_path:
-            train_path = {involved_train: normalize_path(raw_path, token_to_name)}
+            train_path = {involved_train: dedupe_consecutive(raw_path)}
         else:
             train_path = {}
 
         if action == "move" and len(args) >= 3:
             train, source, target = args[:3]
             trains.setdefault(train, {"track": None, "status": "active"})
-            trains[train]["track"] = normalize_track(target, token_to_name)
+            trains[train]["track"] = to_track_id(target, id_to_track, {})
             trains[train]["status"] = "active"
             action_type = "move"
         elif action == "move_to" and len(args) >= 2:
             train, target = args[:2]
             trains.setdefault(train, {"track": None, "status": "active"})
-            trains[train]["track"] = normalize_track(target, token_to_name)
+            trains[train]["track"] = to_track_id(target, id_to_track, {})
             trains[train]["status"] = "active"
             action_type = "move"
         elif action == "arrive" and len(args) >= 2:
             train, target = args[:2]
             trains.setdefault(train, {"track": None, "status": "active"})
-            trains[train]["track"] = normalize_track(target, token_to_name)
+            trains[train]["track"] = to_track_id(target, id_to_track, {})
             trains[train]["status"] = "active"
             action_type = "arrive"
         elif action == "park" and len(args) >= 2:
             train, track = args[:2]
             trains.setdefault(train, {"track": None, "status": "active"})
-            trains[train]["track"] = normalize_track(track, token_to_name)
+            trains[train]["track"] = to_track_id(track, id_to_track, {})
             trains[train]["status"] = "parked"
             action_type = "park"
             if "+" in train:
                 for member_id in train.split("+"):
                     if member_id in trains:
-                        trains[member_id]["track"] = normalize_track(track, token_to_name)
+                        trains[member_id]["track"] = to_track_id(track, id_to_track, {})
                         trains[member_id]["status"] = "parked"
         elif action == "depart" and len(args) >= 2:
             train, track = args[:2]
             trains.setdefault(train, {"track": None, "status": "active"})
-            trains[train]["track"] = normalize_track(track, token_to_name)
+            trains[train]["track"] = to_track_id(track, id_to_track, {})
             trains[train]["status"] = "departed"
             action_type = "depart"
             if "+" in train:
@@ -236,26 +252,39 @@ def simulate_steps(initial_trains, steps, token_to_name):
                         trains[member_id]["status"] = "departed"
         elif action == "combine" and len(args) >= 1:
             train = args[0]
-            if train in trains:
+            track = args[1] if len(args) >= 2 else None
+            if "+" in train:
+                members = train.split("+")
+                if track is None:
+                    for m in members:
+                        if m in trains and trains[m].get("track"):
+                            track = trains[m]["track"]
+                            break
+                track = to_track_id(track, id_to_track, {}) if track else None
+                trains[train] = {"track": track, "status": "combined"}
+                for m in members:
+                    if m in trains:
+                        trains[m]["status"] = "absorbed"
+            elif train in trains:
                 trains[train]["status"] = "combined"
             action_type = "combine"
         elif action in ("move_aside_empty", "move_aside_occupied",
                         "move_bside_empty", "move_bside_occupied") and len(args) >= 3:
             train, source, target = args[:3]
             trains.setdefault(train, {"track": None, "status": "active"})
-            trains[train]["track"] = normalize_track(target, token_to_name)
+            trains[train]["track"] = to_track_id(target, id_to_track, {})
             trains[train]["status"] = "active"
             action_type = "move"
         elif action in ("depart_aside", "depart_bside") and len(args) >= 2:
             train, track = args[:2]
             trains.setdefault(train, {"track": None, "status": "active"})
-            trains[train]["track"] = normalize_track(track, token_to_name)
+            trains[train]["track"] = to_track_id(track, id_to_track, {})
             trains[train]["status"] = "departed"
             action_type = "depart"
         elif action == "service" and len(args) >= 2:
             train, target = args[:2]
             trains.setdefault(train, {"track": None, "status": "active"})
-            trains[train]["track"] = normalize_track(target, token_to_name)
+            trains[train]["track"] = to_track_id(target, id_to_track, {})
             trains[train]["status"] = "service"
             action_type = "service"
         elif action in ("start_move", "end_move"):
@@ -338,6 +367,7 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
       --status-service-bg: #fef3c7; --status-service-fg: #92400e;
       --status-departed-bg: #f3f4f6;--status-departed-fg: #9ca3af;
       --status-combined-bg: #f3e8ff;--status-combined-fg: #7e22ce;
+      --status-absorbed-bg: #f3f4f6;--status-absorbed-fg: #9ca3af;
       --track-changed-bg: #fef3c7; --track-changed-fg: #92400e;
       --track-normal-fg: #374151; --track-departed-fg: #d1d5db;
       --action-bar-bg: #eff6ff; --action-bar-border: #bfdbfe; --action-bar-fg: #1e40af;
@@ -365,6 +395,7 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
       --status-service-bg: #451a03; --status-service-fg: #fbbf24;
       --status-departed-bg: #1f2937;--status-departed-fg: #6b7280;
       --status-combined-bg: #2e1065;--status-combined-fg: #d8b4fe;
+      --status-absorbed-bg: #1f2937;--status-absorbed-fg: #6b7280;
       --track-changed-bg: #451a03; --track-changed-fg: #fdba74;
       --track-normal-fg: #c9d1e8; --track-departed-fg: #374151;
       --action-bar-bg: #1e3a5f; --action-bar-border: #1d4ed8; --action-bar-fg: #93c5fd;
@@ -426,6 +457,7 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
     .status-service  {{ background: var(--status-service-bg);  color: var(--status-service-fg); }}
     .status-departed {{ background: var(--status-departed-bg); color: var(--status-departed-fg); }}
     .status-combined {{ background: var(--status-combined-bg); color: var(--status-combined-fg); }}
+    .status-absorbed {{ background: var(--status-absorbed-bg); color: var(--status-absorbed-fg); }}
     .track-cell {{ font-family: monospace; font-size: 12px; font-weight: 500; }}
     .track-changed  {{ background: var(--track-changed-bg); color: var(--track-changed-fg); border-radius: 4px; padding: 2px 6px; }}
     .track-normal   {{ color: var(--track-normal-fg); }}
@@ -464,6 +496,10 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
     .legend {{ padding: 10px 14px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 5px; flex-shrink: 0; }}
     .leg {{ display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }}
     .leg-dot {{ width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }}
+    #node-tooltip {{ position: fixed; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 6px 10px; font-size: 12px; pointer-events: none; z-index: 1000; display: none; box-shadow: 0 2px 8px rgba(0,0,0,0.3); white-space: nowrap; }}
+    #node-tooltip .tt-name {{ font-weight: 600; }}
+    #node-tooltip .tt-type {{ color: var(--muted); font-size: 11px; margin-left: 4px; }}
+    #node-tooltip .tt-parking {{ font-size: 10px; color: var(--muted); margin-left: 4px; }}
   </style>
 </head>
 <body>
@@ -503,6 +539,7 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
     </svg>
   </div>
   <div id="yard-legend"></div>
+  <div id="node-tooltip"><span class="tt-name"></span><span class="tt-type"></span><span class="tt-parking"></span></div>
 </div>
 
 <main>
@@ -575,9 +612,9 @@ function plainDesc(state) {{
     const prev=data.states[Math.max(0,current-1)].trains[state.train];
     const isCombined = state.train && state.train.includes('+');
     const suffix = isCombined ? ' \u2014 combined unit' : '';
-    return t+' moved from track '+(prev?prev.track:'?')+' \u2192 track '+(info?info.track:'?')+suffix;
+    return t+' moved from track '+trackName(prev?prev.track:null)+' \u2192 track '+trackName(info?info.track:null)+suffix;
   }}
-  if (a==='park'&&t) {{ const info=data.states[current].trains[state.train]; return t+' parked on track '+(info?info.track:'?'); }}
+  if (a==='park'&&t) {{ const info=data.states[current].trains[state.train]; return t+' parked on track '+trackName(info?info.track:null); }}
   if (a==='depart'&&t) {{ const m=raw.match(/@\s*(\S+)/); return t+' departed from track '+(m?m[1]:'?')+' \u2713'; }}
   if (a==='service'&&t) return t+' \u2014 service: '+raw.replace(/^\d+(\.\.\d+)?:\s*/,'');
   if (a==='wait'&&t) return t+' waiting';
@@ -589,6 +626,14 @@ const positions = data.positions || {{}};
 const trackMeta = data.trackMeta || {{}};
 const posKeys = Object.keys(positions);
 const hasPositions = posKeys.length > 0;
+function trackName(id) {{
+  if (!id) return '?';
+  const pos = positions[id];
+  if (pos && pos.name) return pos.name;
+  const meta = trackMeta[id];
+  if (meta && meta.name) return meta.name;
+  return id;
+}}
 let svgMinX=0, svgMinY=0, svgScaleX=1, svgScaleY=1, svgPad=20, svgNodeR=3, svgNodeRActive=5, svgNodeRPrev=4;
 
 function buildYard() {{
@@ -628,18 +673,34 @@ function buildYard() {{
     edgesLayer.appendChild(line);
   }});
   const nodesLayer=document.getElementById('nodes-layer');
-  posKeys.forEach(name => {{
-    const pos=positions[name];
-    const meta=trackMeta[name]||{{}};
+  posKeys.forEach(id => {{
+    const pos=positions[id];
+    const meta=trackMeta[id]||{{}};
+    const layoutSize=pos&&pos.size;
     const isParking=meta.parkingAllowed===true;
-    const r=isParking?svgNodeR:svgNodeR*0.5;
+    const r=layoutSize==='big'?svgNodeR:layoutSize==='small'?svgNodeR*0.5:isParking?svgNodeR:svgNodeR*0.5;
     const c=document.createElementNS('http://www.w3.org/2000/svg','circle');
     c.setAttribute('cx',toSvgX(pos.x)); c.setAttribute('cy',toSvgY(pos.y));
     c.setAttribute('r',r); c.setAttribute('fill','var(--yard-node)');
     c.setAttribute('stroke','#fff'); c.setAttribute('stroke-width','2');
     c.setAttribute('data-parking',isParking?'1':'0');
-    c.setAttribute('id','node-'+name.replace(/[^a-zA-Z0-9]/g,'_'));
-    const title=document.createElementNS('http://www.w3.org/2000/svg','title'); title.textContent=name+(isParking?' (parking)':''); c.appendChild(title);
+    c.setAttribute('data-id',id);
+    c.setAttribute('id','node-'+id.replace(/[^a-zA-Z0-9]/g,'_'));
+    c.addEventListener('mouseover', function(e) {{
+      const tip=document.getElementById('node-tooltip');
+      tip.querySelector('.tt-name').textContent=trackName(id);
+      tip.querySelector('.tt-type').textContent=meta.type?'('+meta.type+')':'';
+      tip.querySelector('.tt-parking').textContent=isParking?'parking':'';
+      tip.style.display='block';
+    }});
+    c.addEventListener('mousemove', function(e) {{
+      const tip=document.getElementById('node-tooltip');
+      tip.style.left=(e.clientX+12)+'px';
+      tip.style.top=(e.clientY-8)+'px';
+    }});
+    c.addEventListener('mouseout', function() {{
+      document.getElementById('node-tooltip').style.display='none';
+    }});
     nodesLayer.appendChild(c);
   }});
   const legendEl=document.getElementById('yard-legend');
@@ -658,16 +719,20 @@ function updateYard(state, prevState) {{
     l.setAttribute('stroke','var(--yard-edge)'); l.setAttribute('stroke-width','1.5');
   }});
   document.querySelectorAll('#nodes-layer circle').forEach(c => {{
+    const id=c.getAttribute('data-id');
+    const pos=id?positions[id]:null;
+    const layoutSize=pos&&pos.size;
     const isParking=c.getAttribute('data-parking')==='1';
+    const r=layoutSize==='big'?svgNodeR:layoutSize==='small'?svgNodeR*0.5:isParking?svgNodeR:svgNodeR*0.5;
     c.setAttribute('fill','var(--yard-node)');
     c.setAttribute('stroke','#fff'); c.setAttribute('stroke-width','2');
-    c.setAttribute('r',isParking?svgNodeR:svgNodeR*0.5);
+    c.setAttribute('r',r);
   }});
   const trainsToShow=filterTrain?[filterTrain]:allTrains;
   trainsToShow.forEach(train => {{
     const info=state.trains[train];
-    if(!info||!info.track||info.status==='departed') return;
-    const color=info.status==='combined'?'#7e22ce':trainColorMap[train];
+    if(!info||!info.track||info.status==='departed'||info.status==='absorbed') return;
+    const color=trainColorMap[train];
     const trainPath = state.train_path && state.train_path[train];
     if (trainPath && trainPath.length >= 2) {{
       for (let i = 0; i < trainPath.length; i++) {{
@@ -796,28 +861,19 @@ function render(idx) {{
     const isCombined=info.status==='combined';
 
     if(row) {{
-      row.classList.toggle('is-combined', false);
+      row.classList.toggle('is-combined', info.status==='absorbed');
     }}
-    if (isCombined && !train.includes('+')) {{
-      const combinedUnit = allTrains.find(t => t.includes('+') && t.split('+').includes(train) && state.trains[t] && state.trains[t].status !== 'combined');
-      const tag = combinedUnit ? ` <span style="font-size:10px;background:var(--badge-combine-bg);color:var(--badge-combine-fg);padding:1px 5px;border-radius:4px;">in ${{combinedUnit.split('+').join(' + ')}}</span>` : '';
-      trackEl.innerHTML = `<span class="track-cell" style="color:#7e22ce">${{info.track||'\u2014'}}</span>${{tag}}`;
-      let statusHTML = '<span class="status-badge status-combined">combined</span>';
-      statusEl.innerHTML = statusHTML;
-      prevEl.innerHTML = `<span class="prev-track">${{prev&&prev.track?prev.track:'-'}}</span>`;
-      return;
-    }}
-
     let statusHTML='';
     if(info.status==='parked') statusHTML='<span class="status-badge status-parked">parked</span>';
     else if(info.status==='departed') statusHTML='<span class="status-badge status-departed">departed</span>';
-    else if(info.status==='combined') statusHTML='<span class="status-badge status-combined">absorbed</span>';
+    else if(info.status==='combined') statusHTML='<span class="status-badge status-combined">combined</span>';
+    else if(info.status==='absorbed') statusHTML='<span class="status-badge status-absorbed">absorbed</span>';
     else if(info.status==='service') statusHTML='<span class="status-badge status-service">service</span>';
     else statusHTML='<span class="status-badge status-active">moving</span>';
     statusEl.innerHTML=statusHTML;
 
-    const isMemberCombined = isCombined && !train.includes('+');
-    const cls=changed?'track-cell track-changed':isMemberCombined?'track-cell track-departed':'track-cell track-normal';
+    const isAbsorbed = info.status==='absorbed';
+    const cls=changed?'track-cell track-changed':isAbsorbed?'track-cell track-departed':'track-cell track-normal';
 
     // Entry queue tag
     const trainsOnSameTrack=allTrains.filter(t=>state.trains[t]&&state.trains[t].track===info.track);
@@ -827,9 +883,9 @@ function render(idx) {{
     }});
     const entryTag=trainsOnSameTrack.length>1&&noneHaveMoved
       ?' <span style="font-size:10px;color:var(--muted);font-weight:400">(entry queue)</span>':'';
-    const trackDisplay = info.track || (isCombined ? '\u2014 combined' : '\u2014 not yet in yard');
+    const trackDisplay = info.track ? trackName(info.track) : (info.status==='absorbed' ? '\u2014 absorbed' : isCombined ? '\u2014 combined' : '\u2014 not yet in yard');
     trackEl.innerHTML=`<span class="${{cls}}">${{trackDisplay}}</span>${{entryTag}}`;
-    prevEl.innerHTML=`<span class="prev-track">${{prev&&prev.track?prev.track:'-'}}</span>`;
+    prevEl.innerHTML=`<span class="prev-track">${{prev&&prev.track?trackName(prev.track):'-'}}</span>`;
   }});
 
   updateYard(state,prevState);
@@ -890,23 +946,28 @@ def main():
 
     location = load_json(args.location)
     scenario = load_json(args.scenario)
-    id_to_track, token_to_name, name_to_track = build_track_maps(location)
+    id_to_track, name_to_track = build_track_maps(location)
     edges = build_edges(location, id_to_track)
     initial = initial_train_positions(scenario, id_to_track)
-    steps = parse_plan(args.plan)
-    states = simulate_steps(initial, steps, token_to_name)
+    steps = parse_plan(args.plan, id_to_track)
+    states = simulate_steps(initial, steps, id_to_track)
 
     layout = load_layout(args.layout)
     raw_positions = layout.get("tracks", {})
-    name_set = set(name_to_track.keys())
-    lower_map = {k.lower(): v for k, v in token_to_name.items()}
     positions = {}
     for key, pos in raw_positions.items():
-        if key in name_set:
-            track_name = key
+        name = pos.get("name")
+        if key in id_to_track:
+            tid = key
+            if not name:
+                name = track_name(tid, id_to_track)
+        elif key in name_to_track:
+            tid = str(name_to_track[key]["id"])
+            name = key
         else:
-            track_name = token_to_name.get(key) or lower_map.get(key.lower(), key)
-        positions[track_name] = {"x": pos["x"], "y": pos["y"]}
+            tid = key
+            name = name or key
+        positions[tid] = {"x": pos["x"], "y": pos["y"], "size": pos.get("size"), "name": name}
     layout["tracks"] = positions
 
     image_data_uri = None
@@ -920,7 +981,7 @@ def main():
         image_width = layout.get("width")
         image_height = layout.get("height")
 
-    track_meta = {str(t["name"]): {"parkingAllowed": t.get("parkingAllowed", False), "type": t.get("type", "")} for t in location.get("trackParts", [])}
+    track_meta = {str(t["id"]): {"name": str(t["name"]), "parkingAllowed": t.get("parkingAllowed", False), "type": t.get("type", "")} for t in location.get("trackParts", [])}
     render_html(Path(args.location).parent.name, states, edges, layout, args.output,
                 image_data_uri=image_data_uri, image_width=image_width, image_height=image_height,
                 track_meta=track_meta)
