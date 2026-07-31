@@ -193,6 +193,28 @@ def parse_solver_plan(path, id_to_track=None):
     return steps
 
 
+def entry_side_of(track_id, neighbor_id, location):
+    """Which side of `track_id` connects to `neighbor_id` ('a' or 'b', None if unknown)."""
+    track_id = str(track_id)
+    neighbor_id = str(neighbor_id)
+    for part in location.get("trackParts", []):
+        if str(part.get("id")) != track_id:
+            continue
+        if neighbor_id in part.get("aSide", []):
+            return "a"
+        if neighbor_id in part.get("bSide", []):
+            return "b"
+        return None
+    return None
+
+
+def entry_side_from_path(raw_path, target, location):
+    """Entry side of `target` given a path list whose last hop is <neighbor> -> <target>."""
+    if raw_path and len(raw_path) >= 2:
+        return entry_side_of(target, raw_path[-2], location)
+    return None
+
+
 def initial_train_positions(scenario, id_to_track):
     trains = {}
 
@@ -207,7 +229,11 @@ def initial_train_positions(scenario, id_to_track):
     for train in scenario.get("inStanding", {}).get("trains", []):
         track_id = train.get("firstParkingTrackPart") or train.get("entryTrackPart")
         if track_id and str(track_id) in id_to_track:
-            trains[member_name(train)] = {"track": str(track_id), "status": "active"}
+            trains[member_name(train)] = {
+                "track": str(track_id),
+                "status": "active",
+                "restSide": "b",
+            }
     return trains
 
 
@@ -220,9 +246,87 @@ def dedupe_consecutive(raw_path):
     return seen
 
 
-def simulate_steps(initial_trains, steps, id_to_track):
+def member_lengths_from_scenario(scenario):
+    lengths = {}
+
+    def add_unit(unit):
+        if not isinstance(unit, dict):
+            return
+        unit_id = str(unit.get("id", ""))
+        length = unit.get("type", {}).get("length")
+        if unit_id and length:
+            lengths[unit_id] = float(length)
+
+    def add_train(train):
+        if not isinstance(train, dict):
+            return
+        for member in train.get("members", []) or []:
+            add_unit(member.get("trainUnit"))
+
+    if isinstance(scenario, dict):
+        in_trains = scenario.get("in", {}).get("trains", []) if isinstance(scenario.get("in"), dict) else []
+        standing = scenario.get("inStanding", {})
+        standing_trains = standing.get("trains", []) if isinstance(standing, dict) else standing
+        out_trains = scenario.get("out", {}).get("trainRequests", []) if isinstance(scenario.get("out"), dict) else []
+        for train in list(in_trains) + list(standing_trains) + list(out_trains):
+            add_train(train)
+        for unit in scenario.get("trainUnitTypes", []) or []:
+            add_unit(unit)
+    return lengths
+
+
+def member_lengths_from_plan(plan_path):
+    lengths = {}
+    if not plan_path or not Path(plan_path).exists():
+        return lengths
+    if not str(plan_path).lower().endswith(".json"):
+        return lengths
+    plan = load_json(plan_path)
+    for action in plan.get("actions", []) or []:
+        members = action.get("shuntingUnit", {}).get("members", []) or []
+        for member in members:
+            unit_id = str(member.get("id", ""))
+            length = member.get("type", {}).get("length")
+            if unit_id and length:
+                lengths[unit_id] = float(length)
+    return lengths
+
+
+def collect_train_lengths(scenario, plan_path, states):
+    """Map train name -> total length (m). Names are '+' -joined member ids."""
+    member_lengths = {}
+    member_lengths.update(member_lengths_from_scenario(scenario))
+    member_lengths.update(member_lengths_from_plan(plan_path))
+    if not member_lengths:
+        return {}
+    names = set()
+    for state in states:
+        names.update(state.get("trains", {}).keys())
+    result = {}
+    for name in names:
+        total = sum(member_lengths.get(part, 0) for part in str(name).split("+"))
+        if total > 0:
+            result[name] = total
+    return result
+
+
+def simulate_steps(initial_trains, steps, id_to_track, location=None):
     states = [{"index": 0, "action": "initial", "action_type": "initial", "train": None, "raw": "Initial state", "trains": json.loads(json.dumps(initial_trains))}]
     trains = json.loads(json.dumps(initial_trains))
+
+    def land(train, target, status="active"):
+        prev_track = trains.get(train, {}).get("track")
+        tid = to_track_id(target, id_to_track, {})
+        entry = entry_side_from_path(raw_path, tid, location)
+        if entry is None and location and prev_track and prev_track != tid:
+            entry = entry_side_of(tid, prev_track, location)
+        trains.setdefault(train, {"track": None, "status": "active"})
+        trains[train]["track"] = tid
+        trains[train]["status"] = status
+        rest = {"a": "b", "b": "a"}.get(entry)
+        if rest:
+            trains[train]["restSide"] = rest
+        return tid
 
     for index, step in enumerate(steps, start=1):
         action = step["action"]
@@ -238,38 +342,30 @@ def simulate_steps(initial_trains, steps, id_to_track):
 
         if action == "move" and len(args) >= 3:
             train, source, target = args[:3]
-            trains.setdefault(train, {"track": None, "status": "active"})
-            trains[train]["track"] = to_track_id(target, id_to_track, {})
-            trains[train]["status"] = "active"
+            land(train, target, "active")
             action_type = "move"
         elif action == "move_to" and len(args) >= 2:
             train, target = args[:2]
-            trains.setdefault(train, {"track": None, "status": "active"})
-            trains[train]["track"] = to_track_id(target, id_to_track, {})
-            trains[train]["status"] = "active"
+            land(train, target, "active")
             action_type = "move"
         elif action == "arrive" and len(args) >= 2:
             train, target = args[:2]
-            trains.setdefault(train, {"track": None, "status": "active"})
-            trains[train]["track"] = to_track_id(target, id_to_track, {})
-            trains[train]["status"] = "active"
+            land(train, target, "active")
             action_type = "arrive"
         elif action == "park" and len(args) >= 2:
             train, track = args[:2]
-            trains.setdefault(train, {"track": None, "status": "active"})
-            trains[train]["track"] = to_track_id(track, id_to_track, {})
-            trains[train]["status"] = "parked"
+            land(train, track, "parked")
             action_type = "park"
             if "+" in train:
                 for member_id in train.split("+"):
                     if member_id in trains:
                         trains[member_id]["track"] = to_track_id(track, id_to_track, {})
                         trains[member_id]["status"] = "parked"
+                        if trains[train].get("restSide"):
+                            trains[member_id]["restSide"] = trains[train]["restSide"]
         elif action == "depart" and len(args) >= 2:
             train, track = args[:2]
-            trains.setdefault(train, {"track": None, "status": "active"})
-            trains[train]["track"] = to_track_id(track, id_to_track, {})
-            trains[train]["status"] = "departed"
+            land(train, track, "departed")
             action_type = "depart"
             if "+" in train:
                 for member_id in train.split("+"):
@@ -286,7 +382,10 @@ def simulate_steps(initial_trains, steps, id_to_track):
                             track = trains[m]["track"]
                             break
                 track = to_track_id(track, id_to_track, {}) if track else None
+                side = next((trains[m].get("restSide") for m in members if m in trains and trains[m].get("restSide")), None)
                 trains[train] = {"track": track, "status": "combined"}
+                if side:
+                    trains[train]["restSide"] = side
                 for m in members:
                     if m in trains:
                         trains[m]["status"] = "absorbed"
@@ -309,25 +408,21 @@ def simulate_steps(initial_trains, steps, id_to_track):
             children = step.get("children") or (parent.split("+") if "+" in parent else [parent])
             for child in children:
                 trains[child] = {"track": track, "status": "active"}
+                if combined and combined.get("restSide"):
+                    trains[child]["restSide"] = combined["restSide"]
             action_type = "split"
         elif action in ("move_aside_empty", "move_aside_occupied",
                         "move_bside_empty", "move_bside_occupied") and len(args) >= 3:
             train, source, target = args[:3]
-            trains.setdefault(train, {"track": None, "status": "active"})
-            trains[train]["track"] = to_track_id(target, id_to_track, {})
-            trains[train]["status"] = "active"
+            land(train, target, "active")
             action_type = "move"
         elif action in ("depart_aside", "depart_bside") and len(args) >= 2:
             train, track = args[:2]
-            trains.setdefault(train, {"track": None, "status": "active"})
-            trains[train]["track"] = to_track_id(track, id_to_track, {})
-            trains[train]["status"] = "departed"
+            land(train, track, "departed")
             action_type = "depart"
         elif action == "service" and len(args) >= 2:
             train, target = args[:2]
-            trains.setdefault(train, {"track": None, "status": "active"})
-            trains[train]["track"] = to_track_id(target, id_to_track, {})
-            trains[train]["status"] = "service"
+            land(train, target, "service")
             action_type = "service"
         elif action in ("start_move", "end_move"):
             action_type = "wait"
@@ -371,7 +466,7 @@ def encode_image_base64(image_path):
     return f"data:{mime};base64,{data}"
 
 
-def render_html(location_name, states, edges, layout, output_path, image_data_uri=None, image_width=None, image_height=None, track_meta=None):
+def render_html(location_name, states, edges, layout, output_path, image_data_uri=None, image_width=None, image_height=None, track_meta=None, train_lengths=None):
     payload = {
         "locationName": location_name,
         "states": states,
@@ -381,6 +476,7 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
         "imageWidth": image_width,
         "imageHeight": image_height,
         "trackMeta": track_meta or {},
+        "trainLengths": train_lengths or {},
     }
     data_json = json.dumps(payload)
 
@@ -495,6 +591,7 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
 
     .train-dot {{ display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; flex-shrink: 0; }}
     .train-name {{ font-weight: 600; font-size: 12px; color: var(--heading); font-family: monospace; }}
+    .train-len {{ font-size: 10px; color: var(--muted); font-weight: 400; margin-left: 4px; }}
     .status-badge {{ display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 500; }}
     .status-active   {{ background: var(--status-active-bg);   color: var(--status-active-fg); }}
     .status-waiting  {{ background: var(--status-waiting-bg);  color: var(--status-waiting-fg); }}
@@ -584,6 +681,7 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
     <svg id="yard-svg" height="120" viewBox="0 0 1000 120" preserveAspectRatio="xMidYMid meet">
       <g id="edges-layer"></g>
       <g id="nodes-layer"></g>
+      <g id="train-layer"></g>
     </svg>
   </div>
   <div id="yard-legend"></div>
@@ -798,6 +896,69 @@ function buildYard() {{
 function toSvgX(x) {{ return svgPad+(x-svgMinX)*svgScaleX; }}
 function toSvgY(y) {{ return svgPad+(y-svgMinY)*svgScaleY; }}
 
+function polylineLength(shape) {{
+  let total = 0;
+  for (let i = 1; i < shape.length; i++) {{
+    total += Math.hypot(shape[i][0]-shape[i-1][0], shape[i][1]-shape[i-1][1]);
+  }}
+  return total;
+}}
+
+// Sub-polyline of `shape` covering cumulative pixel-length fractions [fStart, fEnd].
+function subPolyline(shape, fStart, fEnd) {{
+  const total = polylineLength(shape);
+  if (total <= 0 || fStart >= 1 || fEnd <= 0 || fEnd <= fStart) return [];
+  const startD = Math.max(0, Math.min(total, fStart * total));
+  const endD = Math.max(startD, Math.min(total, fEnd * total));
+  const pts = [];
+  let acc = 0;
+  for (let i = 1; i < shape.length; i++) {{
+    const a = shape[i-1], b = shape[i];
+    const seg = Math.hypot(b[0]-a[0], b[1]-a[1]);
+    if (seg <= 0) continue;
+    const segStart = acc, segEnd = acc + seg;
+    if (segEnd < startD) {{ acc = segEnd; continue; }}
+    if (segStart > endD) break;
+    if (pts.length === 0) {{
+      const t0 = Math.max(0, (startD - segStart) / seg);
+      pts.push([a[0] + (b[0]-a[0])*t0, a[1] + (b[1]-a[1])*t0]);
+    }}
+    if (segEnd >= endD) {{
+      const t1 = Math.min(1, (endD - segStart) / seg);
+      if (t1 > 0) pts.push([a[0] + (b[0]-a[0])*t1, a[1] + (b[1]-a[1])*t1]);
+      break;
+    }}
+    pts.push([b[0], b[1]]);
+    acc = segEnd;
+  }}
+  if (pts.length === 1) pts.push(pts[0]);
+  return pts;
+}}
+
+function trainRatio(train, trackId) {{
+  const trackLen = trackMeta[trackId] ? trackMeta[trackId].length : 0;
+  const trainLen = data.trainLengths ? data.trainLengths[train] : 0;
+  if (trainLen > 0 && trackLen > 0) return Math.min(1, trainLen / trackLen);
+  return 1;
+}}
+
+function drawTrainSegment(trackId, fStart, fEnd, color) {{
+  const pos = positions[trackId];
+  const shape = pos && Array.isArray(pos.shape) && pos.shape.length >= 2 ? pos.shape : null;
+  if (!shape) return;
+  const pts = subPolyline(shape, fStart, fEnd);
+  if (!pts.length) return;
+  const poly = document.createElementNS('http://www.w3.org/2000/svg','polyline');
+  poly.setAttribute('points', pts.map(p => toSvgX(p[0]) + ',' + toSvgY(p[1])).join(' '));
+  poly.setAttribute('fill','none');
+  poly.setAttribute('stroke', color);
+  poly.setAttribute('stroke-width', svgTrackWActive);
+  poly.setAttribute('stroke-linejoin','round');
+  poly.setAttribute('stroke-linecap','round');
+  poly.setAttribute('style','pointer-events:none');
+  document.getElementById('train-layer').appendChild(poly);
+}}
+
 function updateYard(state, prevState) {{
   if(!hasPositions) return;
   document.querySelectorAll('#edges-layer line').forEach(l => {{
@@ -817,6 +978,7 @@ function updateYard(state, prevState) {{
       n.setAttribute('r',nodeCircleR(pos,meta));
     }}
   }});
+  document.getElementById('train-layer').innerHTML='';
   const trainsToShow=filterTrain?[filterTrain]:allTrains;
   trainsToShow.forEach(train => {{
     const info=state.trains[train];
@@ -846,15 +1008,6 @@ function updateYard(state, prevState) {{
           }});
         }}
       }}
-    }} else {{
-      const node=document.getElementById('node-'+info.track.replace(/[^a-zA-Z0-9]/g,'_'));
-      if(node) {{
-        if (node.getAttribute('data-shape')==='1') {{
-          node.setAttribute('stroke',color); node.setAttribute('stroke-width',svgTrackWActive);
-        }} else {{
-          node.setAttribute('fill',color); node.setAttribute('r',svgNodeRActive);
-        }}
-      }}
     }}
     if(prevState) {{
       const prev=prevState.trains[train];
@@ -874,6 +1027,47 @@ function updateYard(state, prevState) {{
       }}
     }}
   }});
+
+  // Parked / waiting trains: draw proportional-length segments along track shapes.
+  // Each train rests flush against its restSide end (a-side or b-side), i.e. it
+  // moved as far as possible away from the side it entered; unknown -> b-side.
+  const groups = {{}};
+  Object.keys(state.trains).forEach(train => {{
+    if (filterTrain && train !== filterTrain) return;
+    const info = state.trains[train];
+    if (!info || !info.track || info.status==='departed' || info.status==='absorbed') return;
+    if (state.train_path && state.train_path[train] && state.train_path[train].length >= 2) return;
+    (groups[info.track] = groups[info.track] || []).push(train);
+  }});
+  Object.keys(groups).forEach(trackId => {{
+    const pos = positions[trackId];
+    const shape = pos && Array.isArray(pos.shape) && pos.shape.length >= 2 ? pos.shape : null;
+    const node = document.getElementById('node-'+trackId.replace(/[^a-zA-Z0-9]/g,'_'));
+    if (shape) {{
+      const anchorA = [], anchorB = [];
+      groups[trackId].forEach(train => {{
+        const info = state.trains[train];
+        (info.restSide === 'a' ? anchorA : anchorB).push(train);
+      }});
+      let cum = 0;
+      anchorA.forEach(train => {{
+        const end = Math.min(1, cum + trainRatio(train, trackId));
+        if (end > cum) drawTrainSegment(trackId, cum, end, trainColorMap[train]);
+        cum = end;
+      }});
+      let cumEnd = 1;
+      anchorB.forEach(train => {{
+        const start = Math.max(0, cumEnd - trainRatio(train, trackId));
+        if (cumEnd > start) drawTrainSegment(trackId, start, cumEnd, trainColorMap[train]);
+        cumEnd = start;
+      }});
+    }} else if (node) {{
+      groups[trackId].forEach(train => {{
+        node.setAttribute('fill', trainColorMap[train]);
+        node.setAttribute('r', svgNodeRActive);
+      }});
+    }}
+  }});
 }}
 
 // ---- TABLE ----
@@ -882,7 +1076,7 @@ function buildRows() {{
     const isComboPair = train.includes('+');
     const rowClass = isComboPair ? 'data-row combo-row' : 'data-row';
     return `<tr class="${{rowClass}}" id="row-${{train}}" onclick="filterByTrain('${{train}}')">
-      <td><span class="train-dot" style="background:${{trainColorMap[train]}}"></span><span class="train-name">${{shortName(train)}}</span></td>
+      <td><span class="train-dot" style="background:${{trainColorMap[train]}}"></span><span class="train-name">${{shortName(train)}}</span>${{data.trainLengths && data.trainLengths[train] ? `<span class="train-len">\u00b7 ${{data.trainLengths[train]}} m</span>` : ''}}</td>
       <td id="status-${{train}}">-</td>
       <td id="track-${{train}}">-</td>
       <td id="prev-track-${{train}}"><span class="prev-track">-</span></td>
@@ -1054,7 +1248,8 @@ def main():
     edges = build_edges(location, id_to_track)
     initial = initial_train_positions(scenario, id_to_track)
     steps = parse_plan(args.plan, id_to_track)
-    states = simulate_steps(initial, steps, id_to_track)
+    states = simulate_steps(initial, steps, id_to_track, location)
+    train_lengths = collect_train_lengths(scenario, args.plan, states)
 
     layout = load_layout(args.layout)
     raw_positions = layout.get("tracks", {})
@@ -1085,10 +1280,10 @@ def main():
         image_width = layout.get("width")
         image_height = layout.get("height")
 
-    track_meta = {str(t["id"]): {"name": str(t["name"]), "parkingAllowed": t.get("parkingAllowed", False), "type": t.get("type", "")} for t in location.get("trackParts", [])}
+    track_meta = {str(t["id"]): {"name": str(t["name"]), "parkingAllowed": t.get("parkingAllowed", False), "type": t.get("type", ""), "length": t.get("length", 0)} for t in location.get("trackParts", [])}
     render_html(Path(args.location).parent.name, states, edges, layout, args.output,
                 image_data_uri=image_data_uri, image_width=image_width, image_height=image_height,
-                track_meta=track_meta)
+                track_meta=track_meta, train_lengths=train_lengths)
     print(f"Wrote visualizer to {args.output}")
     print(f"Steps: {len(steps)}; trains: {len(initial)}; yard nodes: {len(positions)}")
 
