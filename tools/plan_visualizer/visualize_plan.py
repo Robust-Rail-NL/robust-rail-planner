@@ -57,14 +57,23 @@ def build_edges(location, id_to_track):
     seen = set()
     for track in location.get("trackParts", []):
         src = str(track["id"])
-        for nb_id in track.get("aSide", []) + track.get("bSide", []):
+        for nb_id in track.get("aSide", []):
             nb = id_to_track.get(str(nb_id))
             if not nb:
                 continue
             tgt = str(nb["id"])
             key = tuple(sorted([src, tgt]))
             if key not in seen:
-                edges.append({"source": src, "target": tgt})
+                edges.append({"source": src, "sourceSide": "a", "target": tgt, "targetSide": "b"})
+                seen.add(key)
+        for nb_id in track.get("bSide", []):
+            nb = id_to_track.get(str(nb_id))
+            if not nb:
+                continue
+            tgt = str(nb["id"])
+            key = tuple(sorted([src, tgt]))
+            if key not in seen:
+                edges.append({"source": src, "sourceSide": "b", "target": tgt, "targetSide": "a"})
                 seen.add(key)
     return edges
 
@@ -674,7 +683,38 @@ function trackName(id) {{
   if (meta && meta.name) return meta.name;
   return id;
 }}
-let svgMinX=0, svgMinY=0, svgScaleX=1, svgScaleY=1, svgPad=20, svgNodeR=3, svgNodeRActive=5, svgNodeRPrev=4;
+let svgMinX=0, svgMinY=0, svgScaleX=1, svgScaleY=1, svgPad=20, svgNodeR=3, svgNodeRActive=5, svgNodeRPrev=4, svgTrackW=2, svgTrackWActive=3, svgTrackWPrev=2.5;
+
+function portOf(pos, side) {{
+  if (pos && Array.isArray(pos.shape) && pos.shape.length>=2) {{
+    return side==='a' ? pos.shape[0] : pos.shape[pos.shape.length-1];
+  }}
+  return pos ? [pos.x, pos.y] : null;
+}}
+function nodeCircleR(pos, meta) {{
+  const layoutSize=pos&&pos.size;
+  const isParking=meta.parkingAllowed===true;
+  if (layoutSize==='big') return svgNodeR;
+  if (isParking) return svgNodeR;
+  return Math.max(1, svgNodeR*0.22);
+}}
+function attachTooltip(el,id,meta,isParking) {{
+  el.addEventListener('mouseover', function(e) {{
+    const tip=document.getElementById('node-tooltip');
+    tip.querySelector('.tt-name').textContent=trackName(id);
+    tip.querySelector('.tt-type').textContent=meta.type?'('+meta.type+')':'';
+    tip.querySelector('.tt-parking').textContent=isParking?'parking':'';
+    tip.style.display='block';
+  }});
+  el.addEventListener('mousemove', function(e) {{
+    const tip=document.getElementById('node-tooltip');
+    tip.style.left=(e.clientX+12)+'px';
+    tip.style.top=(e.clientY-8)+'px';
+  }});
+  el.addEventListener('mouseout', function() {{
+    document.getElementById('node-tooltip').style.display='none';
+  }});
+}}
 
 function buildYard() {{
   if (!hasPositions) {{ document.getElementById('yard-panel').style.display='none'; return; }}
@@ -685,6 +725,7 @@ function buildYard() {{
     const imgW = data.imageWidth, imgH = data.imageHeight;
     svgPad = 0; svgScaleX = 1; svgScaleY = 1; svgMinX = 0; svgMinY = 0;
     svgNodeR = 14; svgNodeRActive = 20; svgNodeRPrev = 16;
+    svgTrackW = 6; svgTrackWActive = 9; svgTrackWPrev = 7;
     const svg = document.getElementById('yard-svg');
     svg.setAttribute('viewBox', `0 0 ${{imgW}} ${{imgH}}`);
     const aspectH = Math.round(800 * imgH / imgW);
@@ -698,16 +739,18 @@ function buildYard() {{
     const pad=20,svgW=1000,svgH=120;
     const scale=Math.min((svgW-pad*2)/(maxX-minX||1),(svgH-pad*2)/(maxY-minY||1));
     svgPad=20; svgScaleX=scale; svgScaleY=scale; svgMinX=minX; svgMinY=minY;
-    svgNodeR=3; svgNodeRActive=5; svgNodeRPrev=4;
+    svgNodeR=3; svgNodeRActive=5; svgNodeRPrev=4; svgTrackW=2; svgTrackWActive=3; svgTrackWPrev=2.5;
     document.getElementById('yard-svg').setAttribute('viewBox',`0 0 ${{svgW}} ${{svgH}}`);
   }}
   const edgesLayer=document.getElementById('edges-layer');
   data.edges.forEach(e => {{
     const a=positions[e.source],b=positions[e.target];
     if(!a||!b) return;
+    const ap=portOf(a,e.sourceSide||'a'), bp=portOf(b,e.targetSide||'b');
+    if(!ap||!bp) return;
     const line=document.createElementNS('http://www.w3.org/2000/svg','line');
-    line.setAttribute('x1',toSvgX(a.x)); line.setAttribute('y1',toSvgY(a.y));
-    line.setAttribute('x2',toSvgX(b.x)); line.setAttribute('y2',toSvgY(b.y));
+    line.setAttribute('x1',toSvgX(ap[0])); line.setAttribute('y1',toSvgY(ap[1]));
+    line.setAttribute('x2',toSvgX(bp[0])); line.setAttribute('y2',toSvgY(bp[1]));
     line.setAttribute('stroke','var(--yard-edge)'); line.setAttribute('stroke-width','1.5');
     line.setAttribute('data-source',e.source); line.setAttribute('data-target',e.target);
     edgesLayer.appendChild(line);
@@ -716,32 +759,34 @@ function buildYard() {{
   posKeys.forEach(id => {{
     const pos=positions[id];
     const meta=trackMeta[id]||{{}};
-    const layoutSize=pos&&pos.size;
     const isParking=meta.parkingAllowed===true;
-    const r=layoutSize==='big'?svgNodeR:layoutSize==='small'?svgNodeR*0.5:isParking?svgNodeR:svgNodeR*0.5;
-    const c=document.createElementNS('http://www.w3.org/2000/svg','circle');
-    c.setAttribute('cx',toSvgX(pos.x)); c.setAttribute('cy',toSvgY(pos.y));
-    c.setAttribute('r',r); c.setAttribute('fill','var(--yard-node)');
-    c.setAttribute('stroke','#fff'); c.setAttribute('stroke-width','2');
-    c.setAttribute('data-parking',isParking?'1':'0');
-    c.setAttribute('data-id',id);
-    c.setAttribute('id','node-'+id.replace(/[^a-zA-Z0-9]/g,'_'));
-    c.addEventListener('mouseover', function(e) {{
-      const tip=document.getElementById('node-tooltip');
-      tip.querySelector('.tt-name').textContent=trackName(id);
-      tip.querySelector('.tt-type').textContent=meta.type?'('+meta.type+')':'';
-      tip.querySelector('.tt-parking').textContent=isParking?'parking':'';
-      tip.style.display='block';
-    }});
-    c.addEventListener('mousemove', function(e) {{
-      const tip=document.getElementById('node-tooltip');
-      tip.style.left=(e.clientX+12)+'px';
-      tip.style.top=(e.clientY-8)+'px';
-    }});
-    c.addEventListener('mouseout', function() {{
-      document.getElementById('node-tooltip').style.display='none';
-    }});
-    nodesLayer.appendChild(c);
+    const shape = pos && Array.isArray(pos.shape) && pos.shape.length>=2 ? pos.shape : null;
+    const nodeId='node-'+id.replace(/[^a-zA-Z0-9]/g,'_');
+    let el;
+    if (shape) {{
+      const pts=shape.map(p=>toSvgX(p[0])+','+toSvgY(p[1])).join(' ');
+      el=document.createElementNS('http://www.w3.org/2000/svg','polyline');
+      el.setAttribute('points',pts);
+      el.setAttribute('fill','none');
+      el.setAttribute('stroke','var(--yard-node)');
+      el.setAttribute('stroke-width',svgTrackW);
+      el.setAttribute('stroke-linejoin','round');
+      el.setAttribute('stroke-linecap','round');
+      el.setAttribute('style','pointer-events:stroke');
+      el.setAttribute('data-shape','1');
+    }} else {{
+      el=document.createElementNS('http://www.w3.org/2000/svg','circle');
+      el.setAttribute('cx',toSvgX(pos.x)); el.setAttribute('cy',toSvgY(pos.y));
+      el.setAttribute('r',nodeCircleR(pos,meta));
+      el.setAttribute('fill','var(--yard-node)');
+      el.setAttribute('stroke','#fff'); el.setAttribute('stroke-width','2');
+    }}
+    el.classList.add('t-node');
+    el.setAttribute('data-parking',isParking?'1':'0');
+    el.setAttribute('data-id',id);
+    el.setAttribute('id',nodeId);
+    attachTooltip(el,id,meta,isParking);
+    nodesLayer.appendChild(el);
   }});
   const legendEl=document.getElementById('yard-legend');
   allTrains.forEach(train => {{
@@ -758,15 +803,19 @@ function updateYard(state, prevState) {{
   document.querySelectorAll('#edges-layer line').forEach(l => {{
     l.setAttribute('stroke','var(--yard-edge)'); l.setAttribute('stroke-width','1.5');
   }});
-  document.querySelectorAll('#nodes-layer circle').forEach(c => {{
-    const id=c.getAttribute('data-id');
+  document.querySelectorAll('#nodes-layer .t-node').forEach(n => {{
+    const id=n.getAttribute('data-id');
     const pos=id?positions[id]:null;
-    const layoutSize=pos&&pos.size;
-    const isParking=c.getAttribute('data-parking')==='1';
-    const r=layoutSize==='big'?svgNodeR:layoutSize==='small'?svgNodeR*0.5:isParking?svgNodeR:svgNodeR*0.5;
-    c.setAttribute('fill','var(--yard-node)');
-    c.setAttribute('stroke','#fff'); c.setAttribute('stroke-width','2');
-    c.setAttribute('r',r);
+    const meta=id?(trackMeta[id]||{{}}):{{}};
+    if (n.getAttribute('data-shape')==='1') {{
+      n.setAttribute('stroke','var(--yard-node)');
+      n.setAttribute('stroke-width',svgTrackW);
+      n.setAttribute('fill','none');
+    }} else {{
+      n.setAttribute('fill','var(--yard-node)');
+      n.setAttribute('stroke','#fff'); n.setAttribute('stroke-width','2');
+      n.setAttribute('r',nodeCircleR(pos,meta));
+    }}
   }});
   const trainsToShow=filterTrain?[filterTrain]:allTrains;
   trainsToShow.forEach(train => {{
@@ -779,8 +828,13 @@ function updateYard(state, prevState) {{
         const pn = document.getElementById('node-'+trainPath[i].replace(/[^a-zA-Z0-9]/g,'_'));
         if (pn) {{
           const isLast = i === trainPath.length - 1;
-          pn.setAttribute('fill', color);
-          pn.setAttribute('r', isLast ? svgNodeRActive : svgNodeRPrev);
+          if (pn.getAttribute('data-shape')==='1') {{
+            pn.setAttribute('stroke', color);
+            pn.setAttribute('stroke-width', isLast ? svgTrackWActive : svgTrackWPrev);
+          }} else {{
+            pn.setAttribute('fill', color);
+            pn.setAttribute('r', isLast ? svgNodeRActive : svgNodeRPrev);
+          }}
         }}
         if (i < trainPath.length - 1) {{
           const a = trainPath[i], b = trainPath[i+1];
@@ -794,7 +848,13 @@ function updateYard(state, prevState) {{
       }}
     }} else {{
       const node=document.getElementById('node-'+info.track.replace(/[^a-zA-Z0-9]/g,'_'));
-      if(node) {{ node.setAttribute('fill',color); node.setAttribute('r',svgNodeRActive); }}
+      if(node) {{
+        if (node.getAttribute('data-shape')==='1') {{
+          node.setAttribute('stroke',color); node.setAttribute('stroke-width',svgTrackWActive);
+        }} else {{
+          node.setAttribute('fill',color); node.setAttribute('r',svgNodeRActive);
+        }}
+      }}
     }}
     if(prevState) {{
       const prev=prevState.trains[train];
@@ -807,7 +867,10 @@ function updateYard(state, prevState) {{
           }}
         }});
         const pn=document.getElementById('node-'+src.replace(/[^a-zA-Z0-9]/g,'_'));
-        if(pn&&pn.getAttribute('fill')==='var(--yard-node)') {{ pn.setAttribute('fill',color); pn.setAttribute('r',svgNodeRPrev); }}
+        if(pn&&(pn.getAttribute('fill')==='var(--yard-node)'||pn.getAttribute('stroke')==='var(--yard-node)')) {{
+          if (pn.getAttribute('data-shape')==='1') {{ pn.setAttribute('stroke',color); pn.setAttribute('stroke-width',svgTrackWPrev); }}
+          else {{ pn.setAttribute('fill',color); pn.setAttribute('r',svgNodeRPrev); }}
+        }}
       }}
     }}
   }});
@@ -1008,7 +1071,7 @@ def main():
         else:
             tid = key
             name = name or key
-        positions[tid] = {"x": pos["x"], "y": pos["y"], "size": pos.get("size"), "name": name}
+        positions[tid] = {"x": pos["x"], "y": pos["y"], "size": pos.get("size"), "name": name, "shape": pos.get("shape")}
     layout["tracks"] = positions
 
     image_data_uri = None
