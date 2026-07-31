@@ -152,6 +152,22 @@ def parse_solver_plan(path, id_to_track=None):
             if track:
                 args.append(track)
             steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: Combine {combined_train}", "action": "combine", "args": args})
+        elif task_name == "Split":
+            children = []
+            for cid in action.get("shuntingUnit", {}).get("childIDs", []):
+                for a in actions:
+                    if a.get("shuntingUnit", {}).get("id") == cid:
+                        cm = a.get("shuntingUnit", {}).get("members", [])
+                        if cm:
+                            children.append("+".join(str(m["id"]) for m in cm))
+                            break
+            args = [train]
+            if track:
+                args.append(track)
+            label = f"Split {train}"
+            if children:
+                label += " \u2192 " + ", ".join(children)
+            steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: {label}", "action": "split", "args": args, "children": children})
         elif not track:
             continue
         elif task_name == "Move":
@@ -268,6 +284,23 @@ def simulate_steps(initial_trains, steps, id_to_track):
             elif train in trains:
                 trains[train]["status"] = "combined"
             action_type = "combine"
+        elif action == "split" and len(args) >= 1:
+            parent = args[0]
+            track = args[1] if len(args) >= 2 else None
+            combined = trains.pop(parent, None)
+            if combined is None and "+" in parent:
+                parent_set = set(parent.split("+"))
+                for key in list(trains):
+                    if "+" in key and set(key.split("+")) == parent_set:
+                        combined = trains.pop(key)
+                        break
+            if track is None and combined:
+                track = combined.get("track")
+            track = to_track_id(track, id_to_track, {}) if track else None
+            children = step.get("children") or (parent.split("+") if "+" in parent else [parent])
+            for child in children:
+                trains[child] = {"track": track, "status": "active"}
+            action_type = "split"
         elif action in ("move_aside_empty", "move_aside_occupied",
                         "move_bside_empty", "move_bside_occupied") and len(args) >= 3:
             train, source, target = args[:3]
@@ -363,6 +396,7 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
       --badge-initial-bg: #f3f4f6;--badge-initial-fg: #374151;
       --badge-combine-bg: #f3e8ff;--badge-combine-fg: #7e22ce;
       --status-active-bg: #dbeafe;  --status-active-fg: #1d4ed8;
+      --status-waiting-bg: #f9fafb; --status-waiting-fg: #9ca3af;
       --status-parked-bg: #d1fae5;  --status-parked-fg: #065f46;
       --status-service-bg: #fef3c7; --status-service-fg: #92400e;
       --status-departed-bg: #f3f4f6;--status-departed-fg: #9ca3af;
@@ -391,6 +425,7 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
       --badge-initial-bg: #1f2937; --badge-initial-fg: #9ca3af;
       --badge-combine-bg: #2e1065; --badge-combine-fg: #d8b4fe;
       --status-active-bg: #1e3a5f;  --status-active-fg: #93c5fd;
+      --status-waiting-bg: #1f2937; --status-waiting-fg: #6b7280;
       --status-parked-bg: #064e3b;  --status-parked-fg: #6ee7b7;
       --status-service-bg: #451a03; --status-service-fg: #fbbf24;
       --status-departed-bg: #1f2937;--status-departed-fg: #6b7280;
@@ -453,6 +488,7 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
     .train-name {{ font-weight: 600; font-size: 12px; color: var(--heading); font-family: monospace; }}
     .status-badge {{ display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 500; }}
     .status-active   {{ background: var(--status-active-bg);   color: var(--status-active-fg); }}
+    .status-waiting  {{ background: var(--status-waiting-bg);  color: var(--status-waiting-fg); }}
     .status-parked   {{ background: var(--status-parked-bg);   color: var(--status-parked-fg); }}
     .status-service  {{ background: var(--status-service-bg);  color: var(--status-service-fg); }}
     .status-departed {{ background: var(--status-departed-bg); color: var(--status-departed-fg); }}
@@ -486,6 +522,7 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
     .badge-wait    {{ background: var(--badge-wait-bg);    color: var(--badge-wait-fg); }}
     .badge-initial {{ background: var(--badge-initial-bg); color: var(--badge-initial-fg); }}
     .badge-combine {{ background: var(--badge-combine-bg); color: var(--badge-combine-fg); }}
+    .badge-split   {{ background: var(--badge-combine-bg); color: var(--badge-combine-fg); }}
     .action-arrive  {{ background: var(--badge-arrive-bg);  color: var(--badge-arrive-fg); }}
     .action-move    {{ background: var(--badge-move-bg);    color: var(--badge-move-fg); }}
     .action-park    {{ background: var(--badge-park-bg);    color: var(--badge-park-fg); }}
@@ -493,6 +530,8 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
     .action-service {{ background: var(--badge-service-bg); color: var(--badge-service-fg); }}
     .action-wait    {{ background: var(--badge-wait-bg);    color: var(--badge-wait-fg); }}
     .action-initial {{ background: var(--badge-initial-bg); color: var(--badge-initial-fg); }}
+    .action-combine {{ background: var(--badge-combine-bg); color: var(--badge-combine-fg); }}
+    .action-split   {{ background: var(--badge-combine-bg); color: var(--badge-combine-fg); }}
     .legend {{ padding: 10px 14px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 5px; flex-shrink: 0; }}
     .leg {{ display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--muted); }}
     .leg-dot {{ width: 10px; height: 10px; border-radius: 3px; flex-shrink: 0; }}
@@ -599,7 +638,7 @@ function shortName(n) {{
   return n;
 }}
 function actionLabel(a) {{
-  return {{arrive:'arrive',move:'move',park:'park',depart:'depart',service:'service',wait:'wait',initial:'start',combine:'combine'}}[a]||a;
+  return {{arrive:'arrive',move:'move',park:'park',depart:'depart',service:'service',wait:'wait',initial:'start',combine:'combine',split:'split'}}[a]||a;
 }}
 function plainDesc(state) {{
   const t = state.train ? shortName(state.train) : null;
@@ -618,6 +657,7 @@ function plainDesc(state) {{
   if (a==='depart'&&t) {{ const m=raw.match(/@\s*(\S+)/); return t+' departed from track '+(m?m[1]:'?')+' \u2713'; }}
   if (a==='service'&&t) return t+' \u2014 service: '+raw.replace(/^\d+(\.\.\d+)?:\s*/,'');
   if (a==='wait'&&t) return t+' waiting';
+  if (a==='split'&&t) {{ const m=raw.match(/\u2192\s*(.+)$/); return t+' split into '+(m?m[1]:'?'); }}
   return raw.replace(/^\d+(\.\.\d+)?:\s*/,'');
 }}
 
@@ -869,7 +909,8 @@ function render(idx) {{
     else if(info.status==='combined') statusHTML='<span class="status-badge status-combined">combined</span>';
     else if(info.status==='absorbed') statusHTML='<span class="status-badge status-absorbed">absorbed</span>';
     else if(info.status==='service') statusHTML='<span class="status-badge status-service">service</span>';
-    else statusHTML='<span class="status-badge status-active">moving</span>';
+    else if(train===state.train && atype!=='wait' && atype!=='initial') statusHTML='<span class="status-badge status-active">moving</span>';
+    else statusHTML='<span class="status-badge status-waiting">waiting</span>';
     statusEl.innerHTML=statusHTML;
 
     const isAbsorbed = info.status==='absorbed';
