@@ -154,6 +154,24 @@ The compiled-matching converter currently produces scenario-specific domains
 and should be selected through `run.py`, which keeps each generated problem
 paired with its corresponding domain.
 
+### Assumptions
+
+- Departure matching and request order are fixed during conversion so the planner
+  cannot reconsider them when they conflict with routing, servicing, or parking.
+- Each multi-unit request is assigned one coupling track. The converter considers
+  non-switch parking tracks long enough for the composition, prefers the request’s lastParkingTrackPart
+  or leaveTrackPart when eligible, and otherwise selects the eligible track with the smallest BFS hop
+  distance from the departure track. Coupling and uncoupling are instantaneous, and the model does
+  not represent operation durations, staff, or exact arrival and departure times.
+- Switches are collapsed into direct track connections and only one movement is
+  allowed at a time. Discrete A/B-side order represents blocking, while
+  non-parking tracks do not enforce their physical length as a capacity limit.
+- A shunting unit that requires service must be serviced before it can park,
+  depart, be adopted as a complete request, be uncoupled, or participate in
+  coupling.
+- Parking is terminal in the PDDL model. Units not needed by a departure or
+  parking request may remain in the yard when the other goals are satisfied.
+
 ### Compiled-matching results
 
 ENHSP runs using the compiled-matching converter produced the following search
