@@ -123,7 +123,7 @@ def discover_scenarios(location):
         return []
     return sorted(
         f for f in os.listdir(scenario_dir)
-        if f.startswith("scenario_solver_") and f.endswith(".json")
+        if f.startswith("scenario_") and f.endswith(".json")
     )
 
 

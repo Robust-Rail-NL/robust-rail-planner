@@ -58,9 +58,9 @@ def _bfs_from(adjacency, start_ids):
 def _departure_exit_ids(scenario_object, location_object):
     # The departure track is where outbound trains leave the yard — the BFS root for entry_distance.
     # Falls back to inbound entry tracks if no outbound requests are present in the scenario.
-    ids = [req["leaveTrackPart"] for req in scenario_object.get("out", {}).get("trainRequests", []) if "leaveTrackPart" in req]
+    ids = [req["leaveTrackPart"] for req in scenario_object.get("out", []) if "leaveTrackPart" in req]
     if not ids:
-        ids = [t["entryTrackPart"] for t in scenario_object.get("in", {}).get("trains", []) if "entryTrackPart" in t]
+        ids = [t["entryTrackPart"] for t in scenario_object.get("in", []) if "entryTrackPart" in t]
 
     track_parts = location_object.get("trackParts", [])
     ids_aside = {tp["id"] for tp in track_parts if tp["id"] in ids and tp.get("bSide")}
@@ -71,19 +71,14 @@ def _departure_exit_ids(scenario_object, location_object):
 
 def train_unit_type_key(train_unit):
     # Normalized train-unit identity used to match available units to request slots.
-    unit_type = train_unit["type"]
-    return (
-        unit_type.get("displayName"),
-        int(unit_type.get("carriages", 0)),
-        float(unit_type.get("length", 0.0)),
-    )
+    return (train_unit.get("typePrefix"), train_unit.get("carriages"))
 
 
 def all_trains_with_source(scenario_object):
     # Keep source/index so train units can be linked back to their physical train.
-    for index, train in enumerate(scenario_object.get("in", {}).get("trains", [])):
+    for index, train in enumerate(scenario_object.get("in", [])):
         yield "in", index, train
-    for index, train in enumerate(scenario_object.get("inStanding", {}).get("trains", [])):
+    for index, train in enumerate(scenario_object.get("inStanding", [])):
         yield "inStanding", index, train
 
 
@@ -130,7 +125,7 @@ def _shortest_path(adjacency, start_id, goal_id):
 
 
 def _train_unit_type_keys(train):
-    return {train_unit_type_key(member["trainUnit"]) for member in train.get("members", [])}
+    return {train_unit_type_key(member) for member in train.get("members", [])}
 
 
 def _request_type_keys(request):
@@ -395,7 +390,7 @@ def _relevant_corridor_nodes(scenario_object, location_object, known_track_ids, 
         if start_id is not None:
             trains_with_starts.append((train, str(start_id)))
 
-    for request in scenario_object.get("out", {}).get("trainRequests", []):
+    for request in scenario_object.get("out", []):
         request_keys = _request_type_keys(request)
         coupling_ids = [str(c) for c in _coupling_track_ids_for_request(request, location_object, coupling_candidate_track_ids)]
         route_targets = [str(t) for t in [request.get("leaveTrackPart"), request.get("lastParkingTrackPart")] if t is not None]
@@ -415,7 +410,7 @@ def _relevant_corridor_nodes(scenario_object, location_object, known_track_ids, 
                 for target_id in route_targets:
                     add_path(coupling_id, target_id)
 
-    for request in scenario_object.get("outStanding", {}).get("trainRequests", []):
+    for request in scenario_object.get("outStanding", []):
         target_id = request.get("lastParkingTrackPart")
         if target_id is None:
             continue
@@ -458,21 +453,23 @@ def _relevant_corridor_nodes(scenario_object, location_object, known_track_ids, 
     return reached.intersection(known)
 
 
-def _train_total_length(train):
+def _train_total_length(train_unit_types, train) -> Fraction:
     # Sum the physical length of every unit in an arriving composition or outgoing request.
     total_length = Fraction(0)
     if "members" in train:
         for member in train.get("members", []):
-            total_length += Fraction(str(member["trainUnit"]["type"]["length"]))
+            total_length += _train_unit_length(train_unit_types, member)
     elif "trainUnits" in train:
         for tu in train.get("trainUnits", []):
-            total_length += Fraction(str(tu.get("type", {}).get("length", 0)))
+            total_length += _train_unit_length(train_unit_types, tu)
     return total_length
 
 
-def _train_unit_length(train_unit):
+def _train_unit_length(train_unit_types, train_unit):
     # Physical length of one atomic train unit, used for single-unit shunting units.
-    return Fraction(str(train_unit["type"]["length"]))
+    return Fraction(str(
+        train_unit_types[train_unit_type_key(train_unit)]["length"]
+    ))
 
 
 def _train_initial_track_id(train, preferred_keys):
@@ -607,6 +604,10 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
 
     location_object = json.load(open(location_file))
     scenario_object = json.load(open(scenario_file))
+    train_unit_types = {
+        train_unit_type_key(tut): tut
+        for tut in scenario_object["trainUnitTypes"]
+    }
 
     # Automatic mode leaves matching planner-controlled when the scenario has
     # no overlapping multi-unit types that make composition order relevant.
@@ -1633,9 +1634,9 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     # then compute a corridor of relevant tracks so the planner only reasons
     # about the sub-graph that matters for this scenario.
 
-    in_standing_trains = scenario_object.get("inStanding", {}).get("trains", [])
-    out_standing_trains = scenario_object.get("outStanding", {}).get("trainRequests", [])
-    out_requests = scenario_object.get("out", {}).get("trainRequests", [])
+    in_standing_trains = scenario_object.get("inStanding", [])
+    out_standing_trains = scenario_object.get("outStanding", [])
+    out_requests = scenario_object.get("out", [])
     track_occupancies = {}
     train_initial_aside = {}
     track_train_counts = {}
@@ -1671,7 +1672,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 if tid is not None:
                     required_track_ids.add(str(tid))
                     corridor_or_required.add(str(tid))
-        for train in scenario_object.get("in", {}).get("trains", []):
+        for train in scenario_object.get("in", []):
             tid = _train_initial_track_id(train, ["entryTrackPart", "firstParkingTrackPart"])
             if tid is not None:
                 required_track_ids.add(str(tid))
@@ -1750,7 +1751,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
     for index, train in enumerate(in_standing_trains):
         initial_track_id = _train_initial_track_id(train, ["firstParkingTrackPart", "entryTrackPart"])
         if initial_track_id is not None:
-            train_total_length = _train_total_length(train)
+            train_total_length = _train_total_length(train_unit_types, train)
             previous_length_on_track = track_occupancies.get(initial_track_id, Fraction(0))
             train_initial_aside[_train_object_name("inStanding", index, train)] = previous_length_on_track
             track_occupancies[initial_track_id] = track_occupancies.get(initial_track_id, Fraction(0)) + train_total_length
@@ -1792,7 +1793,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                     if task_type_str and task_type_str in id_to_facility_type:
                         problem.set_initial_value(requires_facility(shunting_unit, id_to_facility_type[task_type_str]), True)
 
-        train_total_length = _train_total_length(train)
+        train_total_length = _train_total_length(train_unit_types, train)
         problem.set_initial_value(su_length(shunting_unit), up.Real(train_total_length))
         problem.set_initial_value(su_unit_count(shunting_unit), up.Int(len(train_members)))
         if source == "in":
@@ -1817,9 +1818,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             in_train_sus.append((int(train.get("arrival", 0)), shunting_unit))
 
         member_unit_objs = []
-        for trainunit in train_members:
-            unit = trainunit["trainUnit"]
-            unit_obj = problem.add_object("unit" + unit["id"], train_unit_type)
+        for unit in train_members:
+            unit_obj = problem.add_object("unit" + str(unit["id"]), train_unit_type)
             id_to_unit[unit["id"]] = unit_obj
             unit_type_by_id[unit["id"]] = train_unit_type_key(unit)
             member_unit_objs.append(unit_obj)
@@ -1827,10 +1827,10 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             if len(train_members) == 1:
                 problem.set_initial_value(single_unit_su(shunting_unit, unit_obj), True)
             else:
-                single_unit_su_obj = problem.add_object("su_unit" + unit["id"], shunting_unit_type)
+                single_unit_su_obj = problem.add_object("su_unit" + str(unit["id"]), shunting_unit_type)
                 problem.set_initial_value(contains_su(single_unit_su_obj, unit_obj), True)
                 problem.set_initial_value(single_unit_su(single_unit_su_obj, unit_obj), True)
-                problem.set_initial_value(su_length(single_unit_su_obj), up.Real(_train_unit_length(unit)))
+                problem.set_initial_value(su_length(single_unit_su_obj), up.Real(_train_unit_length(train_unit_types, unit)))
                 problem.set_initial_value(su_unit_count(single_unit_su_obj), up.Int(1))
                 problem.set_initial_value(front_of(unit_obj, single_unit_su_obj), True)
                 problem.set_initial_value(back_of(unit_obj, single_unit_su_obj), True)
@@ -1848,8 +1848,8 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
                 problem.set_initial_value(next_in_su(first_obj, second_obj, shunting_unit), True)
 
         for first, second in zip(train_members, train_members[1:]):
-            first_obj = id_to_unit[first["trainUnit"]["id"]]
-            second_obj = id_to_unit[second["trainUnit"]["id"]]
+            first_obj = id_to_unit[first["id"]]
+            second_obj = id_to_unit[second["id"]]
             problem.set_initial_value(unit_before(first_obj, second_obj), True)
 
     # Enforce arrival order: sort inbound trains by arrival time and chain the

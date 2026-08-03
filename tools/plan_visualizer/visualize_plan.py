@@ -226,7 +226,7 @@ def initial_train_positions(scenario, id_to_track):
 
     # Only include trains already standing in the yard at t=0
     # Incoming trains (section "in") are NOT in the yard yet — they appear via Arrive actions
-    for train in scenario.get("inStanding", {}).get("trains", []):
+    for train in scenario.get("inStanding", []):
         track_id = train.get("firstParkingTrackPart") or train.get("entryTrackPart")
         if track_id and str(track_id) in id_to_track:
             trains[member_name(train)] = {
