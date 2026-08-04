@@ -1173,6 +1173,7 @@ def create_instance_from_scenario(
     service_su = up.InstantaneousAction('service_su', su=shunting_unit_type, l=track_part_type, f=facility_type_type)
     service_su.add_precondition(active_su(service_su.su))
     service_su.add_precondition(at_su(service_su.su, service_su.l))
+    service_su.add_precondition(up.Not(serviced(service_su.su)))
     service_su.add_precondition(service_allowed(service_su.l))
     service_su.add_precondition(facility_type(service_su.l, service_su.f))
     service_su.add_precondition(requires_facility(service_su.su, service_su.f))
