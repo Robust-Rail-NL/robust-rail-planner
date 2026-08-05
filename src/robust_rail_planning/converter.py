@@ -56,44 +56,48 @@ def build_train_lookup(scenario):
     """Build lookup for all trains including their types and durations"""
     lookup = {}
 
+    type_lookup = {}
+    for t in scenario.get("trainUnitTypes", []):
+        type_lookup[t["typePrefix"], t["carriages"]] = t
+
     # Incoming trains
-    for train in scenario.get("in", {}).get("trains", []):
+    for train in scenario.get("in", []):
         names = [f"train{train['id']}", f"su_train{train['id']}"]
-        members = []
-        
-        for member in train.get("members", []):
-            tu = member["trainUnit"]
-            members.append({
-                "id": tu["id"],
-                "type": tu["type"]
-            })
-        
+        members = train.get("members", [])
+        if members:
+            key = (members[0]["typePrefix"], members[0]["carriages"])
+            combine_duration = int(type_lookup[key].get("combineDuration", COMBINE_DURATION))
+            split_duration = int(type_lookup[key].get("splitDuration", SPLIT_DURATION))
+        else:
+            combine_duration = COMBINE_DURATION
+            split_duration = SPLIT_DURATION
+
         entry = {
             "id": train["id"],
             "members": members,
-            "combine_duration": int(members[0]["type"].get("combineDuration", COMBINE_DURATION)) if members else COMBINE_DURATION,
-            "split_duration": int(members[0]["type"].get("splitDuration", SPLIT_DURATION)) if members else SPLIT_DURATION,
+            "combine_duration": combine_duration,
+            "split_duration": split_duration,
         }
         for n in names:
             lookup[n] = entry
 
     # In standing trains
-    for i, train in enumerate(scenario.get("inStanding", {}).get("trains", [])):
+    for i, train in enumerate(scenario.get("inStanding", [])):
         names = [f"train_in_standing_{i}", f"su_train_in_standing_{i}"]
-        members = []
-        
-        for member in train.get("members", []):
-            tu = member["trainUnit"]
-            members.append({
-                "id": tu["id"],
-                "type": tu["type"]
-            })
-        
+        members = train.get("members", [])
+        if members:
+            key = (members[0]["typePrefix"], members[0]["carriages"])
+            combine_duration = int(type_lookup[key].get("combineDuration", COMBINE_DURATION))
+            split_duration = int(type_lookup[key].get("splitDuration", SPLIT_DURATION))
+        else:
+            combine_duration = COMBINE_DURATION
+            split_duration = SPLIT_DURATION
+
         entry = {
             "id": train["id"],
             "members": members,
-            "combine_duration": int(members[0]["type"].get("combineDuration", COMBINE_DURATION)) if members else COMBINE_DURATION,
-            "split_duration": int(members[0]["type"].get("splitDuration", SPLIT_DURATION)) if members else SPLIT_DURATION,
+            "combine_duration": combine_duration,
+            "split_duration": split_duration,
         }
         for n in names:
             lookup[n] = entry
@@ -111,22 +115,14 @@ def build_unit_lookup(scenario):
     lookup = {}
     
     # From incoming trains
-    for train in scenario.get("in", {}).get("trains", []):
+    for train in scenario.get("in", []):
         for member in train.get("members", []):
-            tu = member["trainUnit"]
-            lookup[f"unit{tu['id']}"] = {
-                "id": tu["id"],
-                "type": tu["type"]
-            }
+            lookup[f"unit{member['id']}"] = member
     
     # From standing trains
-    for train in scenario.get("inStanding", {}).get("trains", []):
+    for train in scenario.get("inStanding", []):
         for member in train.get("members", []):
-            tu = member["trainUnit"]
-            lookup[f"unit{tu['id']}"] = {
-                "id": tu["id"],
-                "type": tu["type"]
-            }
+            lookup[f"unit{member['id']}"] = member
     
     return lookup
 
@@ -135,7 +131,7 @@ def build_request_lookup(scenario):
     """Build lookup for departure requests"""
     lookup = {}
     
-    for request in scenario.get("out", {}).get("trainRequests", []):
+    for request in scenario.get("out", []):
         request_name = f"request{request['displayName']}"
         lookup[request_name] = {
             "id": request["displayName"],
@@ -516,65 +512,11 @@ def compute_move_duration(expanded_path, switch_ids):
 # CONVERTER
 # =====================================================
 
-def normalize_scenario(scenario):
-    """Normalize scenario JSON to baseline format (dict with 'trains'/'trainRequests' keys)"""
-    type_lookup = {}
-    for t in scenario.get("trainUnitTypes", []):
-        type_lookup[t["displayName"]] = t
-
-    def normalize_members(members):
-        out = []
-        for m in members:
-            if "trainUnit" in m:
-                out.append(m)
-            else:
-                tu_id = m["id"]
-                type_obj = type_lookup.get(m.get("typeDisplayName", ""), {})
-                out.append({
-                    "trainUnit": {
-                        "id": tu_id,
-                        "type": type_obj
-                    }
-                })
-        return out
-
-    def normalize_trains(items):
-        wrapped = {"trains": []}
-        for item in items:
-            item["members"] = normalize_members(item.get("members", []))
-            wrapped["trains"].append(item)
-        return wrapped
-
-    def normalize_out(items):
-        wrapped = {"trainRequests": []}
-        for item in items:
-            wrapped["trainRequests"].append({
-                "displayName": item["id"],
-                "trainUnits": [],
-                "arrival": item.get("time", "0"),
-                "leaveTrackPart": item.get("sideTrackPart"),
-                "lastParkingTrackPart": item.get("parkingTrackPart"),
-            })
-        return wrapped
-
-    if isinstance(scenario.get("in"), list):
-        scenario["in"] = normalize_trains(scenario["in"])
-    if isinstance(scenario.get("inStanding"), list):
-        scenario["inStanding"] = normalize_trains(scenario["inStanding"])
-    if isinstance(scenario.get("out"), list):
-        scenario["out"] = normalize_out(scenario["out"])
-    if isinstance(scenario.get("outStanding"), list):
-        scenario["outStanding"] = normalize_out(scenario["outStanding"])
-
-    return scenario
-
-
 def convert_plan(plan_file, scenario_file, location_file):
     """Main conversion function with support for coupling/uncoupling/service"""
 
     with open(scenario_file) as f:
         scenario = json.load(f)
-    scenario = normalize_scenario(scenario)
 
     with open(location_file) as f:
         location = json.load(f)
@@ -677,7 +619,7 @@ def convert_plan(plan_file, scenario_file, location_file):
             if train not in train_locations:
                 stripped = train[3:] if train.startswith("su_") else train
                 found = False
-                for i, standing in enumerate(scenario.get("inStanding", {}).get("trains", [])):
+                for i, standing in enumerate(scenario.get("inStanding", [])):
                     for name in [f"train_in_standing_{i}", f"su_train_in_standing_{i}"]:
                         if name == stripped or name == train:
                             if "firstParkingTrackPart" in standing:
@@ -688,7 +630,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                     if found:
                         break
                 if not found:
-                    for incoming in scenario.get("in", {}).get("trains", []):
+                    for incoming in scenario.get("in", []):
                         if stripped == f"train{incoming['id']}" or train == f"su_train{incoming['id']}":
                             if "entryTrackPart" in incoming:
                                 train_locations[train] = incoming["entryTrackPart"]
@@ -866,7 +808,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                 else:
                     # Fallback: PDDL request names may differ from scenario names,
                     # so use the departure time from the scenario's outgoing requests
-                    for req in scenario.get("out", {}).get("trainRequests", []):
+                    for req in scenario.get("out", []):
                         dep = req.get("arrival")
                         if dep is not None:
                             exit_time = max(int(dep), current_time)
@@ -1137,14 +1079,14 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
     # Find initial train positions from scenario, mapped to integer SU IDs
     initial_positions = {}
     if su_id_fn:
-        for train in scenario.get("in", {}).get("trains", []):
+        for train in scenario.get("in", []):
             for name in [f"train{train['id']}", f"su_train{train['id']}"]:
                 if "entryTrackPart" in train:
                     initial_positions[su_id_fn(name)] = train["entryTrackPart"]
                 elif "firstParkingTrackPart" in train:
                     initial_positions[su_id_fn(name)] = train["firstParkingTrackPart"]
         
-        for i, train in enumerate(scenario.get("inStanding", {}).get("trains", [])):
+        for i, train in enumerate(scenario.get("inStanding", [])):
             for name in [f"train_in_standing_{i}", f"su_train_in_standing_{i}"]:
                 if "firstParkingTrackPart" in train:
                     initial_positions[su_id_fn(name)] = train["firstParkingTrackPart"]
@@ -1154,14 +1096,14 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
     # Determine which SU IDs correspond to standing trains
     standing_su_ids = set()
     if su_id_fn:
-        for i in range(len(scenario.get("inStanding", {}).get("trains", []))):
+        for i in range(len(scenario.get("inStanding", []))):
             standing_su_ids.add(su_id_fn(f"su_train_in_standing_{i}"))
             standing_su_ids.add(su_id_fn(f"train_in_standing_{i}"))
     
     # Determine which SU IDs correspond to outStanding trains
     out_standing_ids = set()
     if su_id_fn:
-        for request in scenario.get("outStanding", {}).get("trainRequests", []):
+        for request in scenario.get("outStanding", []):
             key = f"su_outstanding_{request.get('displayName', '')}"
             out_standing_ids.add(su_id_fn(key))
     
