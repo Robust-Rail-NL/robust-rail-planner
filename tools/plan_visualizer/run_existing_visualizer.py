@@ -38,7 +38,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if self.path == "/api/locations":
             base = self.server.workspace_root / "scenario-planning-inputs"
             dirs = sorted(
-                d.name for d in base.iterdir() if d.is_dir() and (d / "location_solver.json").exists()
+                d.name for d in base.iterdir() if d.is_dir() and (d / "location.json").exists()
             )
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
@@ -89,7 +89,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             scenario_name = data.get("scenario", "")
             plan_name = data.get("plan", "")
             location_dir = self.server.workspace_root / "scenario-planning-inputs" / loc_name
-            location_path = location_dir / "location_solver.json"
+            location_path = location_dir / "location.json"
             scenario_path = location_dir / "scenarios" / scenario_name
             plan_path = location_dir / "plans" / plan_name
             data_dir = self.server.planning_repo / "data"

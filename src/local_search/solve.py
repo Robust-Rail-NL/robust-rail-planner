@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))  # planning-approach
 GENERATE_DIR = os.path.join(os.path.dirname(BASE_DIR), "scenario-planning-inputs", "Location_KleineBinckhorst")
 SCENARIOS_DIR = os.path.join(GENERATE_DIR, "scenarios")
-LOCATION_FILE = os.path.join(GENERATE_DIR, "location_solver.json")
+LOCATION_FILE = os.path.join(GENERATE_DIR, "location.json")
 CONFIG_DIR = os.path.join(GENERATE_DIR, "config")
 
 # GENERATE_DIR is bind-mounted into the container as /app/database, so every

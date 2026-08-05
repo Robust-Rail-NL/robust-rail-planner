@@ -49,10 +49,10 @@
 | `free` | `(trackpart)` | Bool | Whether a track is unoccupied. Default: true | v0.1 |
 | `arrival` | `(arrivaltrain)` | Int | Arrival timestamp of a train | v0.1 |
 | `at` | `(arrivaltrain, trackpart)` | Bool | Whether a train is at a given track. Default: false | v0.1 |
-| `parking_allowed` | `(trackpart)` | Bool | Whether a track part permits parking. Default: false. Set from `parkingAllowed` in `location_solver.json` | v0.2 |
+| `parking_allowed` | `(trackpart)` | Bool | Whether a track part permits parking. Default: false. Set from `parkingAllowed` in `location.json` | v0.2 |
 | `parked` | `(arrivaltrain)` | Bool | Whether a train has been parked. Default: false | v0.2 |
 | `departed` | `(arrivaltrain)` | Bool | Whether a train has left the yard after parking. Default: false | v0.4 |
-| `connected` | `(trackpart, trackpart)` | Bool | Whether two track parts are directly adjacent. Default: false. Set bidirectionally from `aSide`/`bSide` in `location_solver.json` | v0.3 |
+| `connected` | `(trackpart, trackpart)` | Bool | Whether two track parts are directly adjacent. Default: false. Set bidirectionally from `aSide`/`bSide` in `location.json` | v0.3 |
 | `departure_exit` | `(trackpart)` | Bool | Whether a track part is a yard exit where a train may depart. Default: false | v0.4 |
 | `entry_distance` | `(trackpart)` | Int | Normalised hop-distance from the yard's departure track (BFS). Rank 1 = closest to exit. Default: 0 (non-parking tracks). | v0.3 |
 | `departure_rank` | `(arrivaltrain)` | Int | Rank of the train's departure time among all inbound trains (1 = first to depart). Ties get the same rank (lenient). | v0.3 |
@@ -146,7 +146,7 @@
 | `trainunit` objects | `scenario.json → in.trains[].members` | One object per unit, named `unit{id}` — no state set |
 | `arrival(train)` | `scenario.json → in.trains[].arrival` | Set to integer arrival timestamp |
 | `at(train, track)` | `scenario.json → in.trains[].firstParkingTrackPart` | Set to true for initial parking position |
-| `connected(a, b)` | `location_solver.json → trackParts[].aSide / bSide` | Set bidirectionally for each adjacent pair |
+| `connected(a, b)` | `location.json → trackParts[].aSide / bSide` | Set bidirectionally for each adjacent pair |
 | `entry_distance(track)` | Computed — BFS from `scenario.json → out.trainRequests[].leaveTrackPart`, normalised to 1-based rank | Only set for `parking_allowed` tracks; defaults to 0 |
 | `departure_rank(train)` | Computed — rank of `scenario.json → in.trains[].departure` sorted ascending (ties share a rank) | |
 | `trainunit` objects | `scenario.json -> in.trains / inStanding.trains` | One object per unit available for matching |
@@ -154,7 +154,7 @@
 | `requestslot` objects | `scenario.json -> out.trainRequests / outStanding.trainRequests` | One slot per requested outgoing train unit |
 | `compatible(unit, slot)` | Computed from unit and request unit type | Set when display name, carriage count, and length match |
 | `part_of_composition(unit, composition)` | `scenario.json -> in.trains / inStanding.trains` | Set for units in multi-unit compositions when explicit uncoupling is enabled |
-| `track_capacity(track)` | `location_solver.json → trackParts[].length` | Set to the track length |
+| `track_capacity(track)` | `location.json → trackParts[].length` | Set to the track length |
 | `train_length(train)` | `scenario.json → in.trains[].members[].trainUnit.type.length` | Sum of all unit lengths |
 | `occupied_length(track)` | Derived from initial inbound train placements | Accumulates the total length already occupying each track |
 | `track_is_parked_at(track)` | Action effects | Initially false; set true when a train parks |

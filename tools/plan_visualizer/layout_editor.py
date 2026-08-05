@@ -206,7 +206,7 @@ def main():
     script_dir = Path(__file__).resolve().parent
     workspace_root = script_dir.parents[2]
     location_dir = workspace_root / "scenario-planning-inputs" / args.location_name
-    location_path = location_dir / "location_solver.json"
+    location_path = location_dir / "location.json"
 
     if args.layout:
         layout_path = Path(args.layout)

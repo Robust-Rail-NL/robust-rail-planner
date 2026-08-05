@@ -10,8 +10,8 @@ from unified_planning.io import PDDLWriter
 
 parser = argparse.ArgumentParser()
 parser.add_argument("-p", "--path-to-folder", required=False, default=None)
-parser.add_argument("-s", "--scenario-file", required=False, default="scenario_solver_example1.json")
-parser.add_argument("-l", "--location-file", required=False, default="location_solver.json")
+parser.add_argument("-s", "--scenario-file", required=False, default="scenario_example1.json")
+parser.add_argument("-l", "--location-file", required=False, default="location.json")
 parser.add_argument("-o", "--output-file", required=False, default=None)
 parser.add_argument("-d", "--domain-file", required=False, default=None)
 parser.add_argument("--log-level", default="ERROR", required=False)
@@ -589,13 +589,13 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         path_to_folder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "scenario-planning-inputs", "Location_KleineBinckhorst")
 
     if location_file is None:
-        location_file = os.path.join(path_to_folder, "location_solver.json")
+        location_file = os.path.join(path_to_folder, "location.json")
     elif not os.sep in location_file:
         location_file = os.path.join(path_to_folder, location_file)
 
     if scenario_file is None:
-        scenario_file = os.path.join(path_to_folder, "scenarios", "scenario_solver_example1.json")
-        scenario_name = "scenario_solver_example1"
+        scenario_file = os.path.join(path_to_folder, "scenarios", "scenario_example1.json")
+        scenario_name = "scenario_example1"
     elif os.sep not in scenario_file:
         scenario_name = scenario_file.replace(".json", "")
         scenario_file = os.path.join(path_to_folder, "scenarios", scenario_file)

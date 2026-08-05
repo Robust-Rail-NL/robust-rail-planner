@@ -33,7 +33,7 @@ PLANNER_LOCATION = os.path.abspath(
     os.path.join(BASE_DIR, "src", "plan", "planner.jl")
 )
 
-LOCATION_FILE = os.path.join(GENERATE_DIR, "location_solver.json")
+LOCATION_FILE = os.path.join(GENERATE_DIR, "location.json")
 DOMAIN_FILE = os.path.join(BASE_DIR, "domain", "domain.pddl")
 
 TORS_IMAGE = "ghcr.io/robust-rail-nl/tors:latest"
