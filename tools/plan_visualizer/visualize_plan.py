@@ -110,11 +110,16 @@ def task_type_name(action):
     return str(task_type)
 
 
+def _is_track_part(resource):
+    """Resources are {kind, id} now, not one nullable field per kind."""
+    return resource.get("kind") == "trackPart" and resource.get("id") is not None
+
+
 def action_track(action):
     resources = action.get("resources", [])
     for resource in reversed(resources):
-        if resource.get("trackPartId"):
-            return str(resource["trackPartId"])
+        if _is_track_part(resource):
+            return str(resource["id"])
     if action.get("location") is not None:
         return str(action["location"])
     return None
@@ -122,7 +127,7 @@ def action_track(action):
 
 def action_path_resources(action):
     resources = action.get("resources", [])
-    return [str(r["trackPartId"]) for r in resources if r.get("trackPartId") is not None]
+    return [str(r["id"]) for r in resources if _is_track_part(r)]
 
 
 def parse_solver_plan(path, id_to_track=None):
@@ -138,9 +143,11 @@ def parse_solver_plan(path, id_to_track=None):
     steps = []
     for action in actions:
         task_name = task_type_name(action)
-        members = action.get("shuntingUnit", {}).get("members", [])
-        if members:
-            train = "+".join(str(m["id"]) for m in members)
+        # memberIDs, not members: the shunting unit carries IDs now, not
+        # embedded TrainUnit objects.
+        member_ids = action.get("shuntingUnit", {}).get("memberIDs", [])
+        if member_ids:
+            train = "+".join(str(m) for m in member_ids)
         else:
             train = "su_" + str(action.get("shuntingUnit", {}).get("id", "unknown"))
         track = action_track(action)
@@ -153,9 +160,9 @@ def parse_solver_plan(path, id_to_track=None):
             for cid in child_ids:
                 for a in actions:
                     if a.get("shuntingUnit", {}).get("id") == cid:
-                        cm = a.get("shuntingUnit", {}).get("members", [])
+                        cm = a.get("shuntingUnit", {}).get("memberIDs", [])
                         if cm:
-                            combined_train = "+".join(str(m["id"]) for m in cm)
+                            combined_train = "+".join(str(m) for m in cm)
                             break
             args = [combined_train]
             if track:
@@ -166,9 +173,9 @@ def parse_solver_plan(path, id_to_track=None):
             for cid in action.get("shuntingUnit", {}).get("childIDs", []):
                 for a in actions:
                     if a.get("shuntingUnit", {}).get("id") == cid:
-                        cm = a.get("shuntingUnit", {}).get("members", [])
+                        cm = a.get("shuntingUnit", {}).get("memberIDs", [])
                         if cm:
-                            children.append("+".join(str(m["id"]) for m in cm))
+                            children.append("+".join(str(m) for m in cm))
                             break
             args = [train]
             if track:
@@ -181,11 +188,12 @@ def parse_solver_plan(path, id_to_track=None):
             continue
         elif task_name == "Move":
             steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: Move {train} \u2192 {display(track)}", "action": "move_to", "args": [train, track], "path": path_raw})
-        elif task_name == "Arrive":
+        elif task_name in ("Arrive", "StandIn"):
             steps.append({"raw": f"{action.get('startTime')}: Arrive {train} @ {display(track)}", "action": "arrive", "args": [train, track], "path": path_raw})
-        elif task_name == "Exit":
-            standing_type = action.get("shuntingUnit", {}).get("standingType", "")
-            action_name = "park" if standing_type == "OutStanding" else "depart"
+        elif task_name in ("Exit", "StandOut"):
+            # A unit that stays in the yard used to be an Exit carrying
+            # standingType="OutStanding"; the schema expresses it as StandOut.
+            action_name = "park" if task_name == "StandOut" else "depart"
             label = "Park" if action_name == "park" else "Depart"
             steps.append({"raw": f"{action.get('startTime')}: {label} {train} @ {display(track)}", "action": action_name, "args": [train, track], "path": path_raw})
         else:
@@ -276,6 +284,15 @@ def member_lengths_from_scenario(scenario):
 
 
 def member_lengths_from_plan(plan_path):
+    """Unit lengths harvested from a plan.
+
+    Returns nothing for current plans, deliberately. It reads lengths off
+    TrainUnit objects that used to be embedded in each action's shuntingUnit;
+    the schema carries memberIDs now, so the plan no longer knows a unit's
+    length. The caller falls back to the scenario, which is where that belongs
+    — but note member_lengths_from_scenario still reads the pre-unification
+    scenario shape and needs its own pass.
+    """
     lengths = {}
     if not plan_path or not Path(plan_path).exists():
         return lengths
