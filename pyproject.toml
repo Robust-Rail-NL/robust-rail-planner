@@ -14,8 +14,16 @@ dependencies = [
     "setuptools<82",
 ]
 
+[project.optional-dependencies]
+# Only what the schema tests need. They import converter, which is stdlib-only,
+# so this does not drag in the planner toolchain.
+test = ["pytest", "jsonschema"]
+
 [project.scripts]
 robust-rail-plan = "robust_rail_planning.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]

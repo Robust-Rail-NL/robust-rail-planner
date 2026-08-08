@@ -1,0 +1,62 @@
+name: Schema
+
+# release/2.0.0 is the shared integration branch across the five repos in this
+# release; main is the stable one.
+on:
+  push:
+    branches: [ "main", "release/2.0.0" ]
+  pull_request:
+    branches: [ "main", "release/2.0.0" ]
+  workflow_dispatch:
+
+jobs:
+  schema:
+    runs-on: ubuntu-latest
+    name: Plan schema conformance
+    timeout-minutes: 15
+    steps:
+    - uses: actions/checkout@v5
+
+    # Deliberately cheap: converter.py imports only the standard library, so
+    # this job never installs the planner toolchain. Running the real pipeline
+    # would need Julia and a JDK and several minutes; the emission helpers are
+    # pure functions, so the plan can be built and checked without either.
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: "3.12"
+
+    # The schemas live in the generator, and the fixtures this converter reads
+    # live in scenario-planning-inputs. Both are taken from the branch of the
+    # same name, so a coordinated schema change is validated against its own
+    # schema rather than the base branch's. That works because every repo in
+    # this release shares one branch name — see roadmap "Branch naming".
+    - name: Check out the sibling repos
+      run: |
+        ref="${{ github.head_ref || github.ref_name }}"
+        for name in robust-rail-generator scenario-planning-inputs; do
+          repo="https://github.com/Robust-Rail-NL/$name"
+          use="$ref"
+          if ! git ls-remote --exit-code --heads "$repo" "$use" >/dev/null 2>&1; then
+            use=release/2.0.0
+          fi
+          echo "Using $name@$use"
+          git clone --quiet --depth 1 --branch "$use" "$repo" "$name"
+        done
+
+    # Gating, and for the same reason as in scenario-planning-inputs: validating
+    # against a schema that no longer matches its models does not fail, it
+    # passes, having checked the wrong contract.
+    - name: Check the generator's schemas are not stale
+      working-directory: robust-rail-generator
+      run: |
+        pipx install uv >/dev/null 2>&1 || pip install uv
+        uv sync --frozen
+        uv run --frozen python scripts/export_schema.py
+        git diff --exit-code schema/ \
+          || { echo "::error::the generator's schema/ is stale — re-export and commit it there"; exit 1; }
+
+    - name: Test
+      run: |
+        pip install --quiet pytest jsonschema
+        pytest -q
