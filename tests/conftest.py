@@ -26,9 +26,28 @@ PLAN_PROJECT_DIR = os.path.join(REPO_ROOT, "plan")
 
 sys.path.insert(0, REPO_ROOT)
 
+def _julia_backend_available():
+    """Whether the Julia planner can actually run, not merely whether julia exists.
+
+    GitHub's ubuntu runners ship a julia on PATH, so a which() check passes there
+    and every planner test then fails on `Package PDDL is required but does not
+    seem to be installed`. What these tests need is the instantiated project in
+    plan/, so that is what gets checked.
+    """
+    if shutil.which("julia") is None:
+        return False
+    probe = subprocess.run(
+        ["julia", f"--project={PLAN_PROJECT_DIR}", "-e", "using PDDL, SymbolicPlanners"],
+        capture_output=True,
+        timeout=300,
+    )
+    return probe.returncode == 0
+
+
 requires_julia = pytest.mark.skipif(
-    shutil.which("julia") is None,
-    reason="julia is not installed; the symbolic planner backend needs it",
+    not _julia_backend_available(),
+    reason="the Julia planner backend is unavailable; run "
+           "`julia --project=plan -e 'using Pkg; Pkg.instantiate()'`",
 )
 
 
@@ -65,8 +84,8 @@ def pddl_files(tmp_path_factory):
 @pytest.fixture(scope="session")
 def raw_plan_file(pddl_files, tmp_path_factory):
     """Run the real Julia/SymbolicPlanners.jl backend on the fixture's PDDL problem."""
-    if shutil.which("julia") is None:
-        pytest.skip("julia is not installed; the symbolic planner backend needs it")
+    if not _julia_backend_available():
+        pytest.skip("the Julia planner backend is unavailable")
 
     out_dir = tmp_path_factory.mktemp("plan")
     plan_file = str(out_dir / "plan.plan")
