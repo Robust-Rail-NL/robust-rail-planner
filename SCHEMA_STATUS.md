@@ -1,12 +1,35 @@
 # Schema status of this repo
 
 Where `planning-approach` stands against the 2.0.0 interchange schema, as of
-2026-08-08. The schema lives in `robust-rail-generator/schema/`; the roadmap is
+2026-08-10. The schema lives in `robust-rail-generator/schema/`; the roadmap is
 `scenario-planning-inputs/docs/roadmap-2.0.0.md`.
+
+## Layout
+
+On 2026-08-10 `new_pipeline_version` was merged into `release/2.0.0`, replacing
+the `src/` package layout with a Docker-first one. The two branches had diverged
+from a 2026-08-05 base and neither contained the other's work: the restructure
+carried the container, and `release/2.0.0` carried the unified-schema migration.
+The merge takes the layout from the former and the Python from the latter.
+
+| now | was |
+|---|---|
+| `convert_to_pddl/<variant>/convert.py` | `src/convert/<variant>/convert.py` |
+| `convert_plan_to_tors/convert_to_tors.py` | `src/robust_rail_planning/converter.py` |
+| `plan/{symbolic,enhsp}_planner.jl` | `src/plan/planner.jl` |
+| `main.py` (container entrypoint) | `run.py`, `src/robust_rail_planning/cli.py` |
+| `requirements.txt` | `pyproject.toml`, `env.yml`, `setup.{sh,ps1,bat}` |
+
+**Deleted, recoverable from git** (`git show 7c0346e:<path>`): `pipeline.py`,
+`run.py`, `cli.py`, `evaluate.py`, `generate.py`, `src/local_search/solve.py`,
+`src/plan/audit_discrete_plan.py`. The batch-driver role they played now belongs
+to `scenario-planning-inputs`' `run_planner.py` / `run_evaluator.py`. Local
+search and the discrete-plan auditor have **no** replacement — they were dropped
+as part of the restructure, not superseded.
 
 ## Done
 
-**`converter.py` writes valid plans.** Checked by building one action of every
+**The plan emitter writes valid plans.** Checked by building one action of every
 kind from the emission helpers and validating against `schema_plan.json`: it was
 269 errors, and is now 0. What changed:
 
@@ -20,34 +43,53 @@ kind from the emission helpers and validating against `schema_plan.json`: it was
 | `trainUnitIds`, top-level `trackParts` | removed | Phase 3e |
 | string IDs, `displayName` | numeric IDs, `id` | Phase 3d |
 
-**`plan_visualizer` reads them.** Task types, `memberIDs`, and the `{kind, id}`
-resource shape.
+**The whole container path is now covered end to end.** `main.py` runs
+scenario → PDDL → plan → TORS JSON on the test fixture and the result validates
+against `schema_plan.json` with zero errors.
+
+**Four defects the earlier migration missed** were found by running that path,
+all of them consequences of ids becoming integers, and all of them silent:
+
+- `"train" + train["id"]` and three sibling sites — `TypeError`, the loud one.
+- `request["displayName"]` — renamed to `id`; would have been a `KeyError`.
+- `facility["relatedTrackParts"]` — renamed to `relatedTrackPartIDs`. Read
+  through `.get(..., [])`, so it returned no service tracks and the instance
+  quietly became unsolvable. It surfaced as the planner reporting "failed to
+  find a solution", which reads like a hard problem rather than a broken one.
+- `compiled_route_edge` — the movement graph is keyed by `str(id)` and
+  `id_to_track_part` by the native id, so **every** route edge was dropped and no
+  track was reachable from any other. Same misleading symptom.
+
+The last two are why the fixture is worth keeping in-repo: `test_plan_schema.py`
+exercises the emission helpers as pure functions and passed throughout, because
+nothing there runs a conversion.
+
+**`tests/fixtures/simple_service/` is migrated**, and both files were validated
+against `schema_location.json` / `schema_scenario.json` before being committed.
+
+**`plan_visualizer` reads the current plan shape.** Task types, `memberIDs`, and
+the `{kind, id}` resource shape.
 
 ## Not done
 
-**`pipeline.py` still assumes the pre-unification two-file world.** It reads
-`location_solver.json` (Phase 1 renamed it to `location.json`, so this path does
-not exist), and it pairs `scenario_solver_*.json` with `scenario_*.json` via
-`.replace("scenario_solver_", "scenario_")` in several places. Unification
-collapsed those into one file per scenario, so this is a design change rather
-than a rename: someone has to decide what the pipeline's inputs are now. Note
-`GENERATE_DIR` points into `../scenario-planning-inputs/Location_KleineBinckhorst`,
-so it breaks against the current contents of that repo.
+**The converter stops emitting actions partway through a plan.** On the test
+fixture the planner returns eight steps ending in a departure, and
+`convert_to_tors` emits three, ending on the service task — no `Exit`. Covered by
+`test_main_plan_ends_with_an_exit`, deliberately left as a strict `xfail` rather
+than weakened. **Pre-existing**: `new_pipeline_version`'s converter produces the
+same three actions on its own fixture, so this is not schema drift. It does mean
+no plan this repo currently produces is complete enough for the evaluator to
+accept as a full solution.
 
 **`member_lengths_from_scenario` in the visualizer reads the old scenario
 shape** — `scenario["in"]["trains"]`, `member["trainUnit"]`, `type.length`.
-Pre-unification, and broken independently of anything done today. Its companion
+Pre-unification, and broken independently of anything done here. Its companion
 `member_lengths_from_plan` now returns nothing by design, because lengths are no
 longer embedded in a plan; the scenario is the right source, once that function
 is updated.
 
-**`test_data/` is stale and cannot simply be re-converted.** Its scenarios are
-pre-unification (`in: {"trains": [...]}`) and its `.plan` files were produced
-against them, with train IDs that no longer exist. Regenerating means re-running
-the planner, not re-running the converter.
-
-**`src/convert/` variants and `src/convert/archive/`** were left alone. They are
-alternative and superseded converters; several read `request["displayName"]` and
+**`convert_to_pddl/archive/`** was left alone. Those are superseded converters;
+several read `request["displayName"]` and still carry the host-path default, and
 would need the same treatment if they are still wanted.
 
 **`create_park_action` is unreachable** and emits a `Park` task type that is not
@@ -57,12 +99,15 @@ deleted, since that is a planning decision.
 
 ## How to check
 
-The emission helpers are pure functions, so a plan can be assembled from them
-and validated without running a planner:
+```bash
+pytest -q                       # 18 passed, 1 xfailed (needs julia for 10 of them)
+```
 
-```python
-from robust_rail_planning import converter as C
-# build actions with C.create_*_action(...), wrap as
-# {"schemaVersion": C.SCHEMA_VERSION, "actions": [...]}, then validate against
-# robust-rail-generator/schema/schema_plan.json
+Or the container path directly, which is what CI cannot run:
+
+```bash
+python main.py \
+  --location tests/fixtures/simple_service/location.json \
+  --scenario tests/fixtures/simple_service/scenarios/scenario_simple.json \
+  --planner symbolic --output /tmp/plan.json
 ```

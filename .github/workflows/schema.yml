@@ -17,10 +17,11 @@ jobs:
     steps:
     - uses: actions/checkout@v5
 
-    # Deliberately cheap: converter.py imports only the standard library, so
-    # this job never installs the planner toolchain. Running the real pipeline
-    # would need Julia and a JDK and several minutes; the emission helpers are
-    # pure functions, so the plan can be built and checked without either.
+    # No Julia and no JDK here: the tests that need a planner backend are marked
+    # requires_julia and skip. What remains still covers both halves of the
+    # schema contract — the scenario/location reading in convert_to_pddl/ and the
+    # plan emission in convert_plan_to_tors/ — which is where every drift found
+    # so far has actually been.
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
@@ -56,7 +57,10 @@ jobs:
         git diff --exit-code schema/ \
           || { echo "::error::the generator's schema/ is stale — re-export and commit it there"; exit 1; }
 
+    # unified-planning is needed now that the PDDL conversion is under test too;
+    # it used to be enough to install pytest, when only the stdlib-only plan
+    # emitter was covered.
     - name: Test
       run: |
-        pip install --quiet pytest jsonschema
+        pip install --quiet -r requirements.txt -r requirements-test.txt jsonschema
         pytest -q

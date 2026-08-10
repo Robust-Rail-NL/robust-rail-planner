@@ -20,7 +20,7 @@ An AI Planning approach to solving the TUSPwSS.
   - `visualize_plan.py`: renders a scenario + plan into a standalone HTML page.
   - `layout_editor.py`: browser-based editor for track-layout position files.
   - `layouts/`: track-position JSON per location, used to place tracks on the canvas.
-- `data/`: sample `location.json` / `location_solver.json` and three example scenarios, for trying the pipeline without an external inputs repo.
+- `data/`: sample location and example scenarios. **Pre-unification and currently unusable** — string ids, `in` as an object, no `trainUnitTypes` — so the converters reject them. Use `tests/fixtures/simple_service/` (migrated and schema-validated) or the sibling `scenario-planning-inputs` repo instead, until these are migrated or dropped.
 - `Dockerfile`: builds the distributable image (`ENTRYPOINT ["python3", "main.py"]`) — this is what other tools in the pipeline run.
 - `.devcontainer/`: VS Code dev container config, see [Dev container](#dev-container) below.
 - `requirements.txt`: Python dependencies (`unified-planning`).
@@ -36,22 +36,22 @@ producing a TORS plan out.
    ```
    docker build -t planner:latest .
    ```
-2. Run it directly, mounting a location directory (containing
-   `location_solver.json` and a `scenarios/` folder) to `/app/database`:
+2. Run it directly, mounting a location directory (containing `location.json`
+   and a `scenarios/` folder) to `/app/database`:
    ```
    docker run --rm \
      --mount type=bind,source=/path/to/Location_X,target=/app/database \
      planner:latest \
-     --location /app/database/location_solver.json \
-     --scenario /app/database/scenarios/scenario_solver_example1.json \
+     --location /app/database/location.json \
+     --scenario /app/database/scenarios/scenario_example1.json \
      --planner symbolic \
      --output /app/database/plans/plan_example1.json
    ```
 
 | Flag | Description |
 | --- | --- |
-| `--location` | Path to `location_solver.json` inside the container (required) |
-| `--scenario` | Path to a `scenario_solver_*.json` file inside the container (required) |
+| `--location` | Path to `location.json` inside the container (required) |
+| `--scenario` | Path to a `scenario_*.json` file inside the container (required) |
 | `--planner {symbolic,enhsp}` | Planner backend to use (default: `symbolic`) |
 | `--output` | Path to write the resulting TORS plan JSON (required) |
 
@@ -72,7 +72,10 @@ Requires Julia (with the `PDDL` and `SymbolicPlanners` packages from
 `plan/Project.toml`), a JDK 17 + the ENHSP jar on `ENHSP_JAR` if you want the
 `enhsp` planner, and the Python packages in `requirements.txt`. Then:
 ```
-python main.py --location data/location_solver.json --scenario data/example_1.json --planner symbolic --output /tmp/plan.json
+python main.py \
+  --location tests/fixtures/simple_service/location.json \
+  --scenario tests/fixtures/simple_service/scenarios/scenario_simple.json \
+  --planner symbolic --output /tmp/plan.json
 ```
 
 ### Running a single stage (for debugging)
@@ -81,9 +84,11 @@ Each stage can be run standalone, which is useful when only one step is
 misbehaving, or to try a converter variant `main.py` doesn't wire up yet:
 
 ```
+FIX=tests/fixtures/simple_service
+
 # 1. scenario -> PDDL
 python convert_to_pddl/baseline_no_parameters/convert.py \
-  -l data/location_solver.json -s data/example_1.json \
+  -l $FIX/location.json -s $FIX/scenarios/scenario_simple.json \
   -d /tmp/domain.pddl -o /tmp/problem.pddl
 
 # 2. PDDL -> plan
@@ -92,8 +97,8 @@ julia --project=plan plan/symbolic_planner.jl /tmp/domain.pddl /tmp/problem.pddl
 
 # 3. plan -> TORS JSON
 python convert_plan_to_tors/convert_to_tors.py \
-  --plan /tmp/plan.plan --scenario data/example_1.json \
-  --location data/location_solver.json --output /tmp/plan.json
+  --plan /tmp/plan.plan --scenario $FIX/scenarios/scenario_simple.json \
+  --location $FIX/location.json --output /tmp/plan.json
 ```
 
 Discrete/corridor variants add `--precompute-matching` and/or

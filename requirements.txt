@@ -1,1 +1,6 @@
-unified-planning
+# Pinned, not floating. The conda environment this repo was developed against
+# uses 1.3.0, and plan/validate_plan.py depends on unified_planning.model.walkers
+# .StateEvaluator — an internal API with no stability guarantee. An unpinned
+# install would build a different image every time and could break on a release
+# nobody chose.
+unified-planning==1.3.0

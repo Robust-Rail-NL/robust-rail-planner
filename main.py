@@ -1,14 +1,10 @@
 #!/usr/bin/env python3
-"""Container entrypoint for the planner step (replaces the HIP solver step).
+"""Container entrypoint for the planner step (an alternative to the HIP solver).
 
-Converts a solver-format scenario to PDDL, runs the planner, and converts the
-resulting plan back to TORS JSON. Mirrors the old planning-approach's
-src/convert, src/plan/planner.jl, and src/robust_rail_planning/converter.py —
-not yet ported here, see TODOs below.
+Converts a unified scenario to PDDL, runs the planner, and converts the
+resulting plan back to TORS JSON. The three stages live in convert_to_pddl/,
+plan/ and convert_plan_to_tors/ respectively; this module only chains them.
 """
-from convert_to_pddl.corridor_no_switch_unlimited_order_servicing_discrete_compiled_matching.convert import create_instance_from_scenario
-from convert_plan_to_tors.convert_to_tors import convert_plan
-from plan.validate_plan import validate_plan
 import argparse
 import json
 import os
@@ -16,9 +12,18 @@ import subprocess
 import sys
 import tempfile
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
+
+# The stage packages are siblings of this file, so the repo root has to be
+# importable. It happens to be the working directory in the image, but not when
+# main.py is invoked by absolute path from elsewhere — which is exactly what the
+# tests do.
+sys.path.insert(0, REPO_ROOT)
+
+from convert_to_pddl.corridor_no_switch_unlimited_order_servicing_discrete_compiled_matching.convert import create_instance_from_scenario  # noqa: E402
+from convert_plan_to_tors.convert_to_tors import convert_plan  # noqa: E402
+from plan.validate_plan import validate_plan  # noqa: E402
+
 PLAN_DIR = os.path.join(REPO_ROOT, "plan")
 PLANNER_SCRIPTS = {
     "symbolic": os.path.join(PLAN_DIR, "symbolic_planner.jl"),
@@ -51,13 +56,18 @@ def main():
     parser = argparse.ArgumentParser(
         description="Planner step: scenario -> plan (TORS JSON)")
     parser.add_argument("--location", required=True,
-                        help="Path to location_solver.json inside the container")
+                        help="Path to location.json (inside the container, when containerised)")
     parser.add_argument("--scenario", required=True,
-                        help="Path to scenario_solver_*.json inside the container")
+                        help="Path to a scenario_*.json file (inside the container, "
+                             "when containerised)")
     parser.add_argument("--planner", choices=["symbolic", "enhsp"], default="symbolic")
-    parser.add_argument("--output",
-                        help="Path to write the resulting TORS plan JSON. "
-                             "If omitted, the plan JSON is printed to stdout.")
+    # Required, though the help text used to promise stdout when omitted: the
+    # Julia planner inherits this process's stdout and prints progress to it, so
+    # a plan written there would arrive interleaved with search output and be
+    # unparseable. Routing the planner to stderr instead would work, but
+    # run_planner.py treats a non-empty .err as a signal worth reporting.
+    parser.add_argument("--output", required=True,
+                        help="Path to write the resulting TORS plan JSON.")
     args = parser.parse_args()
 
     tmp_dir = tempfile.mkdtemp(prefix="planner-")
