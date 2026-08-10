@@ -67,8 +67,14 @@ nothing there runs a conversion.
 **`tests/fixtures/simple_service/` is migrated**, and both files were validated
 against `schema_location.json` / `schema_scenario.json` before being committed.
 
-**`plan_visualizer` reads the current plan shape.** Task types, `memberIDs`, and
-the `{kind, id}` resource shape.
+**`plan_visualizer` reads the current plan and scenario shapes.** Task types,
+`memberIDs`, and the `{kind, id}` resource shape; and, since 2026-08-10, flat
+members in `initial_train_positions` and lengths resolved through
+`trainUnitTypes` in `member_lengths_from_scenario`. Both of the latter crashed on
+any scenario with standing trains. All 70 scenario/plan pairs under
+`Location_KleineBinckhorst` — including the classified corpus under `fixtures/` —
+now render. `member_lengths_from_plan` still returns nothing, by design: lengths
+are no longer embedded in a plan, so the scenario is the only source.
 
 ## Not done
 
@@ -81,12 +87,14 @@ same three actions on its own fixture, so this is not schema drift. It does mean
 no plan this repo currently produces is complete enough for the evaluator to
 accept as a full solution.
 
-**`member_lengths_from_scenario` in the visualizer reads the old scenario
-shape** — `scenario["in"]["trains"]`, `member["trainUnit"]`, `type.length`.
-Pre-unification, and broken independently of anything done here. Its companion
-`member_lengths_from_plan` now returns nothing by design, because lengths are no
-longer embedded in a plan; the scenario is the right source, once that function
-is updated.
+**Facility time windows are not modelled.** The evaluator rejects the
+SimpleService plan with "Facility 22 is not available from 1500 to 2000". No
+converter reads `timeWindow`, so the PDDL model cannot respect facility
+availability. The location declares no `timeWindow` on that facility at all, so
+the evaluator is applying a default from somewhere — worth establishing where
+before modelling it. Together with the truncation above, this is why the
+pipeline runs end to end and still produces no valid solution: the format
+contract holds, the planning model is incomplete.
 
 **`convert_to_pddl/archive/`** was left alone. Those are superseded converters;
 several read `request["displayName"]` and still carry the host-path default, and
