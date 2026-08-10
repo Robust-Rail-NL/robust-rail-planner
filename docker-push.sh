@@ -17,7 +17,16 @@
 # ARCHITECTURE: amd64 only, for now — unlike the other three, which ship
 # linux/amd64,linux/arm64. This image builds ENHSP from source and instantiates
 # Julia's depot, and both would run under QEMU emulation for arm64 on an amd64
-# host. Before adding it, time one:
+# host.
+#
+# As of 2026-08-10 the shared builder cannot do it at all: `docker buildx
+# inspect robust-rail-builder` lists only linux/amd64 variants and linux/386, so
+# no arm64 binfmt handler is registered on this machine. Registering one is a
+# privileged, host-wide change:
+#
+#     docker run --privileged --rm tonistiigi/binfmt --install arm64
+#
+# After that, time a build before committing to shipping it:
 #
 #     time docker buildx build --builder "$BUILDER_NAME" --platform linux/arm64 .
 #
