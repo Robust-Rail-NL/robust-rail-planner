@@ -40,7 +40,10 @@ def test_validate_plan_accepts_the_planner_output(pddl_files, raw_plan_file):
 
 @requires_julia
 def test_tors_plan_has_expected_action_shape(tors_plan):
-    assert set(tors_plan.keys()) == {"actions", "trackParts"}
+    # The unified plan schema is exactly {schemaVersion, actions}: trackParts is
+    # gone, and schemaVersion is new. The evaluator warns when the latter is
+    # absent, so assert it is carried rather than merely tolerated.
+    assert set(tors_plan.keys()) == {"schemaVersion", "actions"}
     actions = tors_plan["actions"]
     assert len(actions) > 0
 
@@ -60,11 +63,16 @@ def test_tors_plan_includes_the_cleaning_service_task(tors_plan):
         if a["taskType"].get("other") == "Cleaning"
     ]
     assert len(service_actions) == 1
-    assert service_actions[0]["location"] == "2"  # rail_service track id
+    # An integer since the unification — track ids used to be strings.
+    assert service_actions[0]["location"] == 2  # rail_service track id
 
 
 @requires_julia
 def test_tors_plan_carries_the_train_unit_through(tors_plan):
+    # members (objects carrying a nested id) became memberIDs (a bare integer
+    # array) in the unified schema. Asserting the id type as well as the value
+    # matters: the ids used to be strings, and a converter that emitted "9101"
+    # here would still look right in a diff.
     for action in tors_plan["actions"]:
-        member_ids = {m["id"] for m in action["shuntingUnit"]["members"]}
-        assert member_ids == {"9101"}
+        assert "members" not in action["shuntingUnit"]
+        assert action["shuntingUnit"]["memberIDs"] == [9101]

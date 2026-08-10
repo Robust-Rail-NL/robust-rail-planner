@@ -8,8 +8,18 @@ import pytest
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FIXTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "simple_service")
-LOCATION_FILE = os.path.join(FIXTURES_DIR, "location_solver.json")
-SCENARIO_FILE = os.path.join(FIXTURES_DIR, "scenarios", "scenario_solver_simple.json")
+# Migrated to the unified schema on 2026-08-10, and validated against the
+# generator's schema_location/schema_scenario before being committed. They were
+# location_solver.json / scenario_solver_simple.json in the pre-unification
+# shape, which every converter in this repo would now reject.
+#
+# Kept in-repo rather than pointed at scenario-planning-inputs: this is a
+# deliberately minimal five-track corridor with one train and one request, and
+# the assertions in test_convert_to_pddl.py name its tracks and goal directly.
+# Real-world inputs are covered by test_plan_schema.py, which does read the
+# sibling repo.
+LOCATION_FILE = os.path.join(FIXTURES_DIR, "location.json")
+SCENARIO_FILE = os.path.join(FIXTURES_DIR, "scenarios", "scenario_simple.json")
 
 SYMBOLIC_PLANNER_SCRIPT = os.path.join(REPO_ROOT, "plan", "symbolic_planner.jl")
 PLAN_PROJECT_DIR = os.path.join(REPO_ROOT, "plan")

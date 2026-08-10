@@ -17,7 +17,7 @@ from pathlib import Path
 
 import pytest
 
-from robust_rail_planning import converter as C
+from convert_plan_to_tors import convert_to_tors as C
 
 REPO = Path(__file__).resolve().parent.parent
 
