@@ -1,9 +1,0 @@
-Metadata-Version: 2.4
-Name: robust-rail-planning
-Version: 0.1.0
-Summary: Robust Rail NL PDDL Planning
-Requires-Python: >=3.9
-Requires-Dist: unified-planning[enhsp]==1.3.0
-Requires-Dist: questionary
-Requires-Dist: protobuf<4.0
-Requires-Dist: setuptools<82

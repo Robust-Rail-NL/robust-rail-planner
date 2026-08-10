@@ -1,0 +1,79 @@
+import json
+import os
+import shutil
+import subprocess
+import sys
+
+import pytest
+
+REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+FIXTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "simple_service")
+LOCATION_FILE = os.path.join(FIXTURES_DIR, "location_solver.json")
+SCENARIO_FILE = os.path.join(FIXTURES_DIR, "scenarios", "scenario_solver_simple.json")
+
+SYMBOLIC_PLANNER_SCRIPT = os.path.join(REPO_ROOT, "plan", "symbolic_planner.jl")
+PLAN_PROJECT_DIR = os.path.join(REPO_ROOT, "plan")
+
+sys.path.insert(0, REPO_ROOT)
+
+requires_julia = pytest.mark.skipif(
+    shutil.which("julia") is None,
+    reason="julia is not installed; the symbolic planner backend needs it",
+)
+
+
+@pytest.fixture(scope="session")
+def location_object():
+    with open(LOCATION_FILE) as f:
+        return json.load(f)
+
+
+@pytest.fixture(scope="session")
+def scenario_object():
+    with open(SCENARIO_FILE) as f:
+        return json.load(f)
+
+
+@pytest.fixture(scope="session")
+def pddl_files(tmp_path_factory):
+    """Convert the simple-service fixture scenario+location into a PDDL domain/problem pair."""
+    from convert_to_pddl.baseline_no_parameters.convert import create_instance_from_scenario
+
+    out_dir = tmp_path_factory.mktemp("pddl")
+    domain_file = str(out_dir / "domain.pddl")
+    problem_file = str(out_dir / "problem.pddl")
+
+    create_instance_from_scenario(
+        location_file=LOCATION_FILE,
+        scenario_file=SCENARIO_FILE,
+        domain_file=domain_file,
+        output_file=problem_file,
+    )
+    return {"domain": domain_file, "problem": problem_file}
+
+
+@pytest.fixture(scope="session")
+def raw_plan_file(pddl_files, tmp_path_factory):
+    """Run the real Julia/SymbolicPlanners.jl backend on the fixture's PDDL problem."""
+    if shutil.which("julia") is None:
+        pytest.skip("julia is not installed; the symbolic planner backend needs it")
+
+    out_dir = tmp_path_factory.mktemp("plan")
+    plan_file = str(out_dir / "plan.plan")
+
+    subprocess.run(
+        ["julia", f"--project={PLAN_PROJECT_DIR}", SYMBOLIC_PLANNER_SCRIPT,
+         pddl_files["domain"], pddl_files["problem"], plan_file],
+        check=True,
+        cwd=REPO_ROOT,
+        timeout=180,
+    )
+    return plan_file
+
+
+@pytest.fixture(scope="session")
+def tors_plan(raw_plan_file):
+    """Convert the planner's raw output into the final TORS JSON structure."""
+    from convert_plan_to_tors.convert_to_tors import convert_plan
+
+    return convert_plan(raw_plan_file, SCENARIO_FILE, LOCATION_FILE)

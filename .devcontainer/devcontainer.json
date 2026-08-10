@@ -1,0 +1,23 @@
+{
+  "name": "planning-approach-refactor",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "remoteUser": "vscode",
+  "mounts": [
+    "source=planning-approach-refactor-julia-depot,target=/opt/julia-depot,type=volume"
+  ],
+  "features": {
+    "ghcr.io/anthropics/devcontainer-features/claude-code:1.0": {}
+  },
+  "postCreateCommand": "julia --project=plan -e 'using Pkg; Pkg.add([\"PDDL\", \"SymbolicPlanners\"]); Pkg.instantiate()'",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "julialang.language-julia",
+        "ms-python.python"
+      ]
+    }
+  }
+}
