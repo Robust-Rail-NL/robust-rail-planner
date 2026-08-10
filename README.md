@@ -66,6 +66,32 @@ python run_planner.py --dry-run              # print the docker commands only
 It writes `plan_<name>.json` into each location's `plans/` folder — the same
 convention `run_evaluator.py` already reads from.
 
+### The visualizer, from the same image
+
+The image serves the plan visualizer as well. Pass `visualizer` as the first
+argument; anything starting with a flag still goes to the planner, so
+`run_planner.py` is unaffected. Mount the whole inputs repo rather than a single
+location, since the picker lists them all:
+
+```
+cd ../scenario-planning-inputs
+docker run --rm -p 8767:8767 \
+  --user $(id -u):$(id -g) \
+  --mount type=bind,source=$PWD,target=/app/database \
+  planner:latest visualizer \
+  --inputs-root /app/database --output-dir /app/database/tmp_plans
+```
+
+Then open <http://127.0.0.1:8767>. It binds `0.0.0.0` inside the container so the
+published port works; run it natively (`python plan_visualizer/run_existing_visualizer.py`)
+and it stays on `127.0.0.1`.
+
+`--output-dir` should point inside the mount — generated HTML written anywhere
+else disappears with the container. The picker lists each location's
+`scenarios/` and `plans/`, plus the classified corpus under
+`fixtures/{feasible,infeasible,unresolved}/`, as paths relative to the location
+so you can tell which bucket an entry came from.
+
 ### Running natively, without Docker
 
 Requires Julia (with the `PDDL` and `SymbolicPlanners` packages from
