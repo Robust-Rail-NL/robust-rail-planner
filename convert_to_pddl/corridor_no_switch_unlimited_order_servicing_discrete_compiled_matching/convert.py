@@ -99,7 +99,7 @@ def _coupling_track_ids_for_request(request, location_object,
     }
     if not candidate_track_ids:
         raise ValueError(
-            f"No coupling track can hold request {request.get('displayName')} "
+            f"No coupling track can hold request {request.get('id')} "
             f"with length {required_length}"
         )
     preferred_ids = [request.get("lastParkingTrackPart"), request.get("leaveTrackPart")]
@@ -619,11 +619,15 @@ def _departure_matching_candidates(scenario_object, unit_type_by_id):
 
 
 def _build_service_track_ids(location_object):
-    # Service tracks come from facilities[].relatedTrackParts for facilities with taskTypes.
+    # Service tracks come from facilities[].relatedTrackPartIDs for facilities
+    # with taskTypes. The field was relatedTrackParts before the unification;
+    # reading the old name here failed silently, because .get() returned [] and
+    # the problem was simply generated with no service track — which the planner
+    # then reported as an unsolvable instance rather than a conversion fault.
     service_tracks = {}
     for facility in location_object.get("facilities", []):
         if facility.get("taskTypes"):
-            for tp_id in facility.get("relatedTrackParts", []):
+            for tp_id in facility.get("relatedTrackPartIDs", []):
                 service_tracks[str(tp_id)] = {
                     "type": facility["type"],
                     "capacity": facility.get("simultaneousUsageCount", 1),
@@ -845,7 +849,9 @@ def _train_object_name(source, index, train):
     # Reuse the routing branch's standing-train naming convention.
     if source == "inStanding":
         return f"train_in_standing_{index}"
-    return "train" + train["id"]
+    # str(): ids are integers since the scenario unification. PDDL object names
+    # have to be strings, and "train" + 9001 is a TypeError, not a coercion.
+    return "train" + str(train["id"])
 
 
 def create_instance_from_scenario(
@@ -859,8 +865,22 @@ def create_instance_from_scenario(
     precompute_matching = True
     matching_strategy = "composition_preserving"
     compile_precomputed_actions = True
-    if path_to_folder is None:
-        path_to_folder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "scenario-planning-inputs", "Location_KleineBinckhorst")
+    # This used to fall back to a sibling scenario-planning-inputs checkout,
+    # reached by counting directories up from __file__. That only ever resolved
+    # on a machine with one particular layout, and the move to convert_to_pddl/
+    # silently changed the depth so it now points at "/" — a default that is
+    # wrong everywhere is worse than no default, so ask instead of guessing.
+    if path_to_folder is None and (
+        location_file is None
+        or scenario_file is None
+        or os.sep not in location_file
+        or os.sep not in scenario_file
+    ):
+        raise ValueError(
+            "create_instance_from_scenario needs full paths for both "
+            "location_file and scenario_file, or a path_to_folder to resolve "
+            "bare filenames against."
+        )
 
     if location_file is None:
         location_file = os.path.join(path_to_folder, "location.json")
@@ -1729,7 +1749,7 @@ def create_instance_from_scenario(
             track_initial_su_order.setdefault(initial_track_id, []).append(shunting_unit)
         composition_obj = None
         if len(train_members) > 1:
-            composition_obj = problem.add_object("composition" + train["id"], arrival_composition_type)
+            composition_obj = problem.add_object("composition" + str(train["id"]), arrival_composition_type)
             problem.set_initial_value(composition_needs_uncoupling(composition_obj), True)
             problem.set_initial_value(su_may_move(shunting_unit), True)
             if compile_precomputed_actions:
@@ -1798,7 +1818,7 @@ def create_instance_from_scenario(
         if track_id not in id_to_track_part:
             continue
         track_obj = id_to_track_part[track_id]
-        request_name = "parking_" + request["displayName"]
+        request_name = "parking_" + str(request["id"])
         request_obj = problem.add_object(request_name, parking_request_type)
         for index, requested_unit in enumerate(request.get("trainUnits", [])):
             slot_name = f"{request_name}_slot{index}"
@@ -1818,7 +1838,7 @@ def create_instance_from_scenario(
     departure_slot_records = []
     request_action_records = []
     for request in out_requests:
-        request_name = "request" + request["displayName"]
+        request_name = "request" + str(request["id"])
         request_obj = problem.add_object(request_name, departure_request_type)
         problem.set_initial_value(request_size(request_obj), up.Int(len(request["trainUnits"])))
 
@@ -1957,10 +1977,20 @@ def create_instance_from_scenario(
                 for source, targets in adjacency.items()
                 for target in targets
             }
+        # _build_side_aware_track_graph keys its nodes by str(id), while
+        # id_to_track_part keys by the location's native id — an integer since
+        # the unification. Testing "0" against {0: ...} matched nothing, so every
+        # compiled_route_edge was dropped and the instance became unsolvable: no
+        # track was reachable from any other. It surfaced as "Failed to find a
+        # solution", which reads like a hard problem rather than a broken one.
+        track_part_by_str_id = {str(key): obj for key, obj in id_to_track_part.items()}
         for source_id, target_id in allowed_route_edges:
-            if source_id in id_to_track_part and target_id in id_to_track_part:
+            source_key, target_key = str(source_id), str(target_id)
+            if source_key in track_part_by_str_id and target_key in track_part_by_str_id:
                 problem.set_initial_value(
-                    compiled_route_edge(id_to_track_part[source_id], id_to_track_part[target_id]),
+                    compiled_route_edge(
+                        track_part_by_str_id[source_key], track_part_by_str_id[target_key]
+                    ),
                     True,
                 )
 

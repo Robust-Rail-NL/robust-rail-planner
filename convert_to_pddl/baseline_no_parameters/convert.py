@@ -175,11 +175,13 @@ def _select_precomputed_matching(unit_type_by_id, slot_records, matching_variant
 
 
 def _build_service_track_ids(location_object):
-    # Service tracks come from facilities[].relatedTrackParts for facilities with taskTypes.
+    # Service tracks come from facilities[].relatedTrackPartIDs for facilities
+    # with taskTypes (relatedTrackParts before the unification — see the note in
+    # the corridor variant on why reading the old name failed silently).
     service_tracks = {}
     for facility in location_object.get("facilities", []):
         if facility.get("taskTypes"):
-            for tp_id in facility.get("relatedTrackParts", []):
+            for tp_id in facility.get("relatedTrackPartIDs", []):
                 service_tracks[str(tp_id)] = {
                     "type": facility["type"],
                     "capacity": facility.get("simultaneousUsageCount", 1),
@@ -399,12 +401,26 @@ def _train_object_name(source, index, train):
     # Reuse the routing branch's standing-train naming convention.
     if source == "inStanding":
         return f"train_in_standing_{index}"
-    return "train" + train["id"]
+    # str(): ids are integers since the scenario unification. PDDL object names
+    # have to be strings, and "train" + 9001 is a TypeError, not a coercion.
+    return "train" + str(train["id"])
 
 
 def create_instance_from_scenario(path_to_folder=None, scenario_file=None, location_file=None, output_file=None, domain_file=None, precompute_matching=False, matching_variant=0):
-    if path_to_folder is None:
-        path_to_folder = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))), "scenario-planning-inputs", "Location_KleineBinckhorst")
+    # See the same guard in the corridor variant: the old fallback counted
+    # directories up from __file__ to a sibling scenario-planning-inputs
+    # checkout, and now resolves to "/" from this file's new depth.
+    if path_to_folder is None and (
+        location_file is None
+        or scenario_file is None
+        or os.sep not in location_file
+        or os.sep not in scenario_file
+    ):
+        raise ValueError(
+            "create_instance_from_scenario needs full paths for both "
+            "location_file and scenario_file, or a path_to_folder to resolve "
+            "bare filenames against."
+        )
 
     if location_file is None:
         location_file = os.path.join(path_to_folder, "location.json")
@@ -1124,7 +1140,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
             problem.set_initial_value(su_aside_distance(shunting_unit), up.Real(su_aside))
         composition_obj = None
         if len(train_members) > 1:
-            composition_obj = problem.add_object("composition" + train["id"], arrival_composition_type)
+            composition_obj = problem.add_object("composition" + str(train["id"]), arrival_composition_type)
             problem.set_initial_value(composition_needs_uncoupling(composition_obj), True)
             problem.set_initial_value(su_may_move(shunting_unit), True)
         else:
@@ -1172,7 +1188,7 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         if track_id not in id_to_track_part:
             continue
         track_obj = id_to_track_part[track_id]
-        request_name = "parking_" + request["displayName"]
+        request_name = "parking_" + str(request["id"])
         request_obj = problem.add_object(request_name, parking_request_type)
         for index, requested_unit in enumerate(request.get("trainUnits", [])):
             slot_name = f"{request_name}_slot{index}"
@@ -1196,11 +1212,11 @@ def create_instance_from_scenario(path_to_folder=None, scenario_file=None, locat
         if len(request["trainUnits"]) > 2:
             raise ValueError(
                 "explicit_coupling currently supports only one-unit requests "
-                f"or physical coupling of exactly two units; request {request['displayName']} "
+                f"or physical coupling of exactly two units; request {request['id']} "
                 f"has {len(request['trainUnits'])} units"
             )
 
-        request_name = "request" + request["displayName"]
+        request_name = "request" + str(request["id"])
         request_obj = problem.add_object(request_name, departure_request_type)
         request_objs[request_name] = request_obj
         problem.set_initial_value(request_open(request_obj), True)

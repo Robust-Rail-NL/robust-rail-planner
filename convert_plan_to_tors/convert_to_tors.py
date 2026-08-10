@@ -223,8 +223,9 @@ def make_shunting_unit(train_id, train_lookup, unit_lookup=None, members=None):
     if train_id in train_lookup:
         return su(_member_ids(train_lookup[train_id]["members"]))
 
-    # Handle shunting unit IDs
-    if train_id.startswith("su_"):
+    # Handle shunting unit IDs. post_process_actions calls this with an already
+    # assigned integer id rather than a PDDL name, so guard the string test.
+    if isinstance(train_id, str) and train_id.startswith("su_"):
         # Try to resolve from unit lookup
         stripped = train_id.replace("su_unit", "")
         unit_id = f"unit{stripped}"
@@ -558,9 +559,18 @@ def convert_plan(plan_file, scenario_file, location_file):
     su_departure_time = {}
     
     def get_su_id(name):
+        """Assign each PDDL shunting-unit name a stable integer id.
+
+        The result is used as ShuntingUnit.id and inside parentIDs/childIDs, all
+        of which the schema types as integers. This used to store str(next_su_id)
+        — harmless when every id on the wire was a string, but now it both fails
+        validation and, more quietly, breaks the memberIDs fill pass below, which
+        matches actions by su["id"]: a string '0' and an integer 0 are different
+        keys, so Arrive actions silently came out with no members at all.
+        """
         nonlocal next_su_id
         if name not in su_name_to_int:
-            su_name_to_int[name] = str(next_su_id)
+            su_name_to_int[name] = next_su_id
             next_su_id += 1
         return su_name_to_int[name]
 
@@ -953,7 +963,7 @@ def convert_plan(plan_file, scenario_file, location_file):
             for fac in location.get("facilities", []):
                 fac_type_lower = fac["type"].lower()
                 is_type_match = fac_type_lower == pddl_facility_lower
-                is_track_match = track_id in [str(tp) for tp in fac.get("relatedTrackParts", [])]
+                is_track_match = track_id in [str(tp) for tp in fac.get("relatedTrackPartIDs", [])]
                 if is_type_match or is_track_match:
                     if fac.get("taskTypes"):
                         facility_type_task = fac["taskTypes"][0].get("other", pddl_facility)
