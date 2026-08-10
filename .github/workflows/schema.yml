@@ -63,4 +63,6 @@ jobs:
     - name: Test
       run: |
         pip install --quiet -r requirements.txt -r requirements-test.txt jsonschema
-        pytest -q
+        # Explicit path as well as pytest.ini's testpaths: the sibling repos are
+        # cloned into this workspace above, and their suites are not ours to run.
+        pytest -q tests
