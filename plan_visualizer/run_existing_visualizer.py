@@ -12,6 +12,23 @@ def parse_args():
         description="Web UI to generate and serve a visualizer for Robust-Rail scenarios."
     )
     parser.add_argument("--port", type=int, default=8767)
+    # Both default to the local checkout layout, so running this from a clone
+    # needs no arguments. They exist for the container, where the repos are not
+    # siblings on disk: the inputs are bind-mounted, and 127.0.0.1 inside a
+    # container is not reachable from the host.
+    parser.add_argument(
+        "--inputs-root", type=Path, default=None,
+        help="Directory holding the Location_* folders (default: the sibling "
+             "scenario-planning-inputs checkout).",
+    )
+    parser.add_argument(
+        "--output-dir", type=Path, default=None,
+        help="Where to write generated visualizer HTML (default: ./data).",
+    )
+    parser.add_argument(
+        "--host", default="127.0.0.1",
+        help="Address to bind. Use 0.0.0.0 in a container to expose the port.",
+    )
     return parser.parse_args()
 
 
@@ -22,6 +39,35 @@ def load_json(path):
 
 def json_bytes(obj):
     return json.dumps(obj).encode("utf-8")
+
+
+def _list_relative(base, patterns):
+    """Files matching any pattern, as paths relative to base.
+
+    Relative paths rather than bare names because the classified corpus under
+    fixtures/{feasible,infeasible,unresolved}/ holds scenarios and plans with the
+    same shape as scenarios/ and plans/, and a bare name could not say which
+    directory it came from. It also makes the picker show the bucket, which is
+    the interesting part of a fixture.
+    """
+    found = set()
+    for pattern in patterns:
+        for path in base.glob(pattern):
+            if path.is_file():
+                found.add(path.relative_to(base).as_posix())
+    return sorted(found)
+
+
+def _safe_join(base, relative):
+    """Resolve `relative` under `base`, refusing anything that escapes it.
+
+    The picker only ever sends paths this server listed, but it binds 0.0.0.0 in
+    the container, so the request is reachable from outside the host it runs on.
+    """
+    target = (base / relative).resolve()
+    if not target.is_relative_to(base.resolve()):
+        raise ValueError(f"path escapes the location directory: {relative}")
+    return target
 
 
 HTML = None
@@ -36,10 +82,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             self.wfile.write(HTML.encode("utf-8"))
             return
         if self.path == "/api/locations":
-            base = self.server.workspace_root / "scenario-planning-inputs"
+            base = self.server.inputs_root
             dirs = sorted(
                 d.name for d in base.iterdir() if d.is_dir() and (d / "location.json").exists()
-            )
+            ) if base.is_dir() else []
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -49,9 +95,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             from urllib.parse import urlparse, parse_qs
             qs = parse_qs(urlparse(self.path).query)
             loc = (qs.get("location") or [""])[0]
-            base = self.server.workspace_root / "scenario-planning-inputs" / loc
-            scenarios = sorted(p.name for p in (base / "scenarios").glob("*.json")) if (base / "scenarios").is_dir() else []
-            plans = sorted(p.name for p in (base / "plans").glob("*.json")) if (base / "plans").is_dir() else []
+            base = self.server.inputs_root / loc
+            scenarios = _list_relative(base, ["scenarios/*.json", "fixtures/*/scenario_*.json"])
+            plans = _list_relative(base, ["plans/*.json", "fixtures/*/plan_*.json"])
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.end_headers()
@@ -88,11 +134,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             loc_name = data.get("location", "Location_KleineBinckhorst")
             scenario_name = data.get("scenario", "")
             plan_name = data.get("plan", "")
-            location_dir = self.server.workspace_root / "scenario-planning-inputs" / loc_name
+            location_dir = self.server.inputs_root / loc_name
             location_path = location_dir / "location.json"
-            scenario_path = location_dir / "scenarios" / scenario_name
-            plan_path = location_dir / "plans" / plan_name
-            data_dir = self.server.planning_repo / "data"
+            # Both names are paths relative to the location directory now, so
+            # that fixtures/<bucket>/ entries can be selected alongside the
+            # scenarios/ and plans/ ones.
+            try:
+                scenario_path = _safe_join(location_dir, scenario_name)
+                plan_path = _safe_join(location_dir, plan_name)
+            except ValueError as exc:
+                self.send_response(400)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json_bytes({"error": str(exc)}))
+                return
+            data_dir = self.server.output_dir
             output_name = f"{Path(scenario_name).stem}_{Path(plan_name).stem}_visualizer.html"
             output_path = data_dir / output_name
             if loc_name == "Location_SimpleService":
@@ -105,7 +161,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self.end_headers()
                 self.wfile.write(json_bytes({"error": f"Location not found: {location_path}"}))
                 return
-            data_dir.mkdir(exist_ok=True)
+            data_dir.mkdir(parents=True, exist_ok=True)
             cmd = [
                 sys.executable,
                 str(self.server.script_dir / "visualize_plan.py"),
@@ -140,19 +196,26 @@ def main():
     args = parse_args()
 
     script_dir = Path(__file__).resolve().parent
-    workspace_root = script_dir.parents[1]
-    planning_repo = workspace_root / "planning-approach"
+    repo_root = script_dir.parent
+    inputs_root = args.inputs_root or repo_root.parent / "scenario-planning-inputs"
+    output_dir = args.output_dir or repo_root / "data"
 
     PORT = args.port
     socketserver.TCPServer.allow_reuse_address = True
-    server = socketserver.TCPServer(("127.0.0.1", PORT), Handler)
+    server = socketserver.TCPServer((args.host, PORT), Handler)
     server.server_port = PORT
-    server.workspace_root = workspace_root
-    server.planning_repo = planning_repo
+    server.inputs_root = inputs_root
+    server.output_dir = output_dir
     server.script_dir = script_dir
     server.vis_html_path = None
 
-    print(f"Visualizer server: http://127.0.0.1:{PORT}")
+    if not inputs_root.is_dir():
+        # Worth saying up front: the UI's location list would otherwise just come
+        # back empty, which looks like there is nothing to visualise.
+        print(f"WARNING: no inputs at {inputs_root} — pass --inputs-root.",
+              file=sys.stderr)
+
+    print(f"Visualizer server: http://{args.host}:{PORT}")
     print("Choose location/scenario/plan and click Generate & View.")
     print("Press Ctrl+C to stop.")
     server.serve_forever()

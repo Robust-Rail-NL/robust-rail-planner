@@ -229,7 +229,9 @@ def initial_train_positions(scenario, id_to_track):
     def member_name(train):
         members = train.get("members", [])
         if members:
-            return "+".join(str(m["trainUnit"]["id"]) for m in members)
+            # A member is (typePrefix, carriages, id) since the unification; it
+            # used to wrap a trainUnit object carrying the id and the type.
+            return "+".join(str(m["id"]) for m in members)
         return "train" + str(train["id"])
 
     # Only include trains already standing in the yard at t=0
@@ -255,31 +257,43 @@ def dedupe_consecutive(raw_path):
 
 
 def member_lengths_from_scenario(scenario):
+    """Unit id -> length, resolved through the scenario's type table.
+
+    A member carries only (typePrefix, carriages, id) since the unification: the
+    type, and so the length, lives once in trainUnitTypes rather than being
+    embedded in every member. This used to read member["trainUnit"]["type"]
+    ["length"] and walk `in`/`inStanding`/`out` as objects wrapping `trains` and
+    `trainRequests` — all four of those shapes are gone.
+    """
+    if not isinstance(scenario, dict):
+        return {}
+
+    type_lengths = {}
+    for unit_type in scenario.get("trainUnitTypes", []) or []:
+        length = unit_type.get("length")
+        if length is not None:
+            key = (unit_type.get("typePrefix"), unit_type.get("carriages"))
+            type_lengths[key] = float(length)
+
     lengths = {}
 
-    def add_unit(unit):
-        if not isinstance(unit, dict):
+    def add_member(member):
+        if not isinstance(member, dict):
             return
-        unit_id = str(unit.get("id", ""))
-        length = unit.get("type", {}).get("length")
-        if unit_id and length:
-            lengths[unit_id] = float(length)
+        unit_id = member.get("id")
+        length = type_lengths.get((member.get("typePrefix"), member.get("carriages")))
+        if unit_id is not None and length is not None:
+            lengths[str(unit_id)] = length
 
-    def add_train(train):
-        if not isinstance(train, dict):
-            return
+    for train in list(scenario.get("in") or []) + list(scenario.get("inStanding") or []):
         for member in train.get("members", []) or []:
-            add_unit(member.get("trainUnit"))
+            add_member(member)
+    # Departure requests name units the same way, though their ids are usually
+    # null — the unit is chosen by type, not identity.
+    for request in list(scenario.get("out") or []) + list(scenario.get("outStanding") or []):
+        for unit in request.get("trainUnits", []) or []:
+            add_member(unit)
 
-    if isinstance(scenario, dict):
-        in_trains = scenario.get("in", {}).get("trains", []) if isinstance(scenario.get("in"), dict) else []
-        standing = scenario.get("inStanding", {})
-        standing_trains = standing.get("trains", []) if isinstance(standing, dict) else standing
-        out_trains = scenario.get("out", {}).get("trainRequests", []) if isinstance(scenario.get("out"), dict) else []
-        for train in list(in_trains) + list(standing_trains) + list(out_trains):
-            add_train(train)
-        for unit in scenario.get("trainUnitTypes", []) or []:
-            add_unit(unit)
     return lengths
 
 
