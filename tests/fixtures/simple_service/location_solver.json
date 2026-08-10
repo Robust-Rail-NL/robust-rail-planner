@@ -1,0 +1,72 @@
+{
+    "trackParts": [
+        {
+            "id": "0",
+            "name": "bumper_in",
+            "aSide": [],
+            "bSide": ["1"],
+            "length": 0,
+            "sawMovementAllowed": false,
+            "parkingAllowed": false,
+            "isElectrified": false,
+            "type": "RailRoad"
+        },
+        {
+            "id": "1",
+            "name": "rail_transit",
+            "aSide": ["0"],
+            "bSide": ["2"],
+            "length": 200,
+            "sawMovementAllowed": false,
+            "parkingAllowed": false,
+            "isElectrified": false,
+            "type": "RailRoad"
+        },
+        {
+            "id": "2",
+            "name": "rail_service",
+            "aSide": ["1"],
+            "bSide": ["3"],
+            "length": 150,
+            "sawMovementAllowed": false,
+            "parkingAllowed": true,
+            "isElectrified": false,
+            "type": "RailRoad"
+        },
+        {
+            "id": "3",
+            "name": "rail_park",
+            "aSide": ["2"],
+            "bSide": ["4"],
+            "length": 150,
+            "sawMovementAllowed": false,
+            "parkingAllowed": true,
+            "isElectrified": false,
+            "type": "RailRoad"
+        },
+        {
+            "id": "4",
+            "name": "bumper_out",
+            "aSide": ["3"],
+            "bSide": [],
+            "length": 0,
+            "sawMovementAllowed": false,
+            "parkingAllowed": false,
+            "isElectrified": false,
+            "type": "RailRoad"
+        }
+    ],
+    "facilities": [
+        {
+            "id": "100",
+            "type": "Cleaning",
+            "relatedTrackParts": [2],
+            "taskTypes": [{"other": "Cleaning"}],
+            "simultaneousUsageCount": 1
+        }
+    ],
+    "taskTypes": [{"other": "Cleaning"}],
+    "movementConstant": 60,
+    "movementTrackCoefficient": 1,
+    "movementSwitchCoefficient": 1
+}
