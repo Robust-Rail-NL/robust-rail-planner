@@ -21,7 +21,7 @@ REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, REPO_ROOT)
 
 from convert_to_pddl.corridor_no_switch_unlimited_order_servicing_discrete_compiled_matching.convert import create_instance_from_scenario  # noqa: E402
-from convert_plan_to_tors.convert_to_tors import convert_plan  # noqa: E402
+from convert_plan_to_tors.convert_to_tors import convert_plan, ScheduleInfeasibleError  # noqa: E402
 from plan.validate_plan import validate_plan  # noqa: E402
 
 PLAN_DIR = os.path.join(REPO_ROOT, "plan")
@@ -93,7 +93,17 @@ def main():
         print("Refusing to convert an invalid plan to TORS format.", file=sys.stderr)
         sys.exit(1)
 
-    tors_plan = convert_plan_to_tors(raw_plan, args.scenario, args.location)
+    try:
+        tors_plan = convert_plan_to_tors(raw_plan, args.scenario, args.location)
+    except ScheduleInfeasibleError as exc:
+        for problem in exc.problems:
+            print("PROBLEM:", problem, file=sys.stderr)
+        print(
+            "Plan is schedule-infeasible (%d problem(s)); exiting with error."
+            % len(exc.problems),
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
     with open(args.output, "w") as f:
