@@ -60,8 +60,9 @@ def _resolve_departure_track_sides(ids, location_object):
     # Bumpers/signals (e.g. Sein70, Stootblok*) are removed from the model, so a
     # leave-track reference pointing at such a collapsed node is resolved to the
     # real track(s) directly connected to it. Real track references pass through.
-    # Returns {real_track_id: set of exit sides {"a", "b"}} where the exit side is
-    # the side of the real track that faces the (removed) bumper.
+    # Returns {real_track_id: set of exit sides {"a", "b"}} (native int keys,
+    # matching _build_adjacency) where the exit side is the side of the real
+    # track that faces the (removed) bumper.
     adjacency = _build_adjacency(location_object)
     track_parts = {str(tp["id"]): tp for tp in location_object.get("trackParts", [])}
     sides_by_track = {}
@@ -73,7 +74,7 @@ def _resolve_departure_track_sides(ids, location_object):
         if not _is_switch_like_track_part(tp):
             # Direct real-track reference: keep the original convention
             # (a track with a bSide is an a-side exit and vice versa).
-            exit_sides = sides_by_track.setdefault(str_id, set())
+            exit_sides = sides_by_track.setdefault(track_id, set())
             if tp.get("bSide"):
                 exit_sides.add("a")
             if tp.get("aSide"):
@@ -100,7 +101,7 @@ def _resolve_departure_track_sides(ids, location_object):
             real_tp = track_parts.get(real_id)
             if real_tp is None:
                 continue
-            exit_sides = sides_by_track.setdefault(real_id, set())
+            exit_sides = sides_by_track.setdefault(int(real_id), set())
             if came_from in {str(n) for n in real_tp.get("aSide", [])}:
                 exit_sides.add("a")
             if came_from in {str(n) for n in real_tp.get("bSide", [])}:
@@ -727,7 +728,7 @@ def _relevant_corridor_nodes(scenario_object, location_object,
             location_object,
         )
         if request.get("lastParkingTrackPart") is not None:
-            leave_ids = leave_ids | {str(request["lastParkingTrackPart"])}
+            leave_ids = leave_ids | {request["lastParkingTrackPart"]}
         route_targets = [str(t) for t in sorted(leave_ids)]
         for train, start_id in trains_with_starts:
             if _train_unit_type_keys(train).isdisjoint(request_keys):
