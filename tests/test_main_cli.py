@@ -86,17 +86,6 @@ def test_main_plan_ends_with_an_exit(tmp_path):
 
 
 @requires_julia
-@pytest.mark.xfail(
-    reason="The PDDL model sequences actions and costs movement, but nothing "
-           "ties a departure to the request's `departure` time, so the planner "
-           "has no reason to be punctual. On this fixture the Exit lands at "
-           "1803 against a requested 1000. Measured the same way on both real "
-           "locations, where the evaluator rejects with \"Trains's departure "
-           "mismatch with Action start/end time\": SimpleService 2902 vs 2000, "
-           "KleineBinckhorst 6301 vs 5400. This is the cheap local proxy for a "
-           "defect that otherwise needs a tors run. See SCHEMA_STATUS.md.",
-    strict=True,
-)
 def test_plan_meets_its_departure_deadlines(tmp_path):
     """No train should leave later than the request asked for.
 
