@@ -86,6 +86,44 @@ def test_main_plan_ends_with_an_exit(tmp_path):
 
 
 @requires_julia
+@pytest.mark.xfail(
+    reason="The PDDL model sequences actions and costs movement, but nothing "
+           "ties a departure to the request's `departure` time, so the planner "
+           "has no reason to be punctual. On this fixture the Exit lands at "
+           "1803 against a requested 1000. Measured the same way on both real "
+           "locations, where the evaluator rejects with \"Trains's departure "
+           "mismatch with Action start/end time\": SimpleService 2902 vs 2000, "
+           "KleineBinckhorst 6301 vs 5400. This is the cheap local proxy for a "
+           "defect that otherwise needs a tors run. See SCHEMA_STATUS.md.",
+    strict=True,
+)
+def test_plan_meets_its_departure_deadlines(tmp_path):
+    """No train should leave later than the request asked for.
+
+    Compares the latest Exit against the latest requested departure rather than
+    pairing each train with its own request: matching a shunting unit back to a
+    request needs the unit lookup, and this fixture has a single request, so the
+    two formulations coincide here. If a multi-request fixture is added, tighten
+    this to a per-request comparison.
+    """
+    output_file = tmp_path / "plan.json"
+    assert _run_main(output_file).returncode == 0
+
+    plan = json.loads(output_file.read_text())
+    scenario = json.loads(open(SCENARIO_FILE).read())
+
+    exits = [a for a in plan["actions"] if a["taskType"].get("predefined") == "Exit"]
+    assert exits, "no Exit action to check"
+
+    latest_exit = max(int(a["startTime"]) for a in exits)
+    latest_requested = max(int(r["departure"]) for r in scenario["out"])
+    assert latest_exit <= latest_requested, (
+        f"last train leaves at {latest_exit}, "
+        f"{latest_exit - latest_requested}s after the requested {latest_requested}"
+    )
+
+
+@requires_julia
 def test_main_rejects_an_unsolvable_scenario(tmp_path):
     """The out request asks for a unit type that never arrives, so the
     planner must fail to find a plan and main.py must exit non-zero rather

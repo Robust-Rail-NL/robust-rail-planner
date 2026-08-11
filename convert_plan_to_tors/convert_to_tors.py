@@ -784,7 +784,16 @@ def convert_plan(plan_file, scenario_file, location_file):
             groups = m.groups()
             train = groups[0]
             track = groups[-1] if len(groups) > 2 else groups[1]
-            
+
+            # Bound here, not inside the branch below: a train that departs
+            # without a preceding move — no start_move_su, so nothing in
+            # active_trains — otherwise reached the exit_track line with this
+            # name unbound and raised UnboundLocalError. Latent until compiled
+            # departures started matching; it takes a plan whose first departure
+            # belongs to a train that never moved, which
+            # Location_KleineBinckhorst produces and the fixture does not.
+            expanded_path = []
+
             if train in active_trains:
                 state = active_trains[train]
                 
@@ -792,7 +801,6 @@ def convert_plan(plan_file, scenario_file, location_file):
                 if not state["path"] and train in train_locations:
                     state["path"] = [train_locations[train], dest_track]
                 
-                expanded_path = []
                 if state["path"]:
                     expanded_path = _strip_for_departure(expand_path(state["path"], a_adj, b_adj, switch_ids))
                     duration = compute_move_duration(expanded_path, switch_ids)

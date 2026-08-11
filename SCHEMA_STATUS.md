@@ -84,6 +84,13 @@ Also corrected an off-by-one alongside it: the request name was read as
 always missed and fell through to a fallback. Both forms end `(…, request,
 track)`, so it now counts from the right.
 
+And an `UnboundLocalError` that the same fix exposed: `expanded_path` was bound
+only inside `if train in active_trains`, so a train departing without a
+preceding move reached the `exit_track` line with the name unbound. Latent while
+compiled departures matched nothing; `Location_KleineBinckhorst` produces such a
+plan and the test fixture does not, so it took a real location to surface. It is
+bound before the branch now.
+
 **`plan_visualizer` reads the current plan and scenario shapes.** Task types,
 `memberIDs`, and the `{kind, id}` resource shape; and, since 2026-08-10, flat
 members in `initial_train_positions` and lengths resolved through
@@ -98,18 +105,23 @@ are no longer embedded in a plan, so the scenario is the only source.
 *(The truncated-plan defect that stood here is fixed — see Done above.)*
 
 **Departure deadlines are not respected.** With complete plans, the evaluator
-now rejects SimpleService on timing rather than structure:
+rejects on timing rather than structure. Measured on both locations:
 
-    Tracked Train     : 33334
-    Action start time : 2902
-    Trains's departure: 2000
-    Error Suspected: Trains's departure mismatch with Action start/end time
+| location | exit at | requested | late by |
+|---|---|---|---|
+| SimpleService | 2902 | 2000 | 902s |
+| KleineBinckhorst | 6301 | 5400 | 901s |
 
-Both trains exit ~900s past the departure their request asks for. The PDDL model
-sequences actions and costs movement, but nothing ties an exit to the request's
-`departure` time, so the planner has no reason to be punctual. One request also
-reports `Is Train matched : No`, which may be the same problem or a separate
-matching one — worth separating before modelling either.
+Both give the same verdict: *"Trains's departure mismatch with Action start/end
+time"*. The PDDL model sequences actions and costs movement, but nothing ties an
+exit to the request's `departure`, so the planner has no reason to be punctual.
+The test fixture shows it too — Exit at 1803 against a requested 1000 — so
+`test_plan_meets_its_departure_deadlines` holds it as a strict `xfail` without
+needing an evaluator run.
+
+SimpleService also reports `Is Train matched : No` on one request, which may be
+the same problem or a separate matching one — worth separating before modelling
+either.
 
 **A note on facility time windows, which used to be recorded here.** The
 evaluator previously rejected this scenario with "Facility 22 is not available
