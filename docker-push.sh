@@ -14,34 +14,26 @@
 # The :latest tag is only applied to final releases (no prerelease suffix), so a
 # prerelease never shadows the current stable image.
 #
-# ARCHITECTURE: amd64 only, for now — unlike the other three, which ship
-# linux/amd64,linux/arm64. This image builds ENHSP from source and instantiates
-# Julia's depot, and both would run under QEMU emulation for arm64 on an amd64
-# host.
+# ARCHITECTURE: amd64 + arm64, like the other three. Measured 2026-08-11 on this
+# builder: ~7m for arm64, ~2m for amd64.
 #
-# NOTE ON QEMU: the sibling repos build arm64 through the same buildx builder,
-# so nothing about this setup prevents it. But the emulator registration lives
-# in the kernel's binfmt_misc and does NOT survive a reboot, and neither
-# qemu-user-static nor binfmt-support is installed here — so after every reboot
-# `docker buildx ls` shows only amd64 and every multi-arch push in every repo
-# silently loses its arm64 half. Re-register with:
+# No host setup is needed for the arm64 half — no qemu-user-static, no
+# `tonistiigi/binfmt --install`. The docker-container driver runs BuildKit inside
+# a container whose image bundles QEMU emulators, and uses them for foreign-arch
+# stages on its own. That is why the sibling repos have always built arm64 here
+# without anyone installing anything.
 #
-#     docker run --privileged --rm tonistiigi/binfmt --install arm64
+# Do not read `docker buildx ls` as saying otherwise. Its PLATFORMS column lists
+# what the *host* can execute — native architectures plus whatever is registered
+# in binfmt_misc — and says nothing about BuildKit's bundled emulation. On this
+# machine it shows only linux/amd64 and linux/386 while arm64 builds fine. Trust
+# a build, not the column.
 #
-# or make it persistent once with:
-#
-#     sudo apt install qemu-user-static binfmt-support
-#
-# After that, time a build before committing to shipping it:
-#
-#     time docker buildx build --builder "$BUILDER_NAME" --platform linux/arm64 .
-#
-# If that is too slow, the first thing to try is a cross-compiled ENHSP stage:
-# `FROM --platform=$BUILDPLATFORM` for the builder, then COPY the jar into the
-# target-arch image. ENHSP compiles to Java bytecode, which is
-# architecture-independent, so emulating that step buys nothing — check that
-# enhsp-dist/ ships no native .so first. Julia's Pkg.instantiate() does
-# precompile native code and has to stay in the target-arch stage.
+# What keeps the arm64 build tolerable is the cross-compiled ENHSP stage in the
+# Dockerfile: it is Java bytecode, so FROM --platform=$BUILDPLATFORM keeps it
+# native and byte-identical. Julia's Pkg.instantiate() genuinely does precompile
+# native code and has to stay in the target-arch stage, which is most of what
+# remains.
 #
 # Requires a buildx builder using the "docker-container" driver with
 # network=host. The default driver runs the BuildKit container in an isolated
@@ -56,7 +48,7 @@ set -euo pipefail
 
 IMAGE="ghcr.io/robust-rail-nl/planner"
 BUILDER_NAME="robust-rail-builder"
-PLATFORMS="linux/amd64"
+PLATFORMS="linux/amd64,linux/arm64"
 
 VERSION=$(tr -d '[:space:]' < VERSION)
 [[ -n "$VERSION" ]] || { echo "Could not read a version from VERSION" >&2; exit 1; }
