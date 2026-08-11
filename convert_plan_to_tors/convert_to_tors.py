@@ -93,6 +93,15 @@ SPLIT_DURATION = 120
 # LOAD LOOKUPS
 # =====================================================
 
+def _member_types(members, type_lookup):
+    """Resolve the train unit type dict for each member via the type lookup."""
+    resolved = []
+    for m in members:
+        key = (m.get("typePrefix"), m.get("carriages"))
+        resolved.append(type_lookup.get(key, {}))
+    return resolved
+
+
 def build_train_lookup(scenario):
     """Build lookup for all trains including their types and durations"""
     lookup = {}
@@ -105,6 +114,7 @@ def build_train_lookup(scenario):
     for train in scenario.get("in", []):
         names = [f"train{train['id']}", f"su_train{train['id']}"]
         members = train.get("members", [])
+        member_types = _member_types(members, type_lookup)
         if members:
             key = (members[0]["typePrefix"], members[0]["carriages"])
             combine_duration = int(type_lookup[key].get("combineDuration", COMBINE_DURATION))
@@ -116,6 +126,7 @@ def build_train_lookup(scenario):
         entry = {
             "id": train["id"],
             "members": members,
+            "member_types": member_types,
             "combine_duration": combine_duration,
             "split_duration": split_duration,
         }
@@ -126,6 +137,7 @@ def build_train_lookup(scenario):
     for i, train in enumerate(scenario.get("inStanding", [])):
         names = [f"train_in_standing_{i}", f"su_train_in_standing_{i}"]
         members = train.get("members", [])
+        member_types = _member_types(members, type_lookup)
         if members:
             key = (members[0]["typePrefix"], members[0]["carriages"])
             combine_duration = int(type_lookup[key].get("combineDuration", COMBINE_DURATION))
@@ -137,6 +149,7 @@ def build_train_lookup(scenario):
         entry = {
             "id": train["id"],
             "members": members,
+            "member_types": member_types,
             "combine_duration": combine_duration,
             "split_duration": split_duration,
         }
@@ -496,9 +509,30 @@ def bfs_through_switches(a_adj, b_adj, start, goal, switch_ids):
     return a_path or b_path or [start, goal]
 
 
+def remove_loops(path):
+    """Remove loops from a raw move path (e.g. A->B->A->C becomes A->C).
+    Direction-flip excursions added by the planner are redundant for a Move:
+    TORS only needs the net displacement, and re-entering a track the train
+    already stands on (like 906a) makes the Move invalid."""
+    if not path:
+        return path
+    result = []
+    seen = set()
+    for track in path:
+        if track in seen:
+            idx = result.index(track)
+            result = result[:idx + 1]
+            seen = set(result)
+        else:
+            seen.add(track)
+            result.append(track)
+    return result
+
+
 def expand_path(path, a_adj, b_adj, switch_ids):
     if not path:
         return path
+    path = remove_loops(path)
     expanded = [path[0]]
     for i in range(len(path) - 1):
         segment = bfs_through_switches(a_adj, b_adj, path[i], path[i + 1], switch_ids)
@@ -506,11 +540,81 @@ def expand_path(path, a_adj, b_adj, switch_ids):
     return expanded
 
 
-MOVE_DURATION = 600
+TRACK_CROSSING_TIME = 60
+SWITCH_CROSSING_TIME = 30
+SWITCH_COST = {"Switch": 1, "EnglishSwitch": 2, "HalfEnglishSwitch": 2}
 
-def compute_move_duration(expanded_path, switch_ids):
-    """Compute move duration (60s per PDDL move step)"""
-    return MOVE_DURATION
+
+def switch_cost_map(location):
+    """Map trackPart id -> switch cost (1 per Switch, 2 per English/HalfEnglish switch, else 0)."""
+    costs = {}
+    for tp in location.get("trackParts", []):
+        costs[tp["id"]] = SWITCH_COST.get(tp.get("type"), 0)
+    return costs
+
+
+def compute_reversals(expanded_path, a_adj, b_adj):
+    """Count direction reversals along the path (the solver's Reverse arcs).
+
+    A reversal occurs on an interior track when the path enters and leaves it
+    through the same side (a turn-around), matching ArcType.Reverse in the
+    solver's routing graph.
+    """
+    reversals = 0
+    for i in range(1, len(expanded_path) - 1):
+        track = expanded_path[i]
+        prev, nxt = expanded_path[i - 1], expanded_path[i + 1]
+        if prev in a_adj.get(track, []):
+            entry_side = "a"
+        elif prev in b_adj.get(track, []):
+            entry_side = "b"
+        else:
+            entry_side = None
+        if nxt in a_adj.get(track, []):
+            exit_side = "a"
+        elif nxt in b_adj.get(track, []):
+            exit_side = "b"
+        else:
+            exit_side = None
+        if entry_side is not None and entry_side == exit_side:
+            reversals += 1
+    return reversals
+
+
+def compute_move_duration(expanded_path, a_adj, b_adj, switch_costs=None, reversal_duration=0):
+    """Compute a Move action's duration using the C# solver's ComputeDuration model:
+
+        duration = (Tracks.Length + TotalReversals) * TrackCrossingTime
+                 + TotalSwitches * SwitchCrossingTime
+                 + TotalReversals * ReversalDuration
+
+    Tracks.Length is the path length (start track included), TotalSwitches is the
+    summed switch cost over the path, TotalReversals counts same-side turn-arounds.
+    Unknown tracks are treated as plain tracks (60s, no switch cost).
+    """
+    if switch_costs is None:
+        switch_costs = {}
+    reversals = compute_reversals(expanded_path, a_adj, b_adj)
+    total_switches = sum(switch_costs.get(tid, 0) for tid in expanded_path)
+    return (
+        (len(expanded_path) + reversals) * TRACK_CROSSING_TIME
+        + total_switches * SWITCH_CROSSING_TIME
+        + reversals * reversal_duration
+    )
+
+
+def get_reversal_duration(train, train_lookup):
+    """ReversalDuration for a train: max across its composed member types (0 if unknown)."""
+    entry = train_lookup.get(train)
+    if not entry:
+        return 0
+    durations = []
+    for t in entry.get("member_types", []):
+        try:
+            durations.append(int(t.get("reversalDuration", 0) or 0))
+        except (TypeError, ValueError):
+            durations.append(0)
+    return max(durations, default=0)
 
 
 # =====================================================
@@ -534,6 +638,7 @@ def convert_plan(plan_file, scenario_file, location_file):
     a_adj = build_directed_adj(location, "aSide")
     b_adj = build_directed_adj(location, "bSide")
     switch_ids = build_switch_sets(location)
+    switch_costs = switch_cost_map(location)
     parkable_tracks = {tp["id"] for tp in location["trackParts"] if tp.get("parkingAllowed")}
     zero_length_tracks = {tp["id"] for tp in location["trackParts"] if tp.get("length", 0) == 0}
     scenario_end_time = int(scenario.get("endTime", 0))
@@ -696,7 +801,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                     state["path"] = [train_locations[train], dest_track]
                 
                 expanded_path = _strip_trailing_zero_length(expand_path(state["path"], a_adj, b_adj, switch_ids))
-                duration = compute_move_duration(expanded_path, switch_ids)
+                duration = compute_move_duration(expanded_path, a_adj, b_adj, switch_costs, get_reversal_duration(train, train_lookup))
                 end_time = current_time + duration
                 if len(expanded_path) > 1:
                     actions.append(
@@ -731,7 +836,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                     state["path"] = [train_locations[train], track_id]
                 
                 expanded_path = _strip_trailing_zero_length(expand_path(state["path"], a_adj, b_adj, switch_ids))
-                duration = compute_move_duration(expanded_path, switch_ids)
+                duration = compute_move_duration(expanded_path, a_adj, b_adj, switch_costs, get_reversal_duration(train, train_lookup))
                 end_time = current_time + duration
                 if len(expanded_path) > 1:
                     actions.append(
@@ -803,7 +908,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                 
                 if state["path"]:
                     expanded_path = _strip_for_departure(expand_path(state["path"], a_adj, b_adj, switch_ids))
-                    duration = compute_move_duration(expanded_path, switch_ids)
+                    duration = compute_move_duration(expanded_path, a_adj, b_adj, switch_costs, get_reversal_duration(train, train_lookup))
                     end_time = current_time + duration
                     if len(expanded_path) > 1:
                         actions.append(
@@ -960,7 +1065,7 @@ def convert_plan(plan_file, scenario_file, location_file):
             if su_id in active_trains:
                 state = active_trains[su_id]
                 expanded_path = expand_path(state["path"], a_adj, b_adj, switch_ids)
-                duration = compute_move_duration(expanded_path, switch_ids)
+                duration = compute_move_duration(expanded_path, a_adj, b_adj, switch_costs, get_reversal_duration(su_id, train_lookup))
                 end_time = current_time + duration
                 
                 if len(expanded_path) > 1:
@@ -994,7 +1099,24 @@ def convert_plan(plan_file, scenario_file, location_file):
                     facility_id = fac["id"]
                     break
             
+            # TORS computes a service's duration from the scenario task (see
+            # ServiceAction::GetDuration), so the plan must schedule with the
+            # same value. Look up the matching task on the SU's members and use
+            # its duration; fall back to a conservative default when unknown.
             service_duration = 600
+            task_match = None
+            su_entry = train_lookup.get(su_id, {})
+            task_lower = facility_type_task.lower()
+            for member in su_entry.get("members", []):
+                for task in member.get("tasks", []):
+                    task_type = str(task.get("type", {}).get("other", "")).lower()
+                    if task_type and (task_type == task_lower or task_type == pddl_facility_lower):
+                        task_match = task
+                        break
+                if task_match:
+                    break
+            if task_match:
+                service_duration = int(task_match["duration"])
             start_time = current_time
             end_time = current_time + service_duration
             
