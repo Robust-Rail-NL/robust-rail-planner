@@ -1,8 +1,32 @@
-.git
-.gitignore
-.devcontainer
-__pycache__
-**/__pycache__
-*.pyc
-tmp
-.DS_Store
+# Allowlist, not a denylist. The previous denylist let 216MB of vendored ENHSP
+# source (with its own .git), editor backups of deleted files, local pipeline
+# logs carrying absolute home paths, and a stale uv.lock into a published public
+# image — because `docker build` copies the working tree, not the commit, so
+# anything lying around untracked ships. Listing what the image needs fails
+# closed instead: new junk is excluded by default.
+*
+
+# Container entrypoint and the three pipeline stages it chains.
+!main.py
+!docker-entrypoint.sh
+!convert_to_pddl/
+!convert_plan_to_tors/
+!plan/
+
+# The visualizer mode of the entrypoint.
+!plan_visualizer/
+
+# Deliberately kept: lets the suite run inside the image, which is the only
+# place the Julia backend is instantiated. ~52K.
+!tests/
+!pytest.ini
+
+!requirements.txt
+!requirements-test.txt
+
+# Re-exclude things the recursive includes above would drag back in.
+**/__pycache__/
+**/*.pyc
+**/*~
+**/.pytest_cache/
+tools/planners/enhsp/.git/
