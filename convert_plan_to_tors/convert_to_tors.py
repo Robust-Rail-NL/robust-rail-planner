@@ -106,12 +106,30 @@ SPLIT_DURATION = 120
 # LOAD LOOKUPS
 # =====================================================
 
+def _member_type_key(member, type_lookup):
+    """Resolve a member to its (typePrefix, carriages) lookup key.
+
+    The in-repo fixture embeds typePrefix/carriages on each member, while
+    generator-produced scenarios reference the trainUnitTypes block by
+    displayName instead. Either shape must resolve.
+    """
+    key = (member.get("typePrefix"), member.get("carriages"))
+    if key in type_lookup:
+        return key
+    display_name = member.get("typeDisplayName")
+    if display_name is not None:
+        for type_key, type_info in type_lookup.items():
+            if type_info.get("displayName") == display_name:
+                return type_key
+    return None
+
+
 def _member_types(members, type_lookup):
     """Resolve the train unit type dict for each member via the type lookup."""
     resolved = []
     for m in members:
-        key = (m.get("typePrefix"), m.get("carriages"))
-        resolved.append(type_lookup.get(key, {}))
+        key = _member_type_key(m, type_lookup)
+        resolved.append(type_lookup.get(key, {}) if key is not None else {})
     return resolved
 
 
@@ -129,9 +147,13 @@ def build_train_lookup(scenario):
         members = train.get("members", [])
         member_types = _member_types(members, type_lookup)
         if members:
-            key = (members[0]["typePrefix"], members[0]["carriages"])
-            combine_duration = int(type_lookup[key].get("combineDuration", COMBINE_DURATION))
-            split_duration = int(type_lookup[key].get("splitDuration", SPLIT_DURATION))
+            key = _member_type_key(members[0], type_lookup)
+            if key is not None:
+                combine_duration = int(type_lookup[key].get("combineDuration", COMBINE_DURATION))
+                split_duration = int(type_lookup[key].get("splitDuration", SPLIT_DURATION))
+            else:
+                combine_duration = COMBINE_DURATION
+                split_duration = SPLIT_DURATION
         else:
             combine_duration = COMBINE_DURATION
             split_duration = SPLIT_DURATION
@@ -152,9 +174,13 @@ def build_train_lookup(scenario):
         members = train.get("members", [])
         member_types = _member_types(members, type_lookup)
         if members:
-            key = (members[0]["typePrefix"], members[0]["carriages"])
-            combine_duration = int(type_lookup[key].get("combineDuration", COMBINE_DURATION))
-            split_duration = int(type_lookup[key].get("splitDuration", SPLIT_DURATION))
+            key = _member_type_key(members[0], type_lookup)
+            if key is not None:
+                combine_duration = int(type_lookup[key].get("combineDuration", COMBINE_DURATION))
+                split_duration = int(type_lookup[key].get("splitDuration", SPLIT_DURATION))
+            else:
+                combine_duration = COMBINE_DURATION
+                split_duration = SPLIT_DURATION
         else:
             combine_duration = COMBINE_DURATION
             split_duration = SPLIT_DURATION
@@ -172,7 +198,11 @@ def build_train_lookup(scenario):
     # Also store under bare train unit IDs for combine/split member resolution
     for key, entry in list(lookup.items()):
         for m in entry["members"]:
-            lookup[f"unit{m['id']}"] = {"id": m["id"], "members": [m]}
+            lookup[f"unit{m['id']}"] = {
+                "id": m["id"],
+                "members": [m],
+                "member_types": _member_types([m], type_lookup),
+            }
 
     return lookup
 
