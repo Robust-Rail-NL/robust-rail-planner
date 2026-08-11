@@ -78,23 +78,43 @@ are no longer embedded in a plan, so the scenario is the only source.
 
 ## Not done
 
-**The converter stops emitting actions partway through a plan.** On the test
-fixture the planner returns eight steps ending in a departure, and
-`convert_to_tors` emits three, ending on the service task — no `Exit`. Covered by
-`test_main_plan_ends_with_an_exit`, deliberately left as a strict `xfail` rather
-than weakened. **Pre-existing**: `new_pipeline_version`'s converter produces the
-same three actions on its own fixture, so this is not schema drift. It does mean
-no plan this repo currently produces is complete enough for the evaluator to
-accept as a full solution.
+**The converter does not recognise the corridor model's compiled departure.**
+On the test fixture the planner returns seven steps ending in a departure, and
+`convert_to_tors` emits three, stopping at the service task — no `Exit`.
+
+The cause is one unmatched pattern, not a half-written converter.
+`DEPART_SU_FOR_REQUEST_RE` matches `depart_(aside|bside)_su_for_request` with
+five arguments; the corridor model emits
+`compiled_depart_bside_for_request` with four — different prefix, no `_su`, and
+no slot argument, because `compile_precomputed_actions = True` bakes the
+matching in. The converter was written against the non-compiled action names.
+
+That single miss accounts for all three lost actions: the departure is dropped,
+and the two trailing moves sit in a pending path that is only flushed when a
+terminating action is recognised, which never happens.
+
+**The silence is the real hazard.** An unrecognised plan line falls through the
+`if m:` chain to the next iteration with no warning, so a model emitting an
+unknown action yields a short plan and reports success — the same shape as the
+`relatedTrackParts` and `compiled_route_edge` bugs above. A fix should make
+unmatched lines loud, not just add the missing pattern.
+
+Covered by `test_main_plan_ends_with_an_exit` as a strict `xfail`, so it will
+turn the build red the moment it starts passing and force the marker off.
+**Pre-existing**: `new_pipeline_version`'s converter has the same pattern set and
+produces the same three actions on its own fixture, so this is not schema drift.
 
 **Facility time windows are not modelled.** The evaluator rejects the
 SimpleService plan with "Facility 22 is not available from 1500 to 2000". No
 converter reads `timeWindow`, so the PDDL model cannot respect facility
 availability. The location declares no `timeWindow` on that facility at all, so
 the evaluator is applying a default from somewhere — worth establishing where
-before modelling it. Together with the truncation above, this is why the
-pipeline runs end to end and still produces no valid solution: the format
-contract holds, the planning model is incomplete.
+before modelling it.
+
+**Independent of the departure bug above.** They are two separate reasons the
+pipeline runs end to end and still yields no valid solution: one truncates the
+plan, one schedules a service the yard will not accept. Fixing the pattern match
+gets a complete plan shape; the evaluator can still reject it on availability.
 
 **`convert_to_pddl/archive/`** was left alone. Those are superseded converters;
 several read `request["displayName"]` and still carry the host-path default, and
