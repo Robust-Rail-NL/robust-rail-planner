@@ -13,25 +13,15 @@ jobs:
   schema:
     runs-on: ubuntu-latest
     name: Plan schema conformance
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
     - uses: actions/checkout@v5
 
-    # No Julia and no JDK here: the tests that need a planner backend are marked
-    # requires_julia and skip. What remains still covers both halves of the
-    # schema contract — the scenario/location reading in convert_to_pddl/ and the
-    # plan emission in convert_plan_to_tors/ — which is where every drift found
-    # so far has actually been.
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.12"
-
-    # The schemas live in the generator, and the fixtures this converter reads
-    # live in scenario-planning-inputs. Both are taken from the branch of the
-    # same name, so a coordinated schema change is validated against its own
-    # schema rather than the base branch's. That works because every repo in
-    # this release shares one branch name — see roadmap "Branch naming".
+    # The schemas live in the generator, and the fixtures these tests read live
+    # in scenario-planning-inputs. Both are taken from the branch of the same
+    # name, so a coordinated schema change is validated against its own schema
+    # rather than the base branch's. That works because every repo in this
+    # release shares one branch name — see roadmap "Branch naming".
     - name: Check out the sibling repos
       run: |
         ref="${{ github.head_ref || github.ref_name }}"
@@ -57,12 +47,43 @@ jobs:
         git diff --exit-code schema/ \
           || { echo "::error::the generator's schema/ is stale — re-export and commit it there"; exit 1; }
 
-    # unified-planning is needed now that the PDDL conversion is under test too;
-    # it used to be enough to install pytest, when only the stdlib-only plan
-    # emitter was covered.
-    - name: Test
+    - uses: docker/setup-buildx-action@v3
+
+    # Built from this commit, never pulled from ghcr. A published image is built
+    # from whatever commit was current when someone last ran docker-push.sh, so
+    # testing against it would report on the previous release and call it a pass
+    # — the same staleness trap as validating against a schema that no longer
+    # matches its models.
+    #
+    # Cheap despite that: the Dockerfile puts app code in the last layer, so
+    # everything above it (apt, the Julia tarball, ENHSP, Pkg.instantiate, pip)
+    # comes from cache. ~2 min cold, seconds warm; the layer that changes per
+    # push is under a megabyte.
+    - name: Build the planner image from this commit
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        load: true
+        tags: planner:ci
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    # The whole point of running in the container: it is the only place the
+    # Julia planner backend is instantiated. On the runner those 11 tests skip,
+    # and they are the ones that would have caught the compiled_route_edge and
+    # get_su_id regressions — both of which passed every host-side test while
+    # producing plans that were empty or malformed.
+    #
+    # pip install at run time rather than baking test deps into the image: they
+    # have no business in what gets published, and it costs a few seconds.
+    - name: Test inside the image
       run: |
-        pip install --quiet -r requirements.txt -r requirements-test.txt jsonschema
-        # Explicit path as well as pytest.ini's testpaths: the sibling repos are
-        # cloned into this workspace above, and their suites are not ours to run.
-        pytest -q tests
+        docker run --rm \
+          -e RRN_GENERATOR_DIR=/siblings/robust-rail-generator \
+          -e RRN_INPUTS_DIR=/siblings/scenario-planning-inputs \
+          -v "$PWD/robust-rail-generator:/siblings/robust-rail-generator:ro" \
+          -v "$PWD/scenario-planning-inputs:/siblings/scenario-planning-inputs:ro" \
+          --entrypoint sh planner:ci -c '
+            pip install --quiet --no-cache-dir -r requirements-test.txt jsonschema &&
+            python3 -m pytest tests -q -rs
+          '

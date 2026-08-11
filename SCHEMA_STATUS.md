@@ -108,10 +108,16 @@ deleted, since that is a planning decision.
 ## How to check
 
 ```bash
-pytest -q                       # 18 passed, 1 xfailed (needs julia for 10 of them)
+pytest -q                       # 18 passed, 1 xfailed — 11 of them skip without
+                                # an instantiated Julia project in plan/
 ```
 
-Or the container path directly, which is what CI cannot run:
+CI runs the same suite *inside* the image, where the Julia backend does exist,
+so nothing skips there: 18 passed, 1 xfailed. The image is built from the commit
+under test, never pulled — a published image is built from whenever someone last
+ran docker-push.sh, so testing against it would report on the previous release.
+
+The container path directly:
 
 ```bash
 python main.py \
