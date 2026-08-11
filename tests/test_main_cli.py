@@ -11,13 +11,16 @@ import pytest
 from conftest import LOCATION_FILE, REPO_ROOT, SCENARIO_FILE, requires_julia
 
 
-def _run_main(output_file, scenario=SCENARIO_FILE):
+def _run_main(output_file, scenario=SCENARIO_FILE, variant="compiled_matching"):
+    cmd = [sys.executable, os.path.join(REPO_ROOT, "main.py"),
+           "--location", LOCATION_FILE,
+           "--scenario", scenario,
+           "--planner", "symbolic",
+           "--output", str(output_file)]
+    if variant:
+        cmd += ["--variant", variant]
     return subprocess.run(
-        [sys.executable, os.path.join(REPO_ROOT, "main.py"),
-         "--location", LOCATION_FILE,
-         "--scenario", scenario,
-         "--planner", "symbolic",
-         "--output", str(output_file)],
+        cmd,
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
@@ -67,6 +70,28 @@ def test_main_output_validates_against_the_plan_schema(tmp_path):
         f"{'/'.join(str(p) for p in e.absolute_path) or '<root>'}: {e.message}"
         for e in errors[:10]
     )
+
+
+@requires_julia
+def test_main_no_bumpers_variant_produces_a_valid_tors_plan(tmp_path):
+    """The no_bumpers corridor model is selectable via --variant and its plan
+    converts to a valid, deadline-respecting TORS plan like the base model."""
+    output_file = tmp_path / "plan.json"
+    result = _run_main(output_file, variant="compiled_matching_no_bumpers")
+
+    assert result.returncode == 0, result.stderr
+    assert output_file.exists()
+
+    tors_plan = json.loads(output_file.read_text())
+    assert tors_plan["actions"], "expected at least one action in the produced plan"
+    assert tors_plan["actions"][0]["taskType"]["predefined"] == "Arrive"
+    assert tors_plan["actions"][-1]["taskType"].get("predefined") == "Exit"
+
+    scenario = json.loads(open(SCENARIO_FILE).read())
+    latest_exit = max(int(a["startTime"]) for a in tors_plan["actions"]
+                      if a["taskType"].get("predefined") == "Exit")
+    latest_requested = max(int(r["departure"]) for r in scenario["out"])
+    assert latest_exit <= latest_requested
 
 
 @requires_julia
