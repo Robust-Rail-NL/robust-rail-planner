@@ -19,12 +19,18 @@
 # Julia's depot, and both would run under QEMU emulation for arm64 on an amd64
 # host.
 #
-# As of 2026-08-10 the shared builder cannot do it at all: `docker buildx
-# inspect robust-rail-builder` lists only linux/amd64 variants and linux/386, so
-# no arm64 binfmt handler is registered on this machine. Registering one is a
-# privileged, host-wide change:
+# NOTE ON QEMU: the sibling repos build arm64 through the same buildx builder,
+# so nothing about this setup prevents it. But the emulator registration lives
+# in the kernel's binfmt_misc and does NOT survive a reboot, and neither
+# qemu-user-static nor binfmt-support is installed here — so after every reboot
+# `docker buildx ls` shows only amd64 and every multi-arch push in every repo
+# silently loses its arm64 half. Re-register with:
 #
 #     docker run --privileged --rm tonistiigi/binfmt --install arm64
+#
+# or make it persistent once with:
+#
+#     sudo apt install qemu-user-static binfmt-support
 #
 # After that, time a build before committing to shipping it:
 #

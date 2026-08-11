@@ -1,3 +1,27 @@
+# --- ENHSP builder, pinned to the *build* host's architecture ---
+#
+# ENHSP's ./compile is javac + jar over the pre-shipped JARs in libs/, and
+# enhsp-dist/ contains nothing but .jar files — verified: no .so, .dll, .dylib
+# or .jnilib anywhere in it. So the output is architecture-independent
+# bytecode, and emulating this stage for arm64 would cost minutes to produce
+# byte-identical output. $BUILDPLATFORM keeps it native no matter what
+# --platform the final image targets.
+#
+# If ENHSP ever grows a native dependency, this stage has to move back into the
+# target-arch image below — the JAR check above is the thing to re-run.
+FROM --platform=$BUILDPLATFORM eclipse-temurin:17-jdk AS enhsp-builder
+
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN git clone --depth 1 --branch enhsp-20 https://github.com/hstairs/enhsp.git /tmp/enhsp-src \
+    && cd /tmp/enhsp-src \
+    && ./compile \
+    && mkdir -p /opt/enhsp \
+    && cp -r enhsp-dist/. /opt/enhsp \
+    && rm -rf /tmp/enhsp-src
+
+
 FROM ubuntu:22.04
 
 ARG JULIA_VERSION=1.10.5
@@ -9,11 +33,16 @@ LABEL org.opencontainers.image.source="https://github.com/Robust-Rail-NL/plannin
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# --- System deps: JDK for ENHSP, Python for main.py, build tools ---
+# --- System deps ---
+#
+# A JRE, not a JDK: ENHSP is compiled in the builder stage above, so nothing
+# here needs javac. git and build-essential went the same way — the clone and
+# the compile both happen natively now. That matters most under emulation,
+# where every apt package is unpacked by QEMU.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        openjdk-17-jdk-headless \
+        openjdk-17-jre-headless \
         python3 python3-pip \
-        ca-certificates curl git build-essential \
+        ca-certificates curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Stable JAVA_HOME symlink, independent of host architecture (amd64/arm64)
@@ -33,13 +62,8 @@ RUN ARCH="$(dpkg --print-architecture)" \
     && ln -s /opt/julia/bin/julia /usr/local/bin/julia \
     && rm /tmp/julia.tar.gz
 
-# --- ENHSP (build the jar from source) ---
-RUN git clone --depth 1 --branch enhsp-20 https://github.com/hstairs/enhsp.git /tmp/enhsp-src \
-    && cd /tmp/enhsp-src \
-    && ./compile \
-    && mkdir -p /opt/enhsp \
-    && cp -r enhsp-dist/. /opt/enhsp \
-    && rm -rf /tmp/enhsp-src
+# --- ENHSP (bytecode, cross-compiled natively in the builder stage) ---
+COPY --from=enhsp-builder /opt/enhsp /opt/enhsp
 ENV ENHSP_JAR=/opt/enhsp/enhsp.jar
 
 WORKDIR /app
