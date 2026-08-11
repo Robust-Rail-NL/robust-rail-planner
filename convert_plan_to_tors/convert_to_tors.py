@@ -57,6 +57,14 @@ DEPART_SU_RE = re.compile(r"\(depart_(?:aside|bside)_su ([^ ]+) ([^)]+)\)")
 DEPART_SU_FOR_REQUEST_RE = re.compile(
     r"\(depart_(?:aside|bside)_su_for_request ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^)]+)\)"
 )
+# The corridor model's form of the above. It has no slot argument — four args
+# rather than five — because compile_precomputed_actions bakes the unit-to-slot
+# matching into the action itself, and the name gains a compiled_ prefix and
+# loses the _su. Absent this, the only departure the corridor model ever emits
+# matched nothing and every plan ended at its last service task.
+COMPILED_DEPART_FOR_REQUEST_RE = re.compile(
+    r"\(compiled_depart_(?:aside|bside)_for_request ([^ ]+) ([^ ]+) ([^ ]+) ([^)]+)\)"
+)
 
 # Coupling / splitting / service / match
 COUPLE_RE = re.compile(
@@ -586,6 +594,7 @@ def convert_plan(plan_file, scenario_file, location_file):
     with open(plan_file) as f:
         lines = [line.strip() for line in f if line.strip()]
 
+    unhandled = []
     for line in lines:
         line = _normalize_plan_line(line)
         # --------------------------------
@@ -768,7 +777,9 @@ def convert_plan(plan_file, scenario_file, location_file):
         # --------------------------------
         # DEPART / DEPART SU / DEPART SU FOR REQUEST
         # --------------------------------
-        m = DEPART_SU_RE.match(line) or DEPART_SU_FOR_REQUEST_RE.match(line)
+        m = (DEPART_SU_RE.match(line)
+             or DEPART_SU_FOR_REQUEST_RE.match(line)
+             or COMPILED_DEPART_FOR_REQUEST_RE.match(line))
         if m:
             groups = m.groups()
             train = groups[0]
@@ -804,9 +815,14 @@ def convert_plan(plan_file, scenario_file, location_file):
             
             # Determine departure time: look up from request, but never before the move finishes
             exit_time = current_time
-            if len(groups) > 4 and not train.startswith("su_request"):
-                # depart_*_for_request: group[4] is the request name
-                req_name_from_action = groups[4] if len(groups) > 4 else ""
+            if len(groups) >= 4 and not train.startswith("su_request"):
+                # Both departure-for-request forms end (…, request, track), so the
+                # request is the second-to-last group whether or not the action
+                # carries a slot argument. This read groups[4] and called it the
+                # request; in the five-group form that is the track, so the lookup
+                # always missed and every departure silently used the fallback
+                # below. Counting from the right is correct for both.
+                req_name_from_action = groups[-2]
                 if req_name_from_action in request_lookup:
                     dep = request_lookup[req_name_from_action].get("arrival")
                     if dep is not None:
@@ -996,6 +1012,20 @@ def convert_plan(plan_file, scenario_file, location_file):
         if m:
             unit, composition = m.groups()
             continue
+
+        # Nothing matched. This used to fall through to the next line, so an
+        # action the converter did not know about simply vanished — which is how
+        # the corridor model's compiled departure went missing, taking the two
+        # trailing moves with it, while conversion still reported success and
+        # emitted a plan that merely stopped early.
+        unhandled.append(line)
+
+    if unhandled:
+        raise ValueError(
+            "convert_to_tors does not recognise these planner actions, so the "
+            "plan would be silently truncated. Add a pattern for each, or "
+            "confirm it carries no TORS action:\n  " + "\n  ".join(unhandled)
+        )
 
     # Assign integer SU IDs to all actions and fix members for combined SUs
     for action in actions:

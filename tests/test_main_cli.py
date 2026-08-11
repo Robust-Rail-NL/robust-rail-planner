@@ -70,16 +70,14 @@ def test_main_output_validates_against_the_plan_schema(tmp_path):
 
 
 @requires_julia
-@pytest.mark.xfail(
-    reason="convert_to_tors stops emitting actions partway through the plan: the "
-           "planner's trailing move/move/depart steps produce no Exit action, so "
-           "the plan ends on the service task. Pre-existing — the same three "
-           "actions come out of new_pipeline_version's converter on its own "
-           "fixture — and not something the schema migration introduced. Left "
-           "failing deliberately rather than weakened, see SCHEMA_STATUS.md.",
-    strict=True,
-)
 def test_main_plan_ends_with_an_exit(tmp_path):
+    """A plan that stops before the departure is not a solution.
+
+    Was a strict xfail until the converter learned the corridor model's
+    compiled_depart_*_for_request: that action matched no pattern, so the
+    departure was dropped and the two moves after the service task went with it,
+    while conversion still reported success.
+    """
     output_file = tmp_path / "plan.json"
     assert _run_main(output_file).returncode == 0
 

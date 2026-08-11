@@ -67,6 +67,23 @@ nothing there runs a conversion.
 **`tests/fixtures/simple_service/` is migrated**, and both files were validated
 against `schema_location.json` / `schema_scenario.json` before being committed.
 
+**Plans are complete, and an unknown action is now loud.** The corridor model
+emits `compiled_depart_(aside|bside)_for_request` — four arguments, no slot,
+because `compile_precomputed_actions` bakes the matching in — and no pattern
+matched it. The departure was dropped, and the trailing moves went with it,
+since their pending path is only flushed on a recognised terminating action.
+Conversion reported success and produced a plan that merely stopped early.
+
+Fixed by adding the pattern, and by making `convert_plan` raise on any plan line
+it cannot match instead of moving to the next one. The silence was the actual
+defect: the missing pattern was one instance of it, and the next model change to
+rename an action would have gone the same way.
+
+Also corrected an off-by-one alongside it: the request name was read as
+`groups[4]`, which is the *track* in the five-argument form, so that lookup
+always missed and fell through to a fallback. Both forms end `(…, request,
+track)`, so it now counts from the right.
+
 **`plan_visualizer` reads the current plan and scenario shapes.** Task types,
 `memberIDs`, and the `{kind, id}` resource shape; and, since 2026-08-10, flat
 members in `initial_train_positions` and lengths resolved through
@@ -78,43 +95,30 @@ are no longer embedded in a plan, so the scenario is the only source.
 
 ## Not done
 
-**The converter does not recognise the corridor model's compiled departure.**
-On the test fixture the planner returns seven steps ending in a departure, and
-`convert_to_tors` emits three, stopping at the service task — no `Exit`.
+*(The truncated-plan defect that stood here is fixed — see Done above.)*
 
-The cause is one unmatched pattern, not a half-written converter.
-`DEPART_SU_FOR_REQUEST_RE` matches `depart_(aside|bside)_su_for_request` with
-five arguments; the corridor model emits
-`compiled_depart_bside_for_request` with four — different prefix, no `_su`, and
-no slot argument, because `compile_precomputed_actions = True` bakes the
-matching in. The converter was written against the non-compiled action names.
+**Departure deadlines are not respected.** With complete plans, the evaluator
+now rejects SimpleService on timing rather than structure:
 
-That single miss accounts for all three lost actions: the departure is dropped,
-and the two trailing moves sit in a pending path that is only flushed when a
-terminating action is recognised, which never happens.
+    Tracked Train     : 33334
+    Action start time : 2902
+    Trains's departure: 2000
+    Error Suspected: Trains's departure mismatch with Action start/end time
 
-**The silence is the real hazard.** An unrecognised plan line falls through the
-`if m:` chain to the next iteration with no warning, so a model emitting an
-unknown action yields a short plan and reports success — the same shape as the
-`relatedTrackParts` and `compiled_route_edge` bugs above. A fix should make
-unmatched lines loud, not just add the missing pattern.
+Both trains exit ~900s past the departure their request asks for. The PDDL model
+sequences actions and costs movement, but nothing ties an exit to the request's
+`departure` time, so the planner has no reason to be punctual. One request also
+reports `Is Train matched : No`, which may be the same problem or a separate
+matching one — worth separating before modelling either.
 
-Covered by `test_main_plan_ends_with_an_exit` as a strict `xfail`, so it will
-turn the build red the moment it starts passing and force the marker off.
-**Pre-existing**: `new_pipeline_version`'s converter has the same pattern set and
-produces the same three actions on its own fixture, so this is not schema drift.
-
-**Facility time windows are not modelled.** The evaluator rejects the
-SimpleService plan with "Facility 22 is not available from 1500 to 2000". No
-converter reads `timeWindow`, so the PDDL model cannot respect facility
-availability. The location declares no `timeWindow` on that facility at all, so
-the evaluator is applying a default from somewhere — worth establishing where
-before modelling it.
-
-**Independent of the departure bug above.** They are two separate reasons the
-pipeline runs end to end and still yields no valid solution: one truncates the
-plan, one schedules a service the yard will not accept. Fixing the pattern match
-gets a complete plan shape; the evaluator can still reject it on availability.
+**A note on facility time windows, which used to be recorded here.** The
+evaluator previously rejected this scenario with "Facility 22 is not available
+from 1500 to 2000", and this file claimed that was independent of the truncation
+above. It was not: it was downstream of it. Once the converter emitted whole
+plans, both trains got scheduled, the service landed inside the window, and that
+error stopped occurring altogether. No converter reads `timeWindow` and that is
+still true — but there is currently no evidence it matters, and the earlier
+entry mistook a symptom of the truncation for a second independent defect.
 
 **`convert_to_pddl/archive/`** was left alone. Those are superseded converters;
 several read `request["displayName"]` and still carry the host-path default, and
