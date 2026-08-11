@@ -65,7 +65,9 @@ END_MOVE_SU_RE = re.compile(r"\(end_move_su ([^ ]+) ([^)]+)\)")
 MOVE_SU_RE = re.compile(
     r"\(move_(?:aside|bside)_(?:empty|occupied)_su ([^ ]+) ([^ ]+) ([^)]+)\)"
 )
-PARK_SU_RE = re.compile(r"\(park_su ([^ ]+) ([^)]+)\)")
+PARK_SU_RE = re.compile(
+    r"\(park_su ([^ ]+) (?:([^ ]+) ([^ ]+) )?([^)]+)\)"
+)
 DEPART_SU_RE = re.compile(r"\(depart_(?:aside|bside)_su ([^ ]+) ([^)]+)\)")
 DEPART_SU_FOR_REQUEST_RE = re.compile(
     r"\(depart_(?:aside|bside)_su_for_request ([^ ]+) ([^ ]+) ([^ ]+) ([^ ]+) ([^)]+)\)"
@@ -726,6 +728,7 @@ def convert_plan(plan_file, scenario_file, location_file):
     problems = []              # infeasibility diagnostics collected during conversion
     departing_sus = set()      # SU names with a scenario departure deadline
     su_departure_deadline = {} # SU name -> requested departure time (hard deadline)
+    waiting_on_messages = {}   # parked-out SU name -> parking slot id (unit waits there)
     active_trains = {}
     train_locations = {}  # Track where each train is currently located
     train_arrival_times = {}  # Track when trains arrive
@@ -1020,9 +1023,14 @@ def convert_plan(plan_file, scenario_file, location_file):
         # --------------------------------
         # PARK / PARK SU
         # --------------------------------
+        # The corridor models park in one step; the no_bumpers variant merges
+        # the parking_fulfill semantics into park_su, so the 4-arg form
+        # (su, unit, parking_slot, track) parks a unit in a slot, and the unit
+        # then waits on that track until the scenario ends (or its request's
+        # departure) before leaving the yard as an OutStanding exit.
         m = PARK_SU_RE.match(line)
         if m:
-            train, track = m.groups()
+            train, unit, parking_slot, track = m.groups()
             track_id = convert_track(track, track_lookup, track_id_lookup)["id"]
             
             if train in active_trains:
@@ -1053,6 +1061,30 @@ def convert_plan(plan_file, scenario_file, location_file):
                 del active_trains[train]
             
             train_locations[train] = track_id
+
+            if unit is not None:
+                # The no_bumpers park_su parks a specific unit in a specific
+                # slot and marks both fulfilled. The unit stands there until the
+                # end of the scenario horizon, then exits as OutStanding.
+                if parking_slot is not None:
+                    waiting_on_messages[train] = parking_slot
+                ready_time = su_next_free.get(_clock(train), 0)
+                exit_time = max(ready_time, scenario_end_time)
+                if exit_time > ready_time:
+                    reserve([track_id], ready_time, exit_time)
+                exit_action = create_exit_action(
+                    train,
+                    exit_time,
+                    track,
+                    train_lookup,
+                    track_lookup,
+                    unit_lookup,
+                    standing_type="OutStanding",
+                    track_id_lookup=track_id_lookup
+                )
+                actions.append(exit_action)
+                su_next_free[_clock(train)] = exit_time + 1
+                current_time = max(current_time, exit_time + 1)
             continue
 
         # --------------------------------
@@ -1062,6 +1094,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         if m:
             su_id, unit, parking_slot, track = m.groups()
             track_id = convert_track(track, track_lookup, track_id_lookup)["id"]
+            waiting_on_messages[su_id] = parking_slot
             ready_time = su_next_free.get(_clock(su_id), 0)
             exit_time = max(ready_time, scenario_end_time)
             if exit_time > ready_time:
@@ -1386,6 +1419,45 @@ def convert_plan(plan_file, scenario_file, location_file):
             "plan would be silently truncated. Add a pattern for each, or "
             "confirm it carries no TORS action:\n  " + "\n  ".join(unhandled)
         )
+
+    # OutStanding units matched to a parking slot normally get their Exit from
+    # the park_su/parking_fulfill blocks. If a unit was recorded as waiting but
+    # no Exit came out of the plan (the park reference never produced one),
+    # close it out here at the scenario end. An exit that cannot be placed is
+    # reported as infeasible rather than leaving the unit in the yard forever.
+    emitted_exit_sus = {
+        a["shuntingUnit"]["id"]
+        for a in actions
+        if a.get("taskType", {}).get("predefined") == "Exit"
+        or a.get("taskType", {}).get("predefined") == "StandOut"
+    }
+    for su_name in list(waiting_on_messages):
+        if _as_id(su_name) in emitted_exit_sus:
+            continue
+        track_id = train_locations.get(su_name)
+        if track_id is None:
+            problems.append(
+                f"INFEASIBLE: parked-out SU {su_name} has no track to exit from."
+            )
+            continue
+        ready_time = su_next_free.get(_clock(su_name), 0)
+        exit_time = max(ready_time, scenario_end_time)
+        if exit_time > ready_time:
+            reserve([track_id], ready_time, exit_time)
+        actions.append(
+            create_exit_action(
+                su_name,
+                exit_time,
+                track_id,
+                train_lookup,
+                track_lookup,
+                unit_lookup,
+                standing_type="OutStanding",
+                track_id_lookup=track_id_lookup
+            )
+        )
+        su_next_free[_clock(su_name)] = exit_time + 1
+        current_time = max(current_time, exit_time + 1)
 
     # Assign integer SU IDs to all actions and fix members for combined SUs
     for action in actions:
