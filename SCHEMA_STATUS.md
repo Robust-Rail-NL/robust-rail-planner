@@ -91,6 +91,23 @@ compiled departures matched nothing; `Location_KleineBinckhorst` produces such a
 plan and the test fixture does not, so it took a real location to surface. It is
 bound before the branch now.
 
+**The converters index the required fields directly.** As of 2026-08-12 the
+generator makes `Location.trackParts`, `Plan.actions` and
+`Scenario.trainUnitTypes` required, so the four `.get(name, [])` reads of them in
+`convert_to_pddl/*/convert.py` and `convert_to_tors.py` became plain indexing.
+
+They were never a policy: the same files already index `location_object
+["trackParts"]` directly in about thirty other places, so an absent key raised
+anyway — just from a different line, depending which ran first. The defaults
+could not prevent the failure, only make it inconsistent. Now a schema mismatch
+names the field it is missing, wherever it is hit first.
+
+`plan_visualizer/` was deliberately left alone: it has no direct reads of these
+fields at all, so its defaults are consistent rather than accidental, and it is
+a UI that gets pointed at arbitrary files rather than a pipeline stage fed
+schema-valid input. If it should fail loudly too, the change worth making is one
+check in its `_load_json`, not nine call sites.
+
 **`plan_visualizer` reads the current plan and scenario shapes.** Task types,
 `memberIDs`, and the `{kind, id}` resource shape; and, since 2026-08-10, flat
 members in `initial_train_positions` and lengths resolved through

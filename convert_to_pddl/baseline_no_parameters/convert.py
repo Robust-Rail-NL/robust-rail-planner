@@ -55,7 +55,7 @@ def _departure_exit_ids(scenario_object, location_object):
     if not ids:
         ids = [t["entryTrackPart"] for t in scenario_object.get("in", []) if "entryTrackPart" in t]
 
-    track_parts = location_object.get("trackParts", [])
+    track_parts = location_object["trackParts"]
     ids_aside = {tp["id"] for tp in track_parts if tp["id"] in ids and tp.get("bSide")}
     ids_bside = {tp["id"] for tp in track_parts if tp["id"] in ids and tp.get("aSide")}
 

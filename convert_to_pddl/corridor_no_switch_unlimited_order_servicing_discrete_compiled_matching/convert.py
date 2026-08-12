@@ -63,7 +63,7 @@ def _departure_exit_ids(scenario_object, location_object):
     if not ids:
         ids = [t["entryTrackPart"] for t in scenario_object.get("in", []) if "entryTrackPart" in t]
 
-    track_parts = location_object.get("trackParts", [])
+    track_parts = location_object["trackParts"]
     ids_aside = {tp["id"] for tp in track_parts if tp["id"] in ids and tp.get("bSide")}
     ids_bside = {tp["id"] for tp in track_parts if tp["id"] in ids and tp.get("aSide")}
 
@@ -90,7 +90,7 @@ def _coupling_track_ids_for_request(request, location_object,
     required_length = float(_train_total_length(train_unit_types, request))
     track_length_by_id = {
         str(track_part["id"]): float(track_part.get("length", 0.0))
-        for track_part in location_object.get("trackParts", [])
+        for track_part in location_object["trackParts"]
     }
     candidate_track_ids = {
         track_id
