@@ -1666,7 +1666,7 @@ def create_instance_from_scenario(
             problem.set_initial_value(service_allowed(obj), True)
             problem.set_initial_value(facility_type(obj, id_to_facility_type[info["type"]]), True)
 
-        if not track_part.get("parkingAllowed", False):
+        if float(track_part.get("length", 0.0)) <= 0.0:
             problem.set_initial_value(track_length(obj), up.Real(Fraction(10**9)))
 
     # Connect non-switch tracks only when a directed path exists through switch-like nodes.
