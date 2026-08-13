@@ -1844,8 +1844,13 @@ def create_instance_from_scenario(
 
         coupling_track_objects = []
         for track_id in _coupling_track_ids_for_request(request, location_object, coupling_candidate_track_ids, train_unit_types):
-            if track_id in id_to_track_part:
-                coupling_track_object = id_to_track_part[track_id]
+            # Match track IDs independently of whether the JSON source stores them as strings or integers.
+            native_track_id = next(
+                (known_id for known_id in id_to_track_part if str(known_id) == str(track_id)),
+                None,
+            )
+            if native_track_id is not None:
+                coupling_track_object = id_to_track_part[native_track_id]
                 coupling_track_objects.append(coupling_track_object)
 
         slot_objects = []
