@@ -953,6 +953,7 @@ def create_instance_from_scenario(
 
     phantom_track = problem.add_object("phantom", track_part_type)
     su_arrival_track = problem.add_fluent(up.Fluent("su_arrival_track", up.BoolType(), su=shunting_unit_type, track=track_part_type), default_initial_value=False)
+    su_first_parking_track = problem.add_fluent(up.Fluent("su_first_parking_track", up.BoolType(), su=shunting_unit_type, track=track_part_type), default_initial_value=False)
 
     parking_slot_for_request = problem.add_fluent(up.Fluent("parking_slot_for_request", up.BoolType(), slot=parking_slot_type, request=parking_request_type), default_initial_value=False)
     parking_slot_track = problem.add_fluent(up.Fluent("parking_slot_track", up.BoolType(), slot=parking_slot_type, track=track_part_type), default_initial_value=False)
@@ -995,22 +996,30 @@ def create_instance_from_scenario(
     arrive_su.add_precondition(at_su(arrive_su.su, phantom_track))
     arrive_su.add_precondition(concurrent_movements < max_concurrent_movements)
     arrive_su.add_precondition(su_arrival_track(arrive_su.su, arrive_su.l))
-    arrive_su.add_effect(su_has_arrived(arrive_su.su), True)
-    arrive_su.add_effect(allowed_to_move_su(arrive_su.su), True)
     arrive_su.add_effect(concurrent_movements, concurrent_movements + 1)
     arrive_su.add_effect(at_su(arrive_su.su, phantom_track), False)
     arrive_su.add_effect(at_su(arrive_su.su, arrive_su.l), True)
-    arrive_su.add_effect(number_of_trains_on_track(arrive_su.l), number_of_trains_on_track(arrive_su.l) + 1)
-    next_su = up.Variable("next_su", shunting_unit_type)
-    arrive_su.add_effect(fluent=su_previous_arrived(next_su), value=True, condition=su_arrival_immediately_before(arrive_su.su, next_su), forall=[next_su])
-    _arrq = up.Variable("arrq", shunting_unit_type)
-    arrive_su.add_precondition(occupied_length(arrive_su.l) + su_length(arrive_su.su) <= track_length(arrive_su.l))
-    arrive_su.add_effect(occupied_length(arrive_su.l), occupied_length(arrive_su.l) + su_length(arrive_su.su))
-    arrive_su.add_effect(frontmost_b_su(arrive_su.su), True)
-    arrive_su.add_effect(fluent=frontmost_a_su(arrive_su.su), value=True, condition=up.Equals(number_of_trains_on_track(arrive_su.l), 0))
-    arrive_su.add_effect(fluent=frontmost_b_su(_arrq), value=False, condition=up.And(at_su(_arrq, arrive_su.l), frontmost_b_su(_arrq)), forall=[_arrq])
-    arrive_su.add_effect(fluent=behind_su(arrive_su.su, _arrq), value=True, condition=up.And(at_su(_arrq, arrive_su.l), frontmost_b_su(_arrq)), forall=[_arrq])
     problem.add_action(arrive_su)
+
+    enter_yard_su = up.InstantaneousAction('enter_yard_su', su=shunting_unit_type, entry=track_part_type, target=track_part_type)
+    enter_yard_su.add_precondition(active_su(enter_yard_su.su))
+    enter_yard_su.add_precondition(up.Not(su_has_arrived(enter_yard_su.su)))
+    enter_yard_su.add_precondition(at_su(enter_yard_su.su, enter_yard_su.entry))
+    enter_yard_su.add_precondition(su_arrival_track(enter_yard_su.su, enter_yard_su.entry))
+    enter_yard_su.add_precondition(su_first_parking_track(enter_yard_su.su, enter_yard_su.target))
+    enter_yard_su.add_precondition(up.Equals(number_of_trains_on_track(enter_yard_su.target), 0))
+    enter_yard_su.add_precondition(occupied_length(enter_yard_su.target) + su_length(enter_yard_su.su) <= track_length(enter_yard_su.target))
+    enter_yard_su.add_effect(at_su(enter_yard_su.su, enter_yard_su.entry), False)
+    enter_yard_su.add_effect(at_su(enter_yard_su.su, enter_yard_su.target), True)
+    enter_yard_su.add_effect(su_has_arrived(enter_yard_su.su), True)
+    enter_yard_su.add_effect(concurrent_movements, concurrent_movements - 1)
+    enter_yard_su.add_effect(number_of_trains_on_track(enter_yard_su.target), 1)
+    enter_yard_su.add_effect(occupied_length(enter_yard_su.target), su_length(enter_yard_su.su))
+    next_su = up.Variable("next_su", shunting_unit_type)
+    enter_yard_su.add_effect(fluent=su_previous_arrived(next_su), value=True, condition=su_arrival_immediately_before(enter_yard_su.su, next_su), forall=[next_su])
+    enter_yard_su.add_effect(frontmost_a_su(enter_yard_su.su), True)
+    enter_yard_su.add_effect(frontmost_b_su(enter_yard_su.su), True)
+    problem.add_action(enter_yard_su)
 
     park_su = up.InstantaneousAction('park_su', su=shunting_unit_type, l=track_part_type)
     park_su.add_precondition(active_su(park_su.su))
@@ -1274,6 +1283,7 @@ def create_instance_from_scenario(
             track=track_part_type,
         )
         adopt_composition.add_precondition(active_su(adopt_composition.source_su))
+        adopt_composition.add_precondition(su_has_arrived(adopt_composition.source_su))
         adopt_composition.add_precondition(up.Not(active_su(adopt_composition.request_su)))
         adopt_composition.add_precondition(compiled_whole_target(adopt_composition.source_su, adopt_composition.request_su))
         adopt_composition.add_precondition(at_su(adopt_composition.source_su, adopt_composition.track))
@@ -1615,10 +1625,11 @@ def create_instance_from_scenario(
                     required_track_ids.add(str(tid))
                     corridor_or_required.add(str(tid))
         for train in scenario_object.get("in", []):
-            tid = _train_initial_track_id(train, ["entryTrackPart", "firstParkingTrackPart"])
-            if tid is not None:
-                required_track_ids.add(str(tid))
-                corridor_or_required.add(str(tid))
+            for key in ("entryTrackPart", "firstParkingTrackPart"):
+                tid = train.get(key)
+                if tid is not None:
+                    required_track_ids.add(str(tid))
+                    corridor_or_required.add(str(tid))
         for tid in exit_ids:
             required_track_ids.add(str(tid))
             corridor_or_required.add(str(tid))
@@ -1719,6 +1730,7 @@ def create_instance_from_scenario(
     for source, index, train in all_trains_with_source(scenario_object):
         preferred_track_keys = ["firstParkingTrackPart", "entryTrackPart"] if source == "inStanding" else ["entryTrackPart", "firstParkingTrackPart"]
         initial_track_id = _train_initial_track_id(train, preferred_track_keys)
+        first_parking_track_id = train.get("firstParkingTrackPart")
         train_members = train["members"]
 
         shunting_unit = problem.add_object("su_" + _train_object_name(source, index, train), shunting_unit_type)
@@ -1727,8 +1739,8 @@ def create_instance_from_scenario(
             problem.set_initial_value(su_may_move(shunting_unit), True)
 
         needs_service = any(task for member in train.get("members", []) for task in member.get("tasks", []))
-        if source == "in" and not needs_service and initial_track_id in (exit_ids_a | exit_ids_b):
-            direct_departure_sources.add(shunting_unit)
+        if source == "in" and first_parking_track_id is None:
+            raise ValueError(f"Incoming train {train['id']} has no firstParkingTrackPart")
         if needs_service:
             problem.set_initial_value(serviced(shunting_unit), False)
             for member in train.get("members", []):
@@ -1744,6 +1756,10 @@ def create_instance_from_scenario(
             problem.set_initial_value(at_su(shunting_unit, phantom_track), True)
             if initial_track_id in id_to_track_part:
                 problem.set_initial_value(su_arrival_track(shunting_unit, id_to_track_part[initial_track_id]), True)
+            if first_parking_track_id in id_to_track_part:
+                problem.set_initial_value(su_first_parking_track(shunting_unit, id_to_track_part[first_parking_track_id]), True)
+            else:
+                raise ValueError(f"Unknown firstParkingTrackPart {first_parking_track_id} for incoming train {train['id']}")
         elif initial_track_id in id_to_track_part:
             problem.set_initial_value(at_su(shunting_unit, id_to_track_part[initial_track_id]), True)
             track_initial_su_order.setdefault(initial_track_id, []).append(shunting_unit)
@@ -1754,9 +1770,10 @@ def create_instance_from_scenario(
             problem.set_initial_value(su_may_move(shunting_unit), True)
             if compile_precomputed_actions:
                 problem.set_initial_value(compiled_arrival_composition_su(shunting_unit), True)
-                if initial_track_id in id_to_track_part:
+                uncouple_track_id = first_parking_track_id if source == "in" else initial_track_id
+                if uncouple_track_id in id_to_track_part:
                     problem.set_initial_value(
-                        compiled_uncouple_track(shunting_unit, id_to_track_part[initial_track_id]),
+                        compiled_uncouple_track(shunting_unit, id_to_track_part[uncouple_track_id]),
                         True,
                     )
         else:
