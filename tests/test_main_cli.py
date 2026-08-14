@@ -165,3 +165,31 @@ def test_main_rejects_an_unsolvable_scenario(tmp_path):
 
     assert result.returncode != 0
     assert not output_file.exists()
+
+
+@requires_julia
+def test_main_writes_the_infeasible_plan_before_failing(tmp_path):
+    """A plan that misses a departure deadline must still leave its partial
+    TORS output behind for inspection, while exiting non-zero so the pipeline
+    still treats the run as failed."""
+    scenario = json.loads(open(SCENARIO_FILE).read())
+    # Impossible deadline: the train cannot be cleaned, moved and exited by
+    # second 10. The discrete PDDL model has no temporal deadline, so the
+    # planner still finds a plan; only the converter's deadline check trips.
+    scenario["out"][0]["arrival"] = 10
+    scenario["out"][0]["departure"] = 10
+    scenario_path = tmp_path / "scenario_deadline.json"
+    scenario_path.write_text(json.dumps(scenario))
+
+    output_file = tmp_path / "plan.json"
+    result = _run_main(output_file, scenario=str(scenario_path))
+
+    assert result.returncode != 0
+    assert "INFEASIBLE" in result.stderr
+    assert "wrote the infeasible plan" in result.stderr
+    assert output_file.exists()
+
+    plan = json.loads(output_file.read_text())
+    assert plan["schemaVersion"] == 1
+    assert plan["actions"], "expected the partial plan to carry its actions"
+    assert plan["actions"][0]["taskType"]["predefined"] == "Arrive"

@@ -1,3 +1,4 @@
+import os
 import re
 import json
 import sys
@@ -7,12 +8,15 @@ from collections import deque
 class ScheduleInfeasibleError(Exception):
     """Raised when the plan cannot be scheduled against the scenario's hard
     constraints (arrival-track holds, departure deadlines, the scenario
-    horizon). `problems` carries one diagnostic string per violation; the
-    raised plan is otherwise intact and schema-compatible, minus any problem
-    reporting field."""
+    horizon). `problems` carries one diagnostic string per violation; `plan`
+    is the partially converted TORS plan, otherwise intact and
+    schema-compatible, which callers can write out for inspection despite the
+    schedule being invalid. None when conversion failed before actions were
+    built."""
 
-    def __init__(self, problems):
+    def __init__(self, problems, plan=None):
         self.problems = list(problems)
+        self.plan = plan
         super().__init__("\n".join(self.problems))
 
 
@@ -97,6 +101,12 @@ ARRIVE_SU_RE = re.compile(r"\(arrive_su ([^ ]+) ([^)]+)\)")
 UNCOUPLE_RE = re.compile(r"\(uncouple ([^ ]+) ([^)]+)\)")
 PARKING_FULFILL_RE = re.compile(
     r"\(parking_fulfill ([^ ]+) ([^ ]+) ([^ ]+) ([^)]+)\)"
+)
+# The compiled-matching model represents "an arriving, serviced train becomes
+# the departing train" by transferring the arrived SU's identity onto the
+# request's placeholder SU. It is a logical rename, not a physical action.
+ADOPT_COMPOSITION_RE = re.compile(
+    r"\(compiled_adopt_composition ([^ ]+) ([^ ]+) ([^)]+)\)"
 )
 
 
@@ -1406,6 +1416,35 @@ def convert_plan(plan_file, scenario_file, location_file):
             unit, composition = m.groups()
             continue
 
+        # --------------------------------
+        # COMPILED ADOPT COMPOSITION (logical identity transfer)
+        # --------------------------------
+        m = ADOPT_COMPOSITION_RE.match(line)
+        if m:
+            source_su, request_su, track = m.groups()
+            track_id = convert_track(track, track_lookup, track_id_lookup)["id"]
+
+            # The arrived, serviced source SU becomes the departing request SU.
+            # No TORS action exists for the transfer itself; what must carry
+            # over is everything that makes the request's later moves and Exit
+            # describe the real train: its units, its location, and its clock.
+            if source_su in train_lookup:
+                src = train_lookup[source_su]
+                train_lookup[request_su] = {
+                    "id": src.get("id", request_su),
+                    "members": src.get("members", []),
+                    "member_types": src.get("member_types", []),
+                    "combine_duration": src.get("combine_duration", COMBINE_DURATION),
+                    "split_duration": src.get("split_duration", SPLIT_DURATION),
+                }
+            if source_su in train_locations:
+                train_locations[request_su] = track_id
+            if source_su in su_next_free:
+                su_next_free[request_su] = su_next_free[source_su]
+            if source_su in active_trains:
+                active_trains[request_su] = active_trains.pop(source_su)
+            continue
+
         # Nothing matched. This used to fall through to the next line, so an
         # action the converter did not know about simply vanished — which is how
         # the corridor model's compiled departure went missing, taking the two
@@ -1559,13 +1598,14 @@ def convert_plan(plan_file, scenario_file, location_file):
                 f"scenario end time {scenario_end_time}."
             )
 
-    if problems:
-        raise ScheduleInfeasibleError(problems)
-
-    return {
+    result = {
         "schemaVersion": SCHEMA_VERSION,
         "actions": actions,
     }
+    if problems:
+        raise ScheduleInfeasibleError(problems, plan=result)
+
+    return result
 
 
 def post_process_actions(actions, train_lookup, unit_lookup, track_lookup, 
@@ -1601,6 +1641,20 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
                 elif "entryTrackPart" in train:
                     initial_positions[su_id_fn(_as_id(name))] = train["entryTrackPart"]
     
+    # Determine which SU IDs correspond to real scenario trains (in/inStanding).
+    # These are the only SUs that may receive an Arrive action. SUs that are
+    # merely materialized by the planner (compiled adopt/start/couple request
+    # placeholders, combine/split children) never appear in the scenario and
+    # must not get a fabricated Arrive.
+    scenario_in_su_ids = set()
+    if su_id_fn:
+        for train in scenario.get("in", []):
+            for name in [f"train{train['id']}", f"su_train{train['id']}"]:
+                scenario_in_su_ids.add(su_id_fn(_as_id(name)))
+        for i in range(len(scenario.get("inStanding", []))):
+            for name in [f"train_in_standing_{i}", f"su_train_in_standing_{i}"]:
+                scenario_in_su_ids.add(su_id_fn(_as_id(name)))
+
     # Determine which SU IDs correspond to standing trains
     standing_su_ids = set()
     if su_id_fn:
@@ -1630,35 +1684,40 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
             
             su_first_action[cur_su_id] = arrive_time
             
-            # Determine arrival location
-            if cur_su_id in initial_positions:
-                arrive_location = initial_positions[cur_su_id]
-            else:
-                arrive_location = action["location"]
-            
-            # Determine standing type
-            standing_type = ""
-            if cur_su_id in standing_su_ids:
-                standing_type = "InStanding"
-            elif cur_su_id in out_standing_ids:
-                standing_type = "OutStanding"
-            
-            # Add Arrive action
-            if arrive_location in track_id_lookup:
-                resource = track_id_lookup[arrive_location]
-            else:
-                resource = convert_track(arrive_location, track_lookup)
-            shunting_unit = make_shunting_unit(cur_su_id, train_lookup, unit_lookup)
-            arrive_action = {
-                "startTime": _as_time(arrive_time),
-                "endTime": _as_time(arrive_time),
-                # standingType is gone; StandIn says the same thing.
-                "taskType": {"predefined": "StandIn" if standing_type else "Arrive"},
-                "shuntingUnit": shunting_unit,
-                "location": resource["id"],
-                "resources": [resource]
-            }
-            processed_actions.append(arrive_action)
+            # Only scenario trains (in/inStanding) get an Arrive action. SUs that
+            # are not in the scenario were materialized by the planner (compiled
+            # adopt/start/couple request placeholders) and already exist on the
+            # network, so fabricating an Arrive would create a duplicate train.
+            if cur_su_id in scenario_in_su_ids:
+                # Determine arrival location
+                if cur_su_id in initial_positions:
+                    arrive_location = initial_positions[cur_su_id]
+                else:
+                    arrive_location = action["location"]
+                
+                # Determine standing type
+                standing_type = ""
+                if cur_su_id in standing_su_ids:
+                    standing_type = "InStanding"
+                elif cur_su_id in out_standing_ids:
+                    standing_type = "OutStanding"
+                
+                # Add Arrive action
+                if arrive_location in track_id_lookup:
+                    resource = track_id_lookup[arrive_location]
+                else:
+                    resource = convert_track(arrive_location, track_lookup)
+                shunting_unit = make_shunting_unit(cur_su_id, train_lookup, unit_lookup)
+                arrive_action = {
+                    "startTime": _as_time(arrive_time),
+                    "endTime": _as_time(arrive_time),
+                    # standingType is gone; StandIn says the same thing.
+                    "taskType": {"predefined": "StandIn" if standing_type else "Arrive"},
+                    "shuntingUnit": shunting_unit,
+                    "location": resource["id"],
+                    "resources": [resource]
+                }
+                processed_actions.append(arrive_action)
             
 
         elif cur_su_id not in su_first_action:
@@ -1722,11 +1781,21 @@ if __name__ == "__main__":
     except ScheduleInfeasibleError as exc:
         for problem in exc.problems:
             print("PROBLEM:", problem, file=sys.stderr)
-        print(
-            "Plan is schedule-infeasible (%d problem(s)); exiting with error."
-            % len(exc.problems),
-            file=sys.stderr,
-        )
+        if exc.plan is not None:
+            with open(args.output, "w") as f:
+                json.dump(exc.plan, f, indent=4)
+            print(
+                "Plan is schedule-infeasible (%d problem(s)); wrote it to %s "
+                "for inspection, but exiting with error."
+                % (len(exc.problems), args.output),
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "Plan is schedule-infeasible (%d problem(s)); exiting with error."
+                % len(exc.problems),
+                file=sys.stderr,
+            )
         sys.exit(1)
 
     with open(args.output, "w") as f:

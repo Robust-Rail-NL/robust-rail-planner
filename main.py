@@ -103,9 +103,16 @@ def main():
     except ScheduleInfeasibleError as exc:
         for problem in exc.problems:
             print("PROBLEM:", problem, file=sys.stderr)
+        if exc.plan is not None:
+            os.makedirs(os.path.dirname(os.path.abspath(args.output)), exist_ok=True)
+            with open(args.output, "w") as f:
+                json.dump(exc.plan, f, indent=4)
+            destination = f" wrote the infeasible plan to {args.output} for inspection, but"
+        else:
+            destination = " no plan was produced,"
         print(
-            "Plan is schedule-infeasible (%d problem(s)); exiting with error."
-            % len(exc.problems),
+            "Plan is schedule-infeasible (%d problem(s));%s exiting with error."
+            % (len(exc.problems), destination),
             file=sys.stderr,
         )
         sys.exit(1)
