@@ -108,6 +108,10 @@ PARKING_FULFILL_RE = re.compile(
 ADOPT_COMPOSITION_RE = re.compile(
     r"\(compiled_adopt_composition ([^ ]+) ([^ ]+) ([^)]+)\)"
 )
+COMPLETE_REQUEST_RE = re.compile(
+    r"\(complete_request_composition ([^ ]+) ([^)]+)\)"
+)
+COMPILED_ADVANCE_RE = re.compile(r"\(compiled_advance_request_\d+\)")
 
 
 COMBINE_DURATION = 180
@@ -891,6 +895,11 @@ def convert_plan(plan_file, scenario_file, location_file):
         m = MATCH_RE.match(line)
         if m:
             unit, slot = m.groups()
+            continue
+
+        # Both complete_request_composition and compiled_advance_request_N are logical
+        # hence no TORS significance
+        if COMPLETE_REQUEST_RE.match(line) or COMPILED_ADVANCE_RE.match(line):
             continue
 
         # --------------------------------
