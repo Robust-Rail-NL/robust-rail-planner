@@ -63,7 +63,18 @@ def _resolve_departure_track_sides(ids, location_object):
     # Returns {real_track_id: set of exit sides {"a", "b"}} (native int keys,
     # matching _build_adjacency) where the exit side is the side of the real
     # track that faces the (removed) bumper.
-    adjacency = _build_adjacency(location_object)
+    #
+    # _build_adjacency keys by native int id, but the traversal below walks the
+    # graph with string ids (str(track_id) seeds the queue), so index into a
+    # string-keyed copy. Reading the int-keyed dict with a string silently
+    # returned [] from the .get default, the BFS never left the bumper, and
+    # real_hits fell back to the bumper itself — which resolves to no exit side,
+    # so no departure_exit_* fact was ever emitted and no departure action could
+    # fire. The solver then correctly reported the instance unsolvable.
+    adjacency = {
+        str(tp_id): {str(nb) for nb in neighbors}
+        for tp_id, neighbors in _build_adjacency(location_object).items()
+    }
     track_parts = {str(tp["id"]): tp for tp in location_object.get("trackParts", [])}
     sides_by_track = {}
     for track_id in ids:

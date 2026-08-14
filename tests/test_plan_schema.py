@@ -140,3 +140,68 @@ def test_standing_units_use_the_stand_task_types(inputs):
         "standingType" not in a["shuntingUnit"]
         for a in _one_of_every_action(location, scenario)["actions"]
     )
+
+
+def test_no_fabricated_arrive_for_non_scenario_su():
+    """Arrive/StandIn are only emitted for SUs that are real scenario trains.
+
+    SUs that the planner merely materializes (compiled adopt/start/couple
+    request placeholders) never appear in the scenario's in/inStanding lists.
+    Fabricating an Arrive for them makes TORS re-add trains that were already
+    added by their real arrival, and the second AddShuntingUnit throws.
+    """
+    root = _sibling("scenario-planning-inputs", "RRN_INPUTS_DIR") / "Location_KleineBinckhorst"
+    location = json.loads((root / "location.json").read_text())
+    scenario = json.loads(
+        (root / "scenarios" / "scenario_KleineBinckhorst_6t_custom_example3.json").read_text()
+    )
+
+    train_lookup = C.build_train_lookup(scenario)
+    unit_lookup = C.build_unit_lookup(scenario)
+    track_lookup = C.build_track_lookup(location)
+    track_id_lookup = C.build_track_id_lookup(location)
+
+    real_train_id = scenario["in"][0]["id"]
+    phantom_id = scenario["out"][0]["id"]
+    assert phantom_id != real_train_id
+
+    def su(id_):
+        return {"id": id_, "memberIDs": [id_], "parentIDs": [], "childIDs": []}
+
+    def move(id_, start, end, track):
+        return {
+            "startTime": start,
+            "endTime": end,
+            "taskType": {"predefined": "Move"},
+            "shuntingUnit": su(id_),
+            "location": track,
+            "resources": [
+                {"kind": "trackPart", "id": track},
+                {"kind": "trackPart", "id": track},
+            ],
+        }
+
+    actions = [
+        move(real_train_id, 600, 900, 42),
+        move(phantom_id, 3600, 3900, 57),
+    ]
+
+    processed = C.post_process_actions(
+        actions, train_lookup, unit_lookup, track_lookup, track_id_lookup,
+        {}, {real_train_id: 600}, scenario, su_id_fn=C._as_id,
+    )
+
+    phantom_tasks = [
+        a["taskType"]["predefined"]
+        for a in processed
+        if a["shuntingUnit"]["id"] == phantom_id
+    ]
+    assert phantom_tasks == ["Move"], "phantom SU got an Arrive: " + str(phantom_tasks)
+
+    arrivals = [
+        a for a in processed
+        if a["taskType"]["predefined"] in ("Arrive", "StandIn")
+    ]
+    assert len(arrivals) == 1, f"expected exactly one Arrive, got {len(arrivals)}"
+    assert arrivals[0]["shuntingUnit"]["id"] == real_train_id
+    assert arrivals[0]["startTime"] == 600
