@@ -150,7 +150,7 @@ def build_train_lookup(scenario):
     lookup = {}
 
     type_lookup = {}
-    for t in scenario.get("trainUnitTypes", []):
+    for t in scenario["trainUnitTypes"]:
         type_lookup[t["typePrefix"], t["carriages"]] = t
 
     # Incoming trains
