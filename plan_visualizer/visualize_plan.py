@@ -1102,7 +1102,7 @@ function trainRatio(train, trackId) {{
   return 1;
 }}
 
-function drawTrainSegment(trackId, fStart, fEnd, color) {{
+function drawTrainSegment(trackId, fStart, fEnd, color, width) {{
   const pos = positions[trackId];
   const shape = pos && Array.isArray(pos.shape) && pos.shape.length >= 2 ? pos.shape : null;
   if (!shape) return;
@@ -1112,10 +1112,11 @@ function drawTrainSegment(trackId, fStart, fEnd, color) {{
   poly.setAttribute('points', pts.map(p => toSvgX(p[0]) + ',' + toSvgY(p[1])).join(' '));
   poly.setAttribute('fill','none');
   poly.setAttribute('stroke', color);
-  poly.setAttribute('stroke-width', svgTrackWActive);
+  poly.setAttribute('stroke-width', width || svgTrackWActive);
   poly.setAttribute('stroke-linejoin','round');
   poly.setAttribute('stroke-linecap','round');
   poly.setAttribute('style','pointer-events:none');
+  poly.setAttribute('data-track', trackId);
   document.getElementById('train-layer').appendChild(poly);
 }}
 
@@ -1195,6 +1196,22 @@ function drawTrainOnTrack(trackId, fStart, fEnd, train, restSideB) {{
   }});
 }}
 
+// Which end ('a' or 'b') of trackId connects to neighborId, via data.edges.
+function edgeSideOf(trackId, neighborId) {{
+  for (let i = 0; i < data.edges.length; i++) {{
+    const e = data.edges[i];
+    if (e.source === trackId && e.target === neighborId) return e.sourceSide;
+    if (e.source === neighborId && e.target === trackId) return e.targetSide;
+  }}
+  return null;
+}}
+
+// Fraction span a train occupies on trackId when parked flush against `side`.
+function parkedSpan(trackId, train, side) {{
+  const ratio = trainRatio(train, trackId);
+  return side === 'a' ? [0, Math.min(1, ratio)] : [Math.max(0, 1 - ratio), 1];
+}}
+
 function updateYard(state, prevState) {{
   if(!hasPositions) return;
   document.querySelectorAll('#edges-layer line').forEach(l => {{
@@ -1222,17 +1239,31 @@ function updateYard(state, prevState) {{
     const color=trainColorMap[train];
     const trainPath = state.train_path && state.train_path[train];
     if (trainPath && trainPath.length >= 2) {{
+      const srcTrack = prevState && prevState.trains[train] ? prevState.trains[train].track : null;
       for (let i = 0; i < trainPath.length; i++) {{
-        const pn = document.getElementById('node-'+trainPath[i].replace(/[^a-zA-Z0-9]/g,'_'));
-        if (pn) {{
-          const isLast = i === trainPath.length - 1;
-          if (pn.getAttribute('data-shape')==='1') {{
-            pn.setAttribute('stroke', color);
-            pn.setAttribute('stroke-width', isLast ? svgTrackWActive : svgTrackWPrev);
-          }} else {{
-            pn.setAttribute('fill', color);
-            pn.setAttribute('r', isLast ? svgNodeRActive : svgNodeRPrev);
+        const tid = trainPath[i];
+        const pos = positions[tid];
+        const shape = pos && Array.isArray(pos.shape) && pos.shape.length >= 2 ? pos.shape : null;
+        const pn = document.getElementById('node-'+tid.replace(/[^a-zA-Z0-9]/g,'_'));
+        const isLast = i === trainPath.length - 1;
+        if (shape) {{
+          // Light only the span the train occupies or travels: parked flush at
+          // one end, extended to the connection it enters/exits through. If it
+          // crosses the whole track (entry/exit on opposite ends), light it all.
+          let fStart = 0, fEnd = 1;
+          if (i === 0 && tid === srcTrack) {{
+            const parked = (prevState.trains[train] && prevState.trains[train].restSide) || 'b';
+            const exit = edgeSideOf(tid, trainPath[1]);
+            if (exit === parked) {{ const sp = parkedSpan(tid, train, parked); fStart = sp[0]; fEnd = sp[1]; }}
+          }} else if (isLast) {{
+            const parked = (info && info.restSide) || 'b';
+            const entry = edgeSideOf(tid, trainPath[i-1]);
+            if (entry === parked) {{ const sp = parkedSpan(tid, train, parked); fStart = sp[0]; fEnd = sp[1]; }}
           }}
+          drawTrainSegment(tid, fStart, fEnd, color, isLast ? svgTrackWActive : svgTrackWPrev);
+        }} else if (pn) {{
+          pn.setAttribute('fill', color);
+          pn.setAttribute('r', isLast ? svgNodeRActive : svgNodeRPrev);
         }}
         if (i < trainPath.length - 1) {{
           const a = trainPath[i], b = trainPath[i+1];
@@ -1249,16 +1280,29 @@ function updateYard(state, prevState) {{
       const prev=prevState.trains[train];
       if(prev&&prev.track&&prev.track!==info.track) {{
         const src=prev.track,tgt=info.track;
+        const srcInPath = trainPath && trainPath.length >= 2 && trainPath[0] === src;
         document.querySelectorAll('#edges-layer line').forEach(l => {{
           const ls=l.getAttribute('data-source'),lt=l.getAttribute('data-target');
           if((ls===src&&lt===tgt)||(ls===tgt&&lt===src)) {{
             l.setAttribute('stroke',color); l.setAttribute('stroke-width','3');
           }}
         }});
-        const pn=document.getElementById('node-'+src.replace(/[^a-zA-Z0-9]/g,'_'));
-        if(pn&&(pn.getAttribute('fill')==='var(--yard-node)'||pn.getAttribute('stroke')==='var(--yard-node)')) {{
-          if (pn.getAttribute('data-shape')==='1') {{ pn.setAttribute('stroke',color); pn.setAttribute('stroke-width',svgTrackWPrev); }}
-          else {{ pn.setAttribute('fill',color); pn.setAttribute('r',svgNodeRPrev); }}
+        if(!srcInPath) {{
+          const spos=positions[src];
+          const sshape=spos&&Array.isArray(spos.shape)&&spos.shape.length>=2?spos.shape:null;
+          if(sshape) {{
+            const parked=(prev.restSide)||'b';
+            const exitNeighbor=(trainPath&&trainPath.length>=2)?trainPath[0]:tgt;
+            const exit=edgeSideOf(src,exitNeighbor);
+            let fStart=0,fEnd=1;
+            if(exit===parked){{ const sp=parkedSpan(src,train,parked); fStart=sp[0]; fEnd=sp[1]; }}
+            drawTrainSegment(src,fStart,fEnd,color,svgTrackWPrev);
+          }} else {{
+            const pn=document.getElementById('node-'+src.replace(/[^a-zA-Z0-9]/g,'_'));
+            if(pn&&(pn.getAttribute('fill')==='var(--yard-node)'||pn.getAttribute('stroke')==='var(--yard-node)')) {{
+              pn.setAttribute('fill',color); pn.setAttribute('r',svgNodeRPrev);
+            }}
+          }}
         }}
       }}
     }}
