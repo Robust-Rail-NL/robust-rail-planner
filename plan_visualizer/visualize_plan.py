@@ -1147,8 +1147,6 @@ function drawTrainSprite(trackId, fStart, fEnd, typePrefix, restSideB, flip) {{
   const cx = toSvgX((pts[0][0] + pts[pts.length - 1][0]) / 2);
   const cy = toSvgY((pts[0][1] + pts[pts.length - 1][1]) / 2);
   let deg = segAngle(pts);
-  if (!restSideB) deg += 180;  // front at the a-end: point the nose back toward a
-  if (flip) deg -= 180;        // sprite faces left in its own image
   const el = document.createElementNS('http://www.w3.org/2000/svg','image');
   el.setAttribute('href', img.uri);
   el.setAttribute('x', -w/2);
