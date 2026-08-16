@@ -2,11 +2,40 @@ import argparse
 import base64
 import json
 import re
+import struct
 from pathlib import Path
 
 
 ACTION_RE = re.compile(r"^\s*(?:\d+(?:\.\d+)?:\s*)?\(([^)]+)\)")
 CALL_RE = re.compile(r"^\s*([A-Za-z_][\w-]*)\((.*)\)\s*$")
+
+IMAGES_DIR = Path(__file__).resolve().parent / "Images"
+
+# Unit type -> sprite file. Only these four have dedicated art for now.
+SPRITE_FILES = {
+    "ICR": "icr_rijtuig_ATP.png",
+    "SLT": "slt_treinstel.png",
+    "SNG": "sng_rijtuig_ATP.png",
+    "VIRM": "virm_treinstel.png",
+}
+
+# Types without their own sprite reuse one of the above until better art exists.
+SPRITE_FALLBACKS = {
+    "DDZ": "VIRM",
+    "FFF": "SLT",
+    "ICM": "ICR",
+    "ICNG": "ICR",
+    "SGMM": "SLT",
+}
+
+# Which way the sprite's front points inside its own image: +1 = right (+x),
+# -1 = left, 0 = symmetric so orientation does not matter.
+SPRITE_FRONT = {
+    "ICR": 0,
+    "SLT": 0,
+    "SNG": 1,
+    "VIRM": -1,
+}
 
 
 def load_json(path):
@@ -341,6 +370,44 @@ def collect_train_lengths(scenario, plan_path, states):
     return result
 
 
+def member_type_map(scenario):
+    """member id -> typePrefix for every unit a plan can materialize."""
+    if not isinstance(scenario, dict):
+        return {}
+    types = {}
+    for train in list(scenario.get("in") or []) + list(scenario.get("inStanding") or []):
+        for member in train.get("members", []) or []:
+            unit_id = member.get("id")
+            if unit_id is not None:
+                types[str(unit_id)] = member.get("typePrefix")
+    return types
+
+
+def collect_train_units(scenario, states):
+    """Map train name -> list of {typePrefix, length}, in member-name order.
+
+    The order matters: the JS lays sprites out along the track from the rest
+    anchor, so the first member sits nearest the wall the train rests against.
+    """
+    member_types = member_type_map(scenario)
+    if not member_types:
+        return {}
+    lengths = member_lengths_from_scenario(scenario)
+    names = set()
+    for state in states:
+        names.update(state.get("trains", {}).keys())
+    result = {}
+    for name in names:
+        units = []
+        for part in str(name).split("+"):
+            type_prefix = member_types.get(part)
+            if type_prefix:
+                units.append({"typePrefix": type_prefix, "length": lengths.get(part, 0)})
+        if units:
+            result[name] = units
+    return result
+
+
 def simulate_steps(initial_trains, steps, id_to_track, location=None):
     states = [{"index": 0, "action": "initial", "action_type": "initial", "train": None, "raw": "Initial state", "trains": json.loads(json.dumps(initial_trains))}]
     trains = json.loads(json.dumps(initial_trains))
@@ -471,6 +538,29 @@ def simulate_steps(initial_trains, steps, id_to_track, location=None):
             "trains": json.loads(json.dumps(trains)),
             "train_path": train_path,
         })
+
+    # Per-state track arrival order: for every track, list the trains on it sorted
+    # by the state index at which each train most recently landed there. The train
+    # that has been on the track longest keeps the wall spot; later arrivals stack
+    # behind it instead of swapping places.
+    def landing_index(state_index, train_name):
+        track = states[state_index]["trains"][train_name]["track"]
+        j = state_index
+        while j > 0:
+            prev_track = states[j - 1]["trains"].get(train_name, {}).get("track")
+            if prev_track != track:
+                return j
+            j -= 1
+        return 0
+
+    for i, state in enumerate(states):
+        arrivals = {}
+        for train_name, info in state["trains"].items():
+            track = info.get("track")
+            if track and info.get("status") not in ("departed", "absorbed"):
+                arrivals.setdefault(track, []).append((landing_index(i, train_name), train_name))
+        state["trackOrder"] = {track: [t for _, t in sorted(lst)] for track, lst in arrivals.items()}
+
     return states
 
 
@@ -497,7 +587,44 @@ def encode_image_base64(image_path):
     return f"data:{mime};base64,{data}"
 
 
-def render_html(location_name, states, edges, layout, output_path, image_data_uri=None, image_width=None, image_height=None, track_meta=None, train_lengths=None):
+def png_dimensions(path):
+    """(width, height) read from the PNG header, or (0, 0) for a non-PNG file."""
+    with open(path, "rb") as handle:
+        header = handle.read(24)
+    if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
+        return 0, 0
+    return struct.unpack(">II", header[16:24])
+
+
+def load_unit_images():
+    """{typePrefix: {"uri", "aspect", "flip"}} for every sprite that exists.
+
+    Types without their own sprite are resolved to their fallback here, so the
+    JS never has to map unknown types itself. `aspect` is h/w (used to size the
+    sprite so its width covers the unit's track fraction); `flip` is True when
+    the sprite faces left in its own image.
+    """
+    images = {}
+    for type_prefix, filename in SPRITE_FILES.items():
+        path = IMAGES_DIR / filename
+        if not path.exists():
+            continue
+        uri = encode_image_base64(path)
+        if uri is None:
+            continue
+        width, height = png_dimensions(path)
+        images[type_prefix] = {
+            "uri": uri,
+            "aspect": (height / width) if width else 1.0,
+            "flip": SPRITE_FRONT.get(type_prefix) == -1,
+        }
+    for type_prefix, fallback in SPRITE_FALLBACKS.items():
+        if fallback in images and type_prefix not in images:
+            images[type_prefix] = images[fallback]
+    return images
+
+
+def render_html(location_name, states, edges, layout, output_path, image_data_uri=None, image_width=None, image_height=None, track_meta=None, train_lengths=None, unit_images=None, train_units=None):
     payload = {
         "locationName": location_name,
         "states": states,
@@ -508,6 +635,8 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
         "imageHeight": image_height,
         "trackMeta": track_meta or {},
         "trainLengths": train_lengths or {},
+        "unitImages": unit_images or {},
+        "trainUnits": train_units or {},
     }
     data_json = json.dumps(payload)
 
@@ -990,6 +1119,82 @@ function drawTrainSegment(trackId, fStart, fEnd, color) {{
   document.getElementById('train-layer').appendChild(poly);
 }}
 
+// Direction (degrees) of the first->last chord of a sub-polyline. Track shapes
+// use image/SVG coordinates, so a y-down rotation keeps the sprite aligned.
+function segAngle(pts) {{
+  if (!pts || pts.length < 2) return 0;
+  const a = pts[0], b = pts[pts.length - 1];
+  return Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
+}}
+
+// Minimum visible width (px) for a whole train on a track, so arrivals on short
+// entry tracks (e.g. 906a) are clearly visible instead of a ~12px sliver.
+const MIN_TRAIN_PX = 30;
+// Draw one unit's sprite along the track fraction [fStart, fEnd]. The sprite is
+// scaled so its width covers that fraction, sits bottom-center on the rail, and
+// is rotated so the train's FRONT faces the wall it rests flush against (the
+// restSide end). `flip` cancels sprites that face left inside their own image.
+function drawTrainSprite(trackId, fStart, fEnd, typePrefix, restSideB, flip) {{
+  const pos = positions[trackId];
+  const shape = pos && Array.isArray(pos.shape) && pos.shape.length >= 2 ? pos.shape : null;
+  const img = data.unitImages ? data.unitImages[typePrefix] : null;
+  if (!shape || !img) return;
+  const pts = subPolyline(shape, fStart, fEnd);
+  if (pts.length < 2) return;
+  const w = Math.max(3, polylineLength(pts));
+  const h = Math.max(3, w * img.aspect);
+  const cx = toSvgX((pts[0][0] + pts[pts.length - 1][0]) / 2);
+  const cy = toSvgY((pts[0][1] + pts[pts.length - 1][1]) / 2);
+  let deg = segAngle(pts);
+  if (!restSideB) deg += 180;  // front at the a-end: point the nose back toward a
+  if (flip) deg -= 180;        // sprite faces left in its own image
+  const el = document.createElementNS('http://www.w3.org/2000/svg','image');
+  el.setAttribute('href', img.uri);
+  el.setAttribute('x', -w/2);
+  el.setAttribute('y', -h);
+  el.setAttribute('width', w);
+  el.setAttribute('height', h);
+  el.setAttribute('transform', `translate(${{cx}},${{cy}}) rotate(${{deg}})`);
+  el.setAttribute('style','pointer-events:none');
+  document.getElementById('train-layer').appendChild(el);
+}}
+
+// Draw a train's proportional segment (colored base), then one sprite per
+// member laid out in name order from the rest anchor, split by member length.
+function drawTrainOnTrack(trackId, fStart, fEnd, train, restSideB) {{
+  // Widen spans that would render as a tiny sliver (short entry tracks) so the
+  // whole train stays visible; grow away from the wall the train rests flush
+  // against, clamped to the track. Unknown restSide trains are anchored at the
+  // b-end, so infer the flush wall from the fractions rather than restSideB.
+  const pos = positions[trackId];
+  const shape = pos && Array.isArray(pos.shape) && pos.shape.length >= 2 ? pos.shape : null;
+  if (shape) {{
+    const spanLen = polylineLength(subPolyline(shape, fStart, fEnd));
+    const totalLen = polylineLength(shape);
+    if (spanLen > 0 && spanLen < MIN_TRAIN_PX && totalLen > 0) {{
+      const wantFrac = Math.min(1, MIN_TRAIN_PX / totalLen);
+      const extra = Math.max(0, wantFrac - (fEnd - fStart));
+      if (fEnd >= 1 - 1e-6) fStart = Math.max(0, fStart - extra);       // flush at b-end
+      else if (fStart <= 1e-6) fEnd = Math.min(1, fEnd + extra);        // flush at a-end
+      else {{ fStart = Math.max(0, fStart - extra / 2); fEnd = Math.min(1, fEnd + extra / 2); }}
+    }}
+  }}
+  drawTrainSegment(trackId, fStart, fEnd, trainColorMap[train]);
+  const units = data.trainUnits ? data.trainUnits[train] : null;
+  if (!units || !units.length) return;
+  const total = units.reduce((s,u) => s + (u.length || 0), 0) || units.length;
+  let cur = fStart;
+  units.forEach(u => {{
+    const span = (u.length || 0) > 0 ? (u.length / total) * (fEnd - fStart) : (fEnd - fStart) / units.length;
+    const next = Math.min(fEnd, cur + span);
+    if (next > cur) {{
+      const img = data.unitImages ? data.unitImages[u.typePrefix] : null;
+      drawTrainSprite(trackId, cur, next, u.typePrefix, restSideB, !!(img && img.flip));
+    }}
+    cur = next;
+  }});
+}}
+
 function updateYard(state, prevState) {{
   if(!hasPositions) return;
   document.querySelectorAll('#edges-layer line').forEach(l => {{
@@ -1059,16 +1264,24 @@ function updateYard(state, prevState) {{
     }}
   }});
 
-  // Parked / waiting trains: draw proportional-length segments along track shapes.
+  // Trains on tracks: draw proportional-length segments along track shapes.
+  // Every train with a track gets a colored segment + sprite (moving trains are
+  // drawn on their current track too, so color is always accompanied by art).
   // Each train rests flush against its restSide end (a-side or b-side), i.e. it
   // moved as far as possible away from the side it entered; unknown -> b-side.
   const groups = {{}};
+  const trackOrder = state.trackOrder || {{}};
   Object.keys(state.trains).forEach(train => {{
     if (filterTrain && train !== filterTrain) return;
     const info = state.trains[train];
     if (!info || !info.track || info.status==='departed' || info.status==='absorbed') return;
-    if (state.train_path && state.train_path[train] && state.train_path[train].length >= 2) return;
     (groups[info.track] = groups[info.track] || []).push(train);
+  }});
+  Object.keys(groups).forEach(trackId => {{
+    if (trackOrder[trackId]) {{
+      const present = trackOrder[trackId].filter(t => groups[trackId].includes(t));
+      if (present.length === groups[trackId].length) groups[trackId] = present;
+    }}
   }});
   Object.keys(groups).forEach(trackId => {{
     const pos = positions[trackId];
@@ -1083,13 +1296,13 @@ function updateYard(state, prevState) {{
       let cum = 0;
       anchorA.forEach(train => {{
         const end = Math.min(1, cum + trainRatio(train, trackId));
-        if (end > cum) drawTrainSegment(trackId, cum, end, trainColorMap[train]);
+        if (end > cum) drawTrainOnTrack(trackId, cum, end, train, state.trains[train].restSide === 'b');
         cum = end;
       }});
       let cumEnd = 1;
       anchorB.forEach(train => {{
         const start = Math.max(0, cumEnd - trainRatio(train, trackId));
-        if (cumEnd > start) drawTrainSegment(trackId, start, cumEnd, trainColorMap[train]);
+        if (cumEnd > start) drawTrainOnTrack(trackId, start, cumEnd, train, state.trains[train].restSide === 'b');
         cumEnd = start;
       }});
     }} else if (node) {{
@@ -1312,11 +1525,15 @@ def main():
         image_height = layout.get("height")
 
     track_meta = {str(t["id"]): {"name": str(t["name"]), "parkingAllowed": t.get("parkingAllowed", False), "type": t.get("type", ""), "length": t.get("length", 0)} for t in location.get("trackParts", [])}
+    unit_images = load_unit_images()
+    train_units = collect_train_units(scenario, states)
     render_html(Path(args.location).parent.name, states, edges, layout, args.output,
                 image_data_uri=image_data_uri, image_width=image_width, image_height=image_height,
-                track_meta=track_meta, train_lengths=train_lengths)
+                track_meta=track_meta, train_lengths=train_lengths,
+                unit_images=unit_images, train_units=train_units)
     print(f"Wrote visualizer to {args.output}")
     print(f"Steps: {len(steps)}; trains: {len(initial)}; yard nodes: {len(positions)}")
+    print(f"Sprites loaded: {len(unit_images)} unit types; {len(train_units)} trains mapped")
 
 
 if __name__ == "__main__":
