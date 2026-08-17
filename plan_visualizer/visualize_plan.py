@@ -778,10 +778,13 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
     .action-badge {{ padding: 2px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }}
 
     /* YARD MAP */
-    #yard-panel {{ background: var(--yard-bg); border-bottom: 1px solid var(--border); flex-shrink: 0; padding: 8px 20px; display: flex; align-items: center; gap: 12px; }}
+    #yard-panel {{ background: var(--yard-bg); border-bottom: 1px solid var(--border); flex: 1; padding: 8px 20px; display: flex; align-items: center; gap: 12px; min-height: 0; }}
+    #yard-panel.panel-open {{ flex: none; height: 50vh; }}
+    #panel-toggle {{ background: var(--surface); border-bottom: 1px solid var(--border); text-align: center; padding: 4px 0; cursor: pointer; flex-shrink: 0; font-size: 14px; color: var(--muted); user-select: none; }}
+    #panel-toggle:hover {{ background: var(--action-bar-bg); }}
     #yard-label {{ font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; }}
-    #yard-svg-wrap {{ flex: 1; overflow: hidden; }}
-    #yard-svg {{ width: 100%; display: block; }}
+    #yard-svg-wrap {{ flex: 1; overflow: hidden; min-height: 0; align-self: stretch; }}
+    #yard-svg {{ width: 100%; height: 100%; display: block; }}
     #yard-legend {{ display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }}
     .yard-leg {{ display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--muted); white-space: nowrap; }}
     .yard-leg-dot {{ width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }}
@@ -908,7 +911,9 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
   <div id="node-tooltip"><span class="tt-name"></span><span class="tt-type"></span><span class="tt-parking"></span></div>
 </div>
 
-<main>
+<div id="panel-toggle" onclick="toggleBottom()"><span id="toggle-arrow">▲</span></div>
+
+<main id="bottom-panel" style="display:none">
   <div id="table-wrap">
     <table>
       <thead>
@@ -1979,6 +1984,22 @@ function toggleTheme(){{
   html.setAttribute('data-theme',isDark?'light':'dark');
   document.getElementById('theme-btn').textContent=isDark?'Dark':'Light';
   localStorage.setItem('shunting-theme',isDark?'light':'dark');
+}}
+let bottomOpen=false;
+function toggleBottom(){{
+  bottomOpen=!bottomOpen;
+  const panel=document.getElementById('bottom-panel');
+  const yp=document.getElementById('yard-panel');
+  const arrow=document.getElementById('toggle-arrow');
+  if(bottomOpen){{
+    panel.style.display='grid';
+    yp.classList.add('panel-open');
+    arrow.textContent='\u25BC';
+  }} else {{
+    panel.style.display='none';
+    yp.classList.remove('panel-open');
+    arrow.textContent='\u25B2';
+  }}
 }}
 const saved=localStorage.getItem('shunting-theme');
 if(saved){{
