@@ -461,12 +461,14 @@ def simulate_steps(initial_trains, steps, id_to_track, location=None):
         elif action == "park" and len(args) >= 2:
             train, track = args[:2]
             land(train, track, "parked")
+            trains[train]["wasParked"] = True
             action_type = "park"
             if "+" in train:
                 for member_id in train.split("+"):
                     if member_id in trains:
                         trains[member_id]["track"] = to_track_id(track, id_to_track, {})
                         trains[member_id]["status"] = "parked"
+                        trains[member_id]["wasParked"] = True
                         if trains[train].get("restSide"):
                             trains[member_id]["restSide"] = trains[train]["restSide"]
         elif action == "depart" and len(args) >= 2:
@@ -751,7 +753,7 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
       --btn-bg: #1e2333; --btn-border: #2a2f42; --btn-fg: #e2e8f8; --btn-hover: #2a2f42;
       --play-bg: #3b82f6; --play-hover: #2563eb;
       --yard-bg: #141824; --yard-edge: #2a2f42; --yard-node: #374151;
-    }}
+}}
 
     body {{ font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden; font-size: 13px; transition: background 0.2s, color 0.2s; }}
 
@@ -884,6 +886,18 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
   <div id="yard-label">Yard map</div>
   <div id="yard-svg-wrap">
     <svg id="yard-svg" height="120" viewBox="0 0 1000 120" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <filter id="greenTint" color-interpolation-filters="sRGB">
+          <feFlood flood-color="#059669" flood-opacity="0.5" result="flood"/>
+          <feComposite in="flood" in2="SourceGraphic" operator="in" result="mask"/>
+          <feBlend in="SourceGraphic" in2="mask" mode="multiply"/>
+        </filter>
+        <filter id="greenTintPulse" color-interpolation-filters="sRGB">
+          <feFlood id="greenTintPulseFlood" flood-color="#059669" flood-opacity="0.5" result="flood"/>
+          <feComposite in="flood" in2="SourceGraphic" operator="in" result="mask"/>
+          <feBlend in="SourceGraphic" in2="mask" mode="multiply"/>
+        </filter>
+      </defs>
       <g id="edges-layer"></g>
       <g id="nodes-layer"></g>
       <g id="train-layer"></g>
@@ -1028,6 +1042,34 @@ function drawSplitFrame(t) {{
     const childColor = trainColorMap[c] || '#888888';
     el.setAttribute('fill', lerpColor(parentColor, childColor, t));
   }});
+}}
+
+// ---- PARK PULSE ANIMATION ----
+let _parkRaf = null;
+let _parkStart = 0;
+let _parkTrainName = null;
+function startParkPulse(trainName) {{
+  _parkTrainName = trainName;
+  _parkStart = performance.now();
+  document.querySelectorAll(`#train-layer image[data-train="${{trainName}}"]`).forEach(el => el.setAttribute('filter', 'url(#greenTintPulse)'));
+  if (!_parkRaf) _parkPulseLoop();
+}}
+function cancelParkPulse() {{
+  if (_parkRaf) {{ cancelAnimationFrame(_parkRaf); _parkRaf = null; }}
+  if (_parkTrainName) {{
+    document.querySelectorAll(`#train-layer image[data-train="${{_parkTrainName}}"]`).forEach(el => el.setAttribute('filter', 'url(#greenTint)'));
+  }}
+  const flood = document.getElementById('greenTintPulseFlood');
+  if (flood) flood.setAttribute('flood-opacity', '0.5');
+  _parkTrainName = null;
+}}
+function _parkPulseLoop() {{
+  const flood = document.getElementById('greenTintPulseFlood');
+  if (!flood || !_parkTrainName) return;
+  const elapsed = performance.now() - _parkStart;
+  const opacity = 0.3 + 0.4 * Math.sin(elapsed / 300);
+  flood.setAttribute('flood-opacity', opacity.toFixed(3));
+  _parkRaf = requestAnimationFrame(_parkPulseLoop);
 }}
 
 // ---- PARTICLE IMAGE PROCESSING ----
@@ -1425,7 +1467,7 @@ const MIN_TRAIN_PX = 30;
 // scaled so its width covers that fraction, sits bottom-center on the rail, and
 // is rotated so the train's FRONT faces the wall it rests flush against (the
 // restSide end). `flip` cancels sprites that face left inside their own image.
-function drawTrainSprite(trackId, fStart, fEnd, typePrefix, restSideB, flip) {{
+function drawTrainSprite(trackId, fStart, fEnd, typePrefix, restSideB, flip, parked, trainName) {{
   const pos = positions[trackId];
   const shape = pos && Array.isArray(pos.shape) && pos.shape.length >= 2 ? pos.shape : null;
   const img = data.unitImages ? data.unitImages[typePrefix] : null;
@@ -1445,12 +1487,14 @@ function drawTrainSprite(trackId, fStart, fEnd, typePrefix, restSideB, flip) {{
   el.setAttribute('height', h);
   el.setAttribute('transform', `translate(${{cx}},${{cy}}) rotate(${{deg}})`);
   el.setAttribute('style','pointer-events:none');
+  if (parked) el.setAttribute('filter','url(#greenTint)');
+  if (trainName) el.setAttribute('data-train', trainName);
   document.getElementById('train-layer').appendChild(el);
 }}
 
 // Draw a train's proportional segment (colored base), then one sprite per
 // member laid out in name order from the rest anchor, split by member length.
-function drawTrainOnTrack(trackId, fStart, fEnd, train, restSideB) {{
+function drawTrainOnTrack(trackId, fStart, fEnd, train, restSideB, parked) {{
   // Widen spans that would render as a tiny sliver (short entry tracks) so the
   // whole train stays visible; grow away from the wall the train rests flush
   // against, clamped to the track. Unknown restSide trains are anchored at the
@@ -1478,7 +1522,7 @@ function drawTrainOnTrack(trackId, fStart, fEnd, train, restSideB) {{
     const next = Math.min(fEnd, cur + span);
     if (next > cur) {{
       const img = data.unitImages ? data.unitImages[u.typePrefix] : null;
-      drawTrainSprite(trackId, cur, next, u.typePrefix, restSideB, !!(img && img.flip));
+      drawTrainSprite(trackId, cur, next, u.typePrefix, restSideB, !!(img && img.flip), parked, train);
     }}
     cur = next;
   }});
@@ -1628,13 +1672,13 @@ function updateYard(state, prevState) {{
       let cum = 0;
       anchorA.forEach(train => {{
         const end = Math.min(1, cum + trainRatio(train, trackId));
-        if (end > cum) drawTrainOnTrack(trackId, cum, end, train, state.trains[train].restSide === 'b');
+        if (end > cum) drawTrainOnTrack(trackId, cum, end, train, state.trains[train].restSide === 'b', !!state.trains[train].wasParked);
         cum = end;
       }});
       let cumEnd = 1;
       anchorB.forEach(train => {{
         const start = Math.max(0, cumEnd - trainRatio(train, trackId));
-        if (cumEnd > start) drawTrainOnTrack(trackId, start, cumEnd, train, state.trains[train].restSide === 'b');
+        if (cumEnd > start) drawTrainOnTrack(trackId, start, cumEnd, train, state.trains[train].restSide === 'b', !!state.trains[train].wasParked);
         cumEnd = start;
       }});
     }} else if (node) {{
@@ -1831,11 +1875,14 @@ function render(idx) {{
 
   // ---- ANIMATION & PARTICLE LIFECYCLE ----
   cancelAnim();
+  cancelParkPulse();
   stopParticles();
   if (atype === 'combine' && state.train && state.train.includes('+')) {{
     startCombineAnim(state);
   }} else if (atype === 'split' && state.parent_name) {{
     startSplitAnim(state);
+  }} else if (atype === 'park') {{
+    startParkPulse(state.train);
   }}
   if (atype === 'service' && state.service_type) {{
     const svcTrack = state.trains[state.train] && state.trains[state.train].track;
