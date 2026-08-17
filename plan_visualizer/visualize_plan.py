@@ -1072,6 +1072,55 @@ function _parkPulseLoop() {{
   _parkRaf = requestAnimationFrame(_parkPulseLoop);
 }}
 
+// ---- ARRIVAL / DEPARTURE FADE ANIMATION ----
+let _arrivalRaf = null;
+let _arrivalStart = 0;
+let _arrivalTrainName = null;
+function startArrivalAnim(trainName) {{
+  _arrivalTrainName = trainName;
+  _arrivalStart = performance.now();
+  if (!_arrivalRaf) _arrivalAnimLoop();
+}}
+function cancelArrivalAnim() {{
+  if (_arrivalRaf) {{ cancelAnimationFrame(_arrivalRaf); _arrivalRaf = null; }}
+  if (_arrivalTrainName) {{
+    document.querySelectorAll(`#train-layer image[data-train="${{_arrivalTrainName}}"]`).forEach(el => el.setAttribute('opacity', '1'));
+  }}
+  _arrivalTrainName = null;
+}}
+function _arrivalAnimLoop() {{
+  if (!_arrivalTrainName) return;
+  const els = document.querySelectorAll(`#train-layer image[data-train="${{_arrivalTrainName}}"]`);
+  const elapsed = performance.now() - _arrivalStart;
+  const opacity = 0.1 + 0.9 * ((Math.sin(elapsed / 400) + 1) / 2);
+  els.forEach(el => el.setAttribute('opacity', opacity.toFixed(3)));
+  _arrivalRaf = requestAnimationFrame(_arrivalAnimLoop);
+}}
+
+let _departRaf = null;
+let _departStart = 0;
+let _departTrainName = null;
+function startDepartAnim(trainName) {{
+  _departTrainName = trainName;
+  _departStart = performance.now();
+  if (!_departRaf) _departAnimLoop();
+}}
+function cancelDepartAnim() {{
+  if (_departRaf) {{ cancelAnimationFrame(_departRaf); _departRaf = null; }}
+  if (_departTrainName) {{
+    document.querySelectorAll(`#train-layer image[data-train="${{_departTrainName}}"]`).forEach(el => el.setAttribute('opacity', '0'));
+  }}
+  _departTrainName = null;
+}}
+function _departAnimLoop() {{
+  if (!_departTrainName) return;
+  const els = document.querySelectorAll(`#train-layer image[data-train="${{_departTrainName}}"]`);
+  const elapsed = performance.now() - _departStart;
+  const opacity = 1.0 - 0.9 * ((Math.sin(elapsed / 400) + 1) / 2);
+  els.forEach(el => el.setAttribute('opacity', opacity.toFixed(3)));
+  _departRaf = requestAnimationFrame(_departAnimLoop);
+}}
+
 // ---- PARTICLE IMAGE PROCESSING ----
 const _processedParticleCache = {{}};
 function processParticleImage(uri) {{
@@ -1494,7 +1543,8 @@ function drawTrainSprite(trackId, fStart, fEnd, typePrefix, restSideB, flip, par
 
 // Draw a train's proportional segment (colored base), then one sprite per
 // member laid out in name order from the rest anchor, split by member length.
-function drawTrainOnTrack(trackId, fStart, fEnd, train, restSideB, parked) {{
+function drawTrainOnTrack(trackId, fStart, fEnd, train, restSideB, parked, minPx) {{
+  const _minPx = minPx || MIN_TRAIN_PX;
   // Widen spans that would render as a tiny sliver (short entry tracks) so the
   // whole train stays visible; grow away from the wall the train rests flush
   // against, clamped to the track. Unknown restSide trains are anchored at the
@@ -1504,8 +1554,8 @@ function drawTrainOnTrack(trackId, fStart, fEnd, train, restSideB, parked) {{
   if (shape) {{
     const spanLen = polylineLength(subPolyline(shape, fStart, fEnd));
     const totalLen = polylineLength(shape);
-    if (spanLen > 0 && spanLen < MIN_TRAIN_PX && totalLen > 0) {{
-      const wantFrac = Math.min(1, MIN_TRAIN_PX / totalLen);
+    if (spanLen > 0 && spanLen < _minPx && totalLen > 0) {{
+      const wantFrac = Math.min(1, _minPx / totalLen);
       const extra = Math.max(0, wantFrac - (fEnd - fStart));
       if (fEnd >= 1 - 1e-6) fStart = Math.max(0, fStart - extra);       // flush at b-end
       else if (fStart <= 1e-6) fEnd = Math.min(1, fEnd + extra);        // flush at a-end
@@ -1546,6 +1596,7 @@ function parkedSpan(trackId, train, side) {{
 
 function updateYard(state, prevState) {{
   if(!hasPositions) return;
+  const effectiveMinPx = (state.action_type === 'arrive' || state.action_type === 'depart') ? 50 : MIN_TRAIN_PX;
   document.querySelectorAll('#edges-layer line').forEach(l => {{
     l.setAttribute('stroke','var(--yard-edge)'); l.setAttribute('stroke-width','1.5');
   }});
@@ -1567,7 +1618,7 @@ function updateYard(state, prevState) {{
   const trainsToShow=filterTrain?[filterTrain]:allTrains;
   trainsToShow.forEach(train => {{
     const info=state.trains[train];
-    if(!info||!info.track||info.status==='departed'||info.status==='absorbed') return;
+    if(!info||!info.track||(info.status==='departed'&&state.action_type!=='depart')||info.status==='absorbed') return;
     const color=trainColorMap[train];
     const trainPath = state.train_path && state.train_path[train];
     if (trainPath && trainPath.length >= 2) {{
@@ -1650,8 +1701,12 @@ function updateYard(state, prevState) {{
   Object.keys(state.trains).forEach(train => {{
     if (filterTrain && train !== filterTrain) return;
     const info = state.trains[train];
-    if (!info || !info.track || info.status==='departed' || info.status==='absorbed') return;
-    (groups[info.track] = groups[info.track] || []).push(train);
+    if (!info || !info.track || (info.status==='departed'&&state.action_type!=='depart') || info.status==='absorbed') return;
+    let renderTrack = info.track;
+    if (info.status==='departed' && state.action_type==='depart' && prevState && prevState.trains[train] && prevState.trains[train].track) {{
+      renderTrack = prevState.trains[train].track;
+    }}
+    (groups[renderTrack] = groups[renderTrack] || []).push(train);
   }});
   Object.keys(groups).forEach(trackId => {{
     if (trackOrder[trackId]) {{
@@ -1672,13 +1727,13 @@ function updateYard(state, prevState) {{
       let cum = 0;
       anchorA.forEach(train => {{
         const end = Math.min(1, cum + trainRatio(train, trackId));
-        if (end > cum) drawTrainOnTrack(trackId, cum, end, train, state.trains[train].restSide === 'b', !!state.trains[train].wasParked);
+        if (end > cum) drawTrainOnTrack(trackId, cum, end, train, state.trains[train].restSide === 'b', !!state.trains[train].wasParked, effectiveMinPx);
         cum = end;
       }});
       let cumEnd = 1;
       anchorB.forEach(train => {{
         const start = Math.max(0, cumEnd - trainRatio(train, trackId));
-        if (cumEnd > start) drawTrainOnTrack(trackId, start, cumEnd, train, state.trains[train].restSide === 'b', !!state.trains[train].wasParked);
+        if (cumEnd > start) drawTrainOnTrack(trackId, start, cumEnd, train, state.trains[train].restSide === 'b', !!state.trains[train].wasParked, effectiveMinPx);
         cumEnd = start;
       }});
     }} else if (node) {{
@@ -1876,6 +1931,8 @@ function render(idx) {{
   // ---- ANIMATION & PARTICLE LIFECYCLE ----
   cancelAnim();
   cancelParkPulse();
+  cancelArrivalAnim();
+  cancelDepartAnim();
   stopParticles();
   if (atype === 'combine' && state.train && state.train.includes('+')) {{
     startCombineAnim(state);
@@ -1883,6 +1940,10 @@ function render(idx) {{
     startSplitAnim(state);
   }} else if (atype === 'park') {{
     startParkPulse(state.train);
+  }} else if (atype === 'arrive') {{
+    startArrivalAnim(state.train);
+  }} else if (atype === 'depart') {{
+    startDepartAnim(state.train);
   }}
   if (atype === 'service' && state.service_type) {{
     const svcTrack = state.trains[state.train] && state.trains[state.train].track;
