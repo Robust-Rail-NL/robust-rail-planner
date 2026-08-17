@@ -132,10 +132,12 @@ def parse_plan(path, id_to_track=None):
 
 def task_type_name(action):
     task_type = action.get("taskType", {})
-    if "predefined" in task_type:
-        return task_type["predefined"]
-    if "other" in task_type:
-        return task_type["other"]
+    predefined = task_type.get("predefined")
+    other = task_type.get("other")
+    if predefined:
+        return predefined
+    if other:
+        return other
     return str(task_type)
 
 
@@ -226,7 +228,7 @@ def parse_solver_plan(path, id_to_track=None):
             label = "Park" if action_name == "park" else "Depart"
             steps.append({"raw": f"{action.get('startTime')}: {label} {train} @ {display(track)}", "action": action_name, "args": [train, track], "path": path_raw})
         else:
-            steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: {task_name} {train} @ {display(track)}", "action": "service", "args": [train, track], "path": path_raw})
+            steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: {task_name} {train} @ {display(track)}", "action": "service", "args": [train, track], "path": path_raw, "service_type": task_name})
     return steps
 
 
@@ -438,6 +440,12 @@ def simulate_steps(initial_trains, steps, id_to_track, location=None):
         else:
             train_path = {}
 
+        service_type = None
+        pre_member_tracks = None
+        pre_parent_track = None
+        parent_name = None
+        child_names = None
+
         if action == "move" and len(args) >= 3:
             train, source, target = args[:3]
             land(train, target, "active")
@@ -472,8 +480,12 @@ def simulate_steps(initial_trains, steps, id_to_track, location=None):
         elif action == "combine" and len(args) >= 1:
             train = args[0]
             track = args[1] if len(args) >= 2 else None
+            pre_member_tracks = {}
             if "+" in train:
                 members = train.split("+")
+                for m in members:
+                    if m in trains:
+                        pre_member_tracks[m] = trains[m].get("track")
                 if track is None:
                     for m in members:
                         if m in trains and trains[m].get("track"):
@@ -493,12 +505,14 @@ def simulate_steps(initial_trains, steps, id_to_track, location=None):
         elif action == "split" and len(args) >= 1:
             parent = args[0]
             track = args[1] if len(args) >= 2 else None
+            pre_parent_track = trains.get(parent, {}).get("track") if parent in trains else None
             combined = trains.pop(parent, None)
             if combined is None and "+" in parent:
                 parent_set = set(parent.split("+"))
                 for key in list(trains):
                     if "+" in key and set(key.split("+")) == parent_set:
                         combined = trains.pop(key)
+                        pre_parent_track = pre_parent_track or combined.get("track")
                         break
             if track is None and combined:
                 track = combined.get("track")
@@ -509,6 +523,8 @@ def simulate_steps(initial_trains, steps, id_to_track, location=None):
                 if combined and combined.get("restSide"):
                     trains[child]["restSide"] = combined["restSide"]
             action_type = "split"
+            parent_name = parent
+            child_names = children
         elif action in ("move_aside_empty", "move_aside_occupied",
                         "move_bside_empty", "move_bside_occupied") and len(args) >= 3:
             train, source, target = args[:3]
@@ -522,6 +538,7 @@ def simulate_steps(initial_trains, steps, id_to_track, location=None):
             train, target = args[:2]
             land(train, target, "service")
             action_type = "service"
+            service_type = step.get("service_type")
         elif action in ("start_move", "end_move"):
             action_type = "wait"
         elif action in ("wait",):
@@ -529,7 +546,7 @@ def simulate_steps(initial_trains, steps, id_to_track, location=None):
         else:
             action_type = "service"
 
-        states.append({
+        state_entry = {
             "index": index,
             "action": action,
             "action_type": action_type,
@@ -537,7 +554,18 @@ def simulate_steps(initial_trains, steps, id_to_track, location=None):
             "raw": label,
             "trains": json.loads(json.dumps(trains)),
             "train_path": train_path,
-        })
+        }
+        if service_type is not None:
+            state_entry["service_type"] = service_type
+        if pre_member_tracks is not None:
+            state_entry["pre_member_tracks"] = pre_member_tracks
+        if pre_parent_track is not None:
+            state_entry["pre_parent_track"] = pre_parent_track
+        if parent_name is not None:
+            state_entry["parent_name"] = parent_name
+        if child_names is not None:
+            state_entry["child_names"] = child_names
+        states.append(state_entry)
 
     # Per-state track arrival order: for every track, list the trains on it sorted
     # by the state index at which each train most recently landed there. The train
@@ -624,7 +652,23 @@ def load_unit_images():
     return images
 
 
-def render_html(location_name, states, edges, layout, output_path, image_data_uri=None, image_width=None, image_height=None, track_meta=None, train_lengths=None, unit_images=None, train_units=None):
+PARTICLE_FILES = {"waterdrop": "waterdrop.jpg", "gears": "gears.jpg"}
+
+
+def load_particle_images():
+    """{name: uri} for every particle image that exists."""
+    images = {}
+    for name, filename in PARTICLE_FILES.items():
+        path = IMAGES_DIR / filename
+        if not path.exists():
+            continue
+        uri = encode_image_base64(path)
+        if uri is not None:
+            images[name] = uri
+    return images
+
+
+def render_html(location_name, states, edges, layout, output_path, image_data_uri=None, image_width=None, image_height=None, track_meta=None, train_lengths=None, unit_images=None, train_units=None, particle_images=None):
     payload = {
         "locationName": location_name,
         "states": states,
@@ -637,6 +681,7 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
         "trainLengths": train_lengths or {},
         "unitImages": unit_images or {},
         "trainUnits": train_units or {},
+        "particleImages": particle_images or {},
     }
     data_json = json.dumps(payload)
 
@@ -842,6 +887,7 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
       <g id="edges-layer"></g>
       <g id="nodes-layer"></g>
       <g id="train-layer"></g>
+      <g id="particles-layer"></g>
     </svg>
   </div>
   <div id="yard-legend"></div>
@@ -896,6 +942,250 @@ const allTrains = [...new Set(data.states.flatMap(s => Object.keys(s.trains)))]
   }});
 const trainColorMap = {{}};
 allTrains.forEach((t, i) => {{ trainColorMap[t] = TRAIN_COLORS[i % TRAIN_COLORS.length]; }});
+
+// ---- COLOR HELPERS ----
+function parseHex(h) {{
+  h = h.replace('#','');
+  if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+  return [parseInt(h.substring(0,2),16), parseInt(h.substring(2,4),16), parseInt(h.substring(4,6),16)];
+}}
+function toHex(r,g,b) {{
+  return '#' + [r,g,b].map(v => Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,'0')).join('');
+}}
+function lerpColor(a, b, t) {{
+  const ca = parseHex(a), cb = parseHex(b);
+  return toHex(ca[0]+(cb[0]-ca[0])*t, ca[1]+(cb[1]-ca[1])*t, ca[2]+(cb[2]-ca[2])*t);
+}}
+
+// ---- COMBINE / SPLIT ANIMATION ----
+let _animRaf = null;
+let _animStart = 0;
+let _animDuration = 3000;
+let _animType = null;  // 'combine' or 'split'
+let _animState = null;
+let _animFrameFn = null;
+
+function startCombineAnim(state) {{
+  _animType = 'combine'; _animStart = performance.now(); _animState = state;
+  _animFrameFn = drawCombineFrame;
+  if (!_animRaf) _animLoop();
+}}
+function startSplitAnim(state) {{
+  _animType = 'split'; _animStart = performance.now(); _animState = state;
+  _animFrameFn = drawSplitFrame;
+  if (!_animRaf) _animLoop();
+}}
+function cancelAnim() {{
+  if (_animRaf) {{ cancelAnimationFrame(_animRaf); _animRaf = null; }}
+  _animType = null; _animFrameFn = null;
+}}
+function _animLoop() {{
+  if (!_animType) return;
+  const elapsed = performance.now() - _animStart;
+  const t = Math.min(1, elapsed / _animDuration);
+  if (t < 1 && _animFrameFn) {{
+    _animFrameFn(t);
+    _animRaf = requestAnimationFrame(_animLoop);
+  }} else {{
+    _animType = null; _animFrameFn = null; _animRaf = null;
+    render(current);
+  }}
+}}
+
+function drawCombineFrame(t) {{
+  const state = _animState;
+  const trainName = state.train;
+  if (!trainName || !trainName.includes('+')) return;
+  const members = trainName.split('+');
+  const combinedColor = trainColorMap[trainName] || '#888888';
+  const layer = document.getElementById('train-layer');
+  layer.querySelectorAll('polyline[data-combine-member]').forEach(el => {{
+    const m = el.getAttribute('data-combine-member');
+    const origColor = trainColorMap[m] || '#888888';
+    el.setAttribute('stroke', lerpColor(origColor, combinedColor, t));
+  }});
+  layer.querySelectorAll('circle[data-combine-member]').forEach(el => {{
+    const m = el.getAttribute('data-combine-member');
+    const origColor = trainColorMap[m] || '#888888';
+    el.setAttribute('fill', lerpColor(origColor, combinedColor, t));
+  }});
+}}
+
+function drawSplitFrame(t) {{
+  const state = _animState;
+  const parentName = state.parent_name;
+  const childNames = state.child_names || [];
+  if (!parentName) return;
+  const parentColor = trainColorMap[parentName] || '#888888';
+  const layer = document.getElementById('train-layer');
+  layer.querySelectorAll('polyline[data-split-child]').forEach(el => {{
+    const c = el.getAttribute('data-split-child');
+    const childColor = trainColorMap[c] || '#888888';
+    el.setAttribute('stroke', lerpColor(parentColor, childColor, t));
+  }});
+  layer.querySelectorAll('circle[data-split-child]').forEach(el => {{
+    const c = el.getAttribute('data-split-child');
+    const childColor = trainColorMap[c] || '#888888';
+    el.setAttribute('fill', lerpColor(parentColor, childColor, t));
+  }});
+}}
+
+// ---- PARTICLE IMAGE PROCESSING ----
+const _processedParticleCache = {{}};
+function processParticleImage(uri) {{
+  if (!uri) return Promise.resolve(uri);
+  if (_processedParticleCache[uri]) return Promise.resolve(_processedParticleCache[uri]);
+  return new Promise(resolve => {{
+    const img = new Image();
+    img.onload = () => {{
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      const id = ctx.getImageData(0, 0, c.width, c.height);
+      const d = id.data;
+      for (let i = 0; i < d.length; i += 4) {{
+        if (d[i] > 230 && d[i+1] > 230 && d[i+2] > 230) d[i+3] = 0;
+      }}
+      ctx.putImageData(id, 0, 0);
+      const out = c.toDataURL('image/png');
+      _processedParticleCache[uri] = out;
+      resolve(out);
+    }};
+    img.onerror = () => resolve(uri);
+    img.src = uri;
+  }});
+}}
+let _particlesReady = false;
+function ensureParticleImages() {{
+  if (_particlesReady) return Promise.resolve();
+  const uris = data.particleImages || {{}};
+  const keys = Object.keys(uris);
+  return Promise.all(keys.map(k => processParticleImage(uris[k]))).then(results => {{
+    keys.forEach((k, i) => {{ data.particleImages[k] = results[i]; }});
+    _particlesReady = true;
+  }});
+}}
+
+// ---- PARTICLE SYSTEM ----
+const particles = [];
+let _particleRaf = null;
+let _serviceSpawn = null;  // trackId, serviceType, state, nextSpawn
+
+function Particle(x, y, vx, vy, size, imgUri, life) {{
+  this.x = x; this.y = y; this.vx = vx; this.vy = vy;
+  this.size = size; this.imgUri = imgUri;
+  this.life = life; this.maxLife = life;
+  this.opacity = 1;
+}}
+
+// Compute the fraction range a train occupies on a track (replicates updateYard anchor logic)
+function trainFractionsOnTrack(train, trackId, state) {{
+  const pos = positions[trackId];
+  const shape = pos && Array.isArray(pos.shape) && pos.shape.length >= 2 ? pos.shape : null;
+  if (!shape) return null;
+  const trainsOnTrack = [];
+  Object.keys(state.trains).forEach(t => {{
+    const info = state.trains[t];
+    if (info && info.track === trackId && info.status !== 'departed' && info.status !== 'absorbed') trainsOnTrack.push(t);
+  }});
+  const anchorA = [], anchorB = [];
+  trainsOnTrack.forEach(t => {{
+    const info = state.trains[t];
+    (info.restSide === 'a' ? anchorA : anchorB).push(t);
+  }});
+  let cum = 0;
+  for (const t of anchorA) {{
+    const end = Math.min(1, cum + trainRatio(t, trackId));
+    if (t === train) return [cum, end];
+    cum = end;
+  }}
+  let cumEnd = 1;
+  for (const t of anchorB) {{
+    const start = Math.max(0, cumEnd - trainRatio(t, trackId));
+    if (t === train) return [start, cumEnd];
+    cumEnd = start;
+  }}
+  return null;
+}}
+
+function spawnParticles(trackId, serviceType, state) {{
+  const MAX_PARTICLES = 15;
+  if (particles.length >= MAX_PARTICLES) return;
+  const pos = positions[trackId];
+  if (!pos) return;
+  const imgUri = serviceType === 'Monteur'
+    ? (data.particleImages.gears || null)
+    : (data.particleImages.waterdrop || null);
+  if (!imgUri) return;
+  let cx, cy;
+  const fracs = state ? trainFractionsOnTrack(state.train, trackId, state) : null;
+  if (fracs && pos.shape && pos.shape.length >= 2) {{
+    const pts = subPolyline(pos.shape, fracs[0], fracs[1]);
+    if (pts.length >= 2) {{
+      const mid = pts[Math.floor(pts.length / 2)];
+      cx = toSvgX(mid[0]); cy = toSvgY(mid[1]);
+    }} else {{
+      cx = toSvgX(pos.x); cy = toSvgY(pos.y);
+    }}
+  }} else {{
+    cx = toSvgX(pos.x); cy = toSvgY(pos.y);
+  }}
+  const isMonteur = serviceType === 'Monteur';
+  const batch = Math.min(3, MAX_PARTICLES - particles.length);
+  for (let i = 0; i < batch; i++) {{
+    const ox = (Math.random() - 0.5) * 30;
+    const oy = (Math.random() - 0.5) * 15;
+    const vx = (Math.random() - 0.5) * 0.3;
+    const vy = isMonteur ? -(0.2 + Math.random() * 0.4) : (0.2 + Math.random() * 0.4);
+    const size = isMonteur ? 16 + Math.random() * 10 : 14 + Math.random() * 8;
+    const life = 1200 + Math.random() * 800;
+    particles.push(new Particle(cx + ox, cy + oy, vx, vy, size, imgUri, life));
+  }}
+}}
+
+function updateParticles(now) {{
+  const layer = document.getElementById('particles-layer');
+  if (!layer) return;
+  if (!now) now = performance.now();
+  for (let i = particles.length - 1; i >= 0; i--) {{
+    const p = particles[i];
+    p.life -= 16;
+    if (p.life <= 0) {{ particles.splice(i, 1); continue; }}
+    p.x += p.vx; p.y += p.vy;
+    p.opacity = Math.min(1, p.life / (p.maxLife * 0.3));
+  }}
+  layer.innerHTML = '';
+  particles.forEach(p => {{
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+    el.setAttribute('href', p.imgUri);
+    el.setAttribute('x', p.x - p.size / 2);
+    el.setAttribute('y', p.y - p.size / 2);
+    el.setAttribute('width', p.size);
+    el.setAttribute('height', p.size);
+    el.setAttribute('opacity', p.opacity);
+    el.setAttribute('style', 'pointer-events:none');
+    layer.appendChild(el);
+  }});
+}}
+
+function _particleLoop(now) {{
+  if (!_serviceSpawn && particles.length === 0) {{ _particleRaf = null; return; }}
+  if (_serviceSpawn && now >= _serviceSpawn.nextSpawn) {{
+    spawnParticles(_serviceSpawn.trackId, _serviceSpawn.serviceType, _serviceSpawn.state);
+    _serviceSpawn.nextSpawn = now + 1500;
+  }}
+  updateParticles(now);
+  _particleRaf = requestAnimationFrame(_particleLoop);
+}}
+
+function stopParticles() {{
+  _serviceSpawn = null;
+  particles.length = 0;
+  const layer = document.getElementById('particles-layer');
+  if (layer) layer.innerHTML = '';
+  if (_particleRaf) {{ cancelAnimationFrame(_particleRaf); _particleRaf = null; }}
+}}
 
 function shortName(n) {{
   if (/^train_in_standing_\d+$/.test(n)) return n.replace(/^train_in_standing_(\d+)$/, 'Standing $1');
@@ -1354,6 +1644,71 @@ function updateYard(state, prevState) {{
       }});
     }}
   }});
+
+  // ---- ANIMATION OVERLAYS ----
+  // For combine: draw absorbed members' segments at the combined train's track,
+  // within the combined train's actual fraction range, colored with individual colors.
+  if (state.action_type === 'combine' && state.train && state.train.includes('+')) {{
+    const members = state.train.split('+');
+    const trackId = state.trains[state.train] && state.trains[state.train].track;
+    if (trackId) {{
+      const fracs = trainFractionsOnTrack(state.train, trackId, state);
+      const pos = positions[trackId];
+      const shape = pos && Array.isArray(pos.shape) && pos.shape.length >= 2 ? pos.shape : null;
+      if (fracs && shape) {{
+        const span = fracs[1] - fracs[0];
+        const totalMemberLen = members.reduce((s, m) => s + (data.trainLengths ? (data.trainLengths[m] || 0) : 0), 0);
+        let cum = fracs[0];
+        members.forEach(m => {{
+          const mLen = data.trainLengths ? (data.trainLengths[m] || 0) : 0;
+          const frac = totalMemberLen > 0 ? (mLen / totalMemberLen) * span : span / members.length;
+          const end = Math.min(fracs[1], cum + frac);
+          if (end > cum) {{
+            const color = trainColorMap[m] || '#888';
+            const pts = subPolyline(shape, cum, end);
+            if (pts.length >= 2) {{
+              const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+              poly.setAttribute('points', pts.map(p => toSvgX(p[0]) + ',' + toSvgY(p[1])).join(' '));
+              poly.setAttribute('fill', 'none');
+              poly.setAttribute('stroke', color);
+              poly.setAttribute('stroke-width', svgTrackWActive);
+              poly.setAttribute('stroke-linejoin', 'round');
+              poly.setAttribute('stroke-linecap', 'round');
+              poly.setAttribute('style', 'pointer-events:none');
+              poly.setAttribute('data-combine-member', m);
+              document.getElementById('train-layer').appendChild(poly);
+            }}
+          }}
+          cum = end;
+        }});
+      }}
+    }}
+  }}
+  // For split: draw parent's segment at the children's track,
+  // colored with the parent's color, so the animation can tween it.
+  if (state.action_type === 'split' && state.parent_name && state.child_names && state.child_names.length) {{
+    const childTrack = state.trains[state.child_names[0]] && state.trains[state.child_names[0]].track;
+    if (childTrack) {{
+      const pos = positions[childTrack];
+      const shape = pos && Array.isArray(pos.shape) && pos.shape.length >= 2 ? pos.shape : null;
+      const parentColor = trainColorMap[state.parent_name] || '#888';
+      if (shape) {{
+        const pts = subPolyline(shape, 0, 1);
+        if (pts.length >= 2) {{
+          const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+          poly.setAttribute('points', pts.map(p => toSvgX(p[0]) + ',' + toSvgY(p[1])).join(' '));
+          poly.setAttribute('fill', 'none');
+          poly.setAttribute('stroke', parentColor);
+          poly.setAttribute('stroke-width', svgTrackWActive);
+          poly.setAttribute('stroke-linejoin', 'round');
+          poly.setAttribute('stroke-linecap', 'round');
+          poly.setAttribute('style', 'pointer-events:none');
+          poly.setAttribute('data-split-child', state.parent_name);
+          document.getElementById('train-layer').appendChild(poly);
+        }}
+      }}
+    }}
+  }}
 }}
 
 // ---- TABLE ----
@@ -1474,6 +1829,25 @@ function render(idx) {{
 
   updateYard(state,prevState);
 
+  // ---- ANIMATION & PARTICLE LIFECYCLE ----
+  cancelAnim();
+  stopParticles();
+  if (atype === 'combine' && state.train && state.train.includes('+')) {{
+    startCombineAnim(state);
+  }} else if (atype === 'split' && state.parent_name) {{
+    startSplitAnim(state);
+  }}
+  if (atype === 'service' && state.service_type) {{
+    const svcTrack = state.trains[state.train] && state.trains[state.train].track;
+    if (svcTrack) {{
+      ensureParticleImages().then(() => {{
+        _serviceSpawn = {{ trackId: svcTrack, serviceType: state.service_type, state: state, nextSpawn: 0 }};
+        spawnParticles(svcTrack, state.service_type, state);
+        if (!_particleRaf) _particleRaf = requestAnimationFrame(_particleLoop);
+      }});
+    }}
+  }}
+
   document.querySelectorAll('.t-item').forEach((el,i)=>el.classList.toggle('current',i===current));
   const cur=document.querySelector('.t-item.current:not(.hidden)');
   if(cur) cur.scrollIntoView({{block:'nearest',behavior:'smooth'}});
@@ -1568,11 +1942,12 @@ def main():
 
     track_meta = {str(t["id"]): {"name": str(t["name"]), "parkingAllowed": t.get("parkingAllowed", False), "type": t.get("type", ""), "length": t.get("length", 0)} for t in location.get("trackParts", [])}
     unit_images = load_unit_images()
+    particle_images = load_particle_images()
     train_units = collect_train_units(scenario, states)
     render_html(Path(args.location).parent.name, states, edges, layout, args.output,
                 image_data_uri=image_data_uri, image_width=image_width, image_height=image_height,
                 track_meta=track_meta, train_lengths=train_lengths,
-                unit_images=unit_images, train_units=train_units)
+                unit_images=unit_images, train_units=train_units, particle_images=particle_images)
     print(f"Wrote visualizer to {args.output}")
     print(f"Steps: {len(steps)}; trains: {len(initial)}; yard nodes: {len(positions)}")
     print(f"Sprites loaded: {len(unit_images)} unit types; {len(train_units)} trains mapped")
