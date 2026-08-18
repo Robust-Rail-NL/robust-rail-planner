@@ -239,9 +239,9 @@ def entry_side_of(track_id, neighbor_id, location):
     for part in location.get("trackParts", []):
         if str(part.get("id")) != track_id:
             continue
-        if neighbor_id in part.get("aSide", []):
+        if neighbor_id in [str(x) for x in part.get("aSide", [])]:
             return "a"
-        if neighbor_id in part.get("bSide", []):
+        if neighbor_id in [str(x) for x in part.get("bSide", [])]:
             return "b"
         return None
     return None
@@ -477,7 +477,7 @@ def simulate_steps(initial_trains, steps, id_to_track, location=None):
             action_type = "depart"
             if "+" in train:
                 for member_id in train.split("+"):
-                    if member_id in trains:
+                    if member_id in trains and trains[member_id].get("status") != "absorbed":
                         trains[member_id]["status"] = "departed"
         elif action == "combine" and len(args) >= 1:
             train = args[0]
@@ -997,6 +997,7 @@ function startSplitAnim(state) {{
 function cancelAnim() {{
   if (_animRaf) {{ cancelAnimationFrame(_animRaf); _animRaf = null; }}
   _animType = null; _animFrameFn = null;
+  cancelMoveAnim();
 }}
 function _animLoop() {{
   if (!_animType) return;
@@ -1124,6 +1125,332 @@ function _departAnimLoop() {{
   const opacity = 1.0 - 0.9 * ((Math.sin(elapsed / 400) + 1) / 2);
   els.forEach(el => el.setAttribute('opacity', opacity.toFixed(3)));
   _departRaf = requestAnimationFrame(_departAnimLoop);
+}}
+
+// ---- MOVEMENT ANIMATION ----
+let _moveRaf = null;
+let _moveStart = 0;
+let _moveDuration = 1500;
+let _moveState = null;
+let _movePrevState = null;
+let _movePath = null;
+let _moveTotalLen = 0;
+let _moveFixedW = 60;
+let _moveUnits = [];
+let _moveAnimCompleted = false;
+let _moveAnimIdx = -1;
+let _moveTrackSegs = [];
+let _moveAnimFinished = false;
+
+function buildMovePath(train, state, prevState) {{
+  const trackIds = state.train_path && state.train_path[train];
+  if (!trackIds || trackIds.length < 1) return null;
+  const srcTrack = prevState && prevState.trains[train] ? prevState.trains[train].track : null;
+  let allTracks;
+  if (srcTrack && trackIds[0] !== srcTrack) {{
+    allTracks = [srcTrack].concat(trackIds);
+  }} else {{
+    allTracks = trackIds.slice();
+  }}
+  if (allTracks.length < 2) return null;
+  const combined = [];
+  _moveTrackSegs = [];
+  let distAcc = 0;
+  for (let i = 0; i < allTracks.length; i++) {{
+    const tid = allTracks[i];
+    const pos = positions[tid];
+    const shape = pos && Array.isArray(pos.shape) && pos.shape.length >= 2 ? pos.shape : null;
+    if (shape) {{
+      let pts;
+      if (i === 0) {{
+        const restSide = (prevState.trains[train] && prevState.trains[train].restSide) || 'b';
+        const ratio = trainRatio(train, tid);
+        const center = restSide === 'a' ? Math.min(ratio / 2, 0.99) : Math.max(1 - ratio / 2, 0.01);
+        const exitSide = edgeSideOf(tid, allTracks[1]);
+        if (exitSide === 'b') {{
+          pts = subPolyline(shape, Math.min(center, 0.99), 1);
+        }} else {{
+          pts = subPolyline(shape, 0, Math.max(center, 0.01));
+          if (pts.length >= 2) pts.reverse();
+        }}
+      }} else {{
+        const entrySide = edgeSideOf(tid, allTracks[i-1]);
+        pts = (entrySide === 'b') ? shape.slice().reverse() : shape.slice();
+      }}
+      if (pts && pts.length >= 2) {{
+        if (combined.length > 0) {{
+          const last = combined[combined.length - 1];
+          const first = pts[0];
+          if (Math.abs(last[0] - first[0]) < 0.01 && Math.abs(last[1] - first[1]) < 0.01) {{
+            pts.shift();
+          }}
+        }}
+        if (pts.length >= 2) {{
+          const segLen = polylineLength(pts);
+          _moveTrackSegs.push({{ trackId: tid, startDist: distAcc, endDist: distAcc + segLen }});
+          distAcc += segLen;
+          combined.push.apply(combined, pts);
+        }}
+      }}
+    }} else {{
+      const x = pos ? pos.x : 0;
+      const y = pos ? pos.y : 0;
+      if (combined.length === 0 || Math.abs(combined[combined.length-1][0] - x) > 0.01 || Math.abs(combined[combined.length-1][1] - y) > 0.01) {{
+        combined.push([x, y]);
+      }}
+    }}
+  }}
+  if (combined.length >= 2 && allTracks.length >= 2 && _moveTrackSegs.length > 0) {{
+    const destTrack = allTracks[allTracks.length - 1];
+    const fracs = trainFractionsOnTrack(train, destTrack, state);
+    if (fracs) {{
+      const destEntrySide = edgeSideOf(destTrack, allTracks[allTracks.length - 2]);
+      const frontFrac = destEntrySide === 'b' ? (1 - fracs[0]) : fracs[1];
+      if (frontFrac > 0.02 && frontFrac < 0.99) {{
+        const lastSeg = _moveTrackSegs[_moveTrackSegs.length - 1];
+        const segLen = lastSeg.endDist - lastSeg.startDist;
+        const maxDist = lastSeg.startDist + frontFrac * segLen;
+        const totalLen = polylineLength(combined);
+        if (totalLen > 0 && maxDist < totalLen) {{
+          const frac = maxDist / totalLen;
+          const truncated = subPolyline(combined, 0, frac);
+          if (truncated.length >= 2) {{
+            combined.length = 0;
+            combined.push.apply(combined, truncated);
+            lastSeg.endDist = maxDist;
+          }}
+        }}
+      }}
+    }}
+  }}
+  return combined.length >= 2 ? combined : null;
+}}
+
+function pointOnPath(polyline, dist) {{
+  if (!polyline || polyline.length < 2) return {{ x: 0, y: 0, angle: 0 }};
+  let acc = 0;
+  for (let i = 1; i < polyline.length; i++) {{
+    const a = polyline[i-1], b = polyline[i];
+    const seg = Math.hypot(b[0]-a[0], b[1]-a[1]);
+    if (seg <= 0) continue;
+    if (acc + seg >= dist) {{
+      const t = (dist - acc) / seg;
+      return {{
+        x: a[0] + (b[0]-a[0]) * t,
+        y: a[1] + (b[1]-a[1]) * t,
+        angle: Math.atan2(b[1]-a[1], b[0]-a[0]) * 180 / Math.PI
+      }};
+    }}
+    acc += seg;
+  }}
+  const last = polyline[polyline.length - 1];
+  const prev = polyline[polyline.length - 2];
+  return {{
+    x: last[0], y: last[1],
+    angle: Math.atan2(last[1]-prev[1], last[0]-prev[0]) * 180 / Math.PI
+  }};
+}}
+
+function startMoveAnim(state, prevState) {{
+  cancelMoveAnim();
+  const train = state.train;
+  if (!train) return;
+  const path = buildMovePath(train, state, prevState);
+  if (!path || path.length < 2) return;
+  _movePath = path;
+  _moveTotalLen = polylineLength(path);
+  if (_moveTotalLen <= 0) return;
+  _moveState = state;
+  _movePrevState = prevState;
+  const units = data.trainUnits ? data.trainUnits[train] : null;
+  const totalLen = data.trainLengths ? data.trainLengths[train] : 0;
+  if (units && units.length) {{
+    const unitTotal = units.reduce((s, u) => s + (u.length || 0), 0) || units.length;
+    _moveUnits = units.map(u => {{
+      const frac = (u.length || 0) > 0 ? u.length / unitTotal : 1 / units.length;
+      return {{ typePrefix: u.typePrefix, frac: frac, img: data.unitImages ? data.unitImages[u.typePrefix] : null }};
+    }});
+  }} else {{
+    _moveUnits = [];
+  }}
+  _moveFixedW = 60;
+  if (totalLen > 0 && _moveUnits.length) {{
+    const avgTrackLen = 800;
+    _moveFixedW = Math.max(30, Math.min(120, totalLen * (_moveTotalLen / avgTrackLen)));
+  }}
+  const trainEls = document.querySelectorAll('#train-layer [data-train="'+train+'"]');
+  trainEls.forEach(el => {{ el.setAttribute('data-move-hidden','1'); el.style.display='none'; }});
+  _moveStart = performance.now();
+  if (!_moveRaf) _moveMoveLoop();
+}}
+
+function cancelMoveAnim() {{
+  if (_moveRaf) {{ cancelAnimationFrame(_moveRaf); _moveRaf = null; }}
+  document.querySelectorAll('#train-layer [data-move-hidden]').forEach(el => {{
+    el.removeAttribute('data-move-hidden'); el.style.display='';
+  }});
+  document.querySelectorAll('#train-layer [data-move-anim]').forEach(el => el.remove());
+  document.querySelectorAll('#edges-layer line[data-move-hl]').forEach(el => {{
+    el.setAttribute('stroke','var(--yard-edge)'); el.setAttribute('stroke-width','1.5');
+    el.removeAttribute('data-move-hl');
+  }});
+  document.querySelectorAll('#nodes-layer .t-node[data-move-hl]').forEach(el => {{
+    el.removeAttribute('data-move-hl');
+  }});
+  _movePath = null; _moveState = null; _movePrevState = null; _moveUnits = []; _moveTrackSegs = [];
+}}
+
+function _moveMoveLoop() {{
+  if (!_movePath) return;
+  const elapsed = performance.now() - _moveStart;
+  const t = Math.min(1, elapsed / _moveDuration);
+  _moveDrawFrame(t);
+  if (t < 1) {{
+    _moveRaf = requestAnimationFrame(_moveMoveLoop);
+  }} else {{
+    _moveRaf = null;
+    _movePath = null;
+    _moveAnimCompleted = true;
+    _moveAnimIdx = current;
+    _moveAnimFinished = true;
+    render(current);
+  }}
+}}
+
+function _moveDrawFrame(t) {{
+  if (!_movePath || !_moveState) return;
+  const layer = document.getElementById('train-layer');
+  layer.querySelectorAll('[data-move-anim]').forEach(el => el.remove());
+  const train = _moveState.train;
+  const color = trainColorMap[train] || '#888';
+  const easeT = t < 0.5 ? 2*t*t : -1+(4-2*t)*t;
+  const frontDist = easeT * _moveTotalLen;
+
+  // Progressive node/edge highlighting
+  const passedTracks = new Set();
+  let currentSeg = null;
+  for (let s = 0; s < _moveTrackSegs.length; s++) {{
+    const seg = _moveTrackSegs[s];
+    if (seg.endDist <= frontDist) {{
+      passedTracks.add(seg.trackId);
+    }} else if (seg.startDist <= frontDist) {{
+      currentSeg = seg;
+    }}
+  }}
+  passedTracks.forEach(tid => {{
+    const pn = document.getElementById('node-'+tid.replace(/[^a-zA-Z0-9]/g,'_'));
+    if (pn && !pn.getAttribute('data-move-hl')) {{
+      pn.setAttribute('data-move-hl','1');
+      if (pn.getAttribute('data-shape')==='1') {{
+        pn.setAttribute('stroke', color); pn.setAttribute('stroke-width', svgTrackWActive);
+      }} else {{
+        pn.setAttribute('fill', color); pn.setAttribute('r', svgNodeRActive);
+      }}
+    }}
+  }});
+  const passedArr = Array.from(passedTracks);
+  for (let p = 0; p < passedArr.length - 1; p++) {{
+    const a = passedArr[p], b = passedArr[p+1];
+    document.querySelectorAll('#edges-layer line').forEach(l => {{
+      const ls = l.getAttribute('data-source'), lt = l.getAttribute('data-target');
+      if (((ls===a&&lt===b)||(ls===b&&lt===a)) && !l.getAttribute('data-move-hl')) {{
+        l.setAttribute('data-move-hl','1');
+        l.setAttribute('stroke', color); l.setAttribute('stroke-width', '3');
+      }}
+    }});
+  }}
+  // Highlight edge to current segment if any
+  if (currentSeg && passedArr.length > 0) {{
+    const lastPassed = passedArr[passedArr.length - 1];
+    document.querySelectorAll('#edges-layer line').forEach(l => {{
+      const ls = l.getAttribute('data-source'), lt = l.getAttribute('data-target');
+      if (((ls===lastPassed&&lt===currentSeg.trackId)||(ls===currentSeg.trackId&&lt===lastPassed)) && !l.getAttribute('data-move-hl')) {{
+        l.setAttribute('data-move-hl','1');
+        l.setAttribute('stroke', color); l.setAttribute('stroke-width', '3');
+      }}
+    }});
+  }}
+
+  // Draw trail (colored line along path up to front)
+  let trailAcc = 0;
+  for (let i = 1; i < _movePath.length; i++) {{
+    const a = _movePath[i-1], b = _movePath[i];
+    const segLen = Math.hypot(b[0]-a[0], b[1]-a[1]);
+    if (segLen <= 0) {{ trailAcc += segLen; continue; }}
+    if (trailAcc + segLen <= frontDist) {{
+      const trail = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      trail.setAttribute('x1', toSvgX(a[0])); trail.setAttribute('y1', toSvgY(a[1]));
+      trail.setAttribute('x2', toSvgX(b[0])); trail.setAttribute('y2', toSvgY(b[1]));
+      trail.setAttribute('stroke', color); trail.setAttribute('stroke-width', svgTrackWActive);
+      trail.setAttribute('stroke-linecap', 'round');
+      trail.setAttribute('style', 'pointer-events:none;opacity:0.4');
+      trail.setAttribute('data-move-anim','1');
+      layer.appendChild(trail);
+    }} else {{
+      const frac = Math.min(1, (frontDist - trailAcc) / segLen);
+      const trail = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      trail.setAttribute('x1', toSvgX(a[0])); trail.setAttribute('y1', toSvgY(a[1]));
+      trail.setAttribute('x2', toSvgX(a[0]+(b[0]-a[0])*frac));
+      trail.setAttribute('y2', toSvgY(a[1]+(b[1]-a[1])*frac));
+      trail.setAttribute('stroke', color); trail.setAttribute('stroke-width', svgTrackWActive);
+      trail.setAttribute('stroke-linecap', 'round');
+      trail.setAttribute('style', 'pointer-events:none;opacity:0.4');
+      trail.setAttribute('data-move-anim','1');
+      layer.appendChild(trail);
+      break;
+    }}
+    trailAcc += segLen;
+  }}
+
+  // Draw train sprites with constant size
+  const sampleD = 3;
+  if (_moveUnits.length > 0) {{
+    let unitOffset = 0;
+    _moveUnits.forEach(u => {{
+      const unitLen = _moveFixedW * u.frac * 0.6;
+      const unitStart = frontDist - unitOffset - unitLen;
+      const unitEnd = frontDist - unitOffset;
+      if (unitEnd < 0 || unitStart > _moveTotalLen) {{ unitOffset += unitLen; return; }}
+      const midD = Math.max(0, Math.min(_moveTotalLen, (unitStart + unitEnd) / 2));
+      const fwdD = Math.min(_moveTotalLen, midD + sampleD);
+      const pm = pointOnPath(_movePath, midD);
+      const pf = pointOnPath(_movePath, fwdD);
+      const cx = toSvgX(pm.x);
+      const cy = toSvgY(pm.y);
+      const deg = Math.atan2(pf.y - pm.y, pf.x - pm.x) * 180 / Math.PI;
+      const w = Math.max(10, unitLen);
+      if (u.img) {{
+        const h = Math.max(3, w * u.img.aspect);
+        const el = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+        el.setAttribute('href', u.img.uri);
+        el.setAttribute('x', -w/2); el.setAttribute('y', -h);
+        el.setAttribute('width', w); el.setAttribute('height', h);
+        el.setAttribute('transform', `translate(${{cx}},${{cy}}) rotate(${{deg}})`);
+        el.setAttribute('style', 'pointer-events:none');
+        if (train) el.setAttribute('data-train', train);
+        el.setAttribute('data-move-anim','1');
+        layer.appendChild(el);
+      }}
+      unitOffset += unitLen;
+    }});
+  }} else {{
+    const midDist = Math.max(0, frontDist - _moveFixedW * 0.3);
+    const pm = pointOnPath(_movePath, midDist);
+    const pf = pointOnPath(_movePath, Math.min(_moveTotalLen, frontDist));
+    const cx = toSvgX((pm.x + pf.x) / 2);
+    const cy = toSvgY((pm.y + pf.y) / 2);
+    const w = Math.max(10, _moveFixedW * 0.6);
+    const deg = Math.atan2(pf.y - pm.y, pf.x - pm.x) * 180 / Math.PI;
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    el.setAttribute('x', -w/2); el.setAttribute('y', -6);
+    el.setAttribute('width', w); el.setAttribute('height', 12);
+    el.setAttribute('rx', 3); el.setAttribute('fill', color);
+    el.setAttribute('transform', `translate(${{cx}},${{cy}}) rotate(${{deg}})`);
+    el.setAttribute('style', 'pointer-events:none');
+    if (train) el.setAttribute('data-train', train);
+    el.setAttribute('data-move-anim','1');
+    layer.appendChild(el);
+  }}
 }}
 
 // ---- PARTICLE IMAGE PROCESSING ----
@@ -1626,7 +1953,7 @@ function updateYard(state, prevState) {{
     if(!info||!info.track||(info.status==='departed'&&state.action_type!=='depart')||info.status==='absorbed') return;
     const color=trainColorMap[train];
     const trainPath = state.train_path && state.train_path[train];
-    if (trainPath && trainPath.length >= 2) {{
+    if (trainPath && trainPath.length >= 2 && !(_movePath && _moveState && _moveState.train === train)) {{
       const srcTrack = prevState && prevState.trains[train] ? prevState.trains[train].track : null;
       for (let i = 0; i < trainPath.length; i++) {{
         const tid = trainPath[i];
@@ -1878,6 +2205,7 @@ function updateSummary() {{
 
 function render(idx) {{
   current=Math.max(0,Math.min(data.states.length-1,idx));
+  if (current !== _moveAnimIdx) {{ _moveAnimCompleted = false; _moveAnimFinished = false; }}
   const state=data.states[current];
   const prevState=data.states[Math.max(0,current-1)];
   const atype=state.action_type||'initial';
@@ -1931,6 +2259,10 @@ function render(idx) {{
     prevEl.innerHTML=`<span class="prev-track">${{prev&&prev.track?trackName(prev.track):'-'}}</span>`;
   }});
 
+  if (_moveAnimFinished) {{
+    _moveAnimFinished = false;
+  }} else {{
+
   updateYard(state,prevState);
 
   // ---- ANIMATION & PARTICLE LIFECYCLE ----
@@ -1939,7 +2271,9 @@ function render(idx) {{
   cancelArrivalAnim();
   cancelDepartAnim();
   stopParticles();
-  if (atype === 'combine' && state.train && state.train.includes('+')) {{
+  if ((atype === 'move' || atype === 'move_to') && !(_moveAnimCompleted && _moveAnimIdx === current) && state.train && state.train_path && state.train_path[state.train] && state.train_path[state.train].length >= 2) {{
+    startMoveAnim(state, prevState);
+  }} else if (atype === 'combine' && state.train && state.train.includes('+')) {{
     startCombineAnim(state);
   }} else if (atype === 'split' && state.parent_name) {{
     startSplitAnim(state);
@@ -1959,6 +2293,8 @@ function render(idx) {{
         if (!_particleRaf) _particleRaf = requestAnimationFrame(_particleLoop);
       }});
     }}
+  }}
+
   }}
 
   document.querySelectorAll('.t-item').forEach((el,i)=>el.classList.toggle('current',i===current));
