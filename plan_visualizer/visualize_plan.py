@@ -1221,7 +1221,7 @@ function buildMovePath(train, state, prevState) {{
         }}
       }}
       if (nearFracs) {{
-        frontFrac = destEntrySide === 'b' ? (1 - nearFracs[0]) : nearFracs[1];
+        frontFrac = destEntrySide === 'b' ? (1 - nearFracs[1]) : nearFracs[0];
       }}
     }}
     if (frontFrac === null) {{
@@ -1233,7 +1233,9 @@ function buildMovePath(train, state, prevState) {{
     if (frontFrac !== null && frontFrac > 0.02 && frontFrac < 0.99) {{
       const lastSeg = _moveTrackSegs[_moveTrackSegs.length - 1];
       const segLen = lastSeg.endDist - lastSeg.startDist;
-      const maxDist = lastSeg.startDist + frontFrac * segLen;
+      const destShape = positions[destTrack] && Array.isArray(positions[destTrack].shape) ? positions[destTrack].shape : null;
+      const fullTrackLen = destShape ? polylineLength(destShape) : segLen;
+      const maxDist = lastSeg.startDist + frontFrac * fullTrackLen;
       const totalLen = polylineLength(combined);
       if (totalLen > 0 && maxDist < totalLen) {{
         const frac = maxDist / totalLen;
@@ -1969,7 +1971,7 @@ function updateYard(state, prevState) {{
               }}
             }});
             if (nearFracs) {{
-              if (entry === 'b') {{ fStart = nearFracs[0]; fEnd = 1; }} else {{ fStart = 0; fEnd = nearFracs[1]; }}
+              if (entry === 'b') {{ fStart = nearFracs[1]; fEnd = 1; }} else {{ fStart = 0; fEnd = nearFracs[0]; }}
             }} else {{
               const fracs = trainFractionsOnTrack(train, tid, state);
               if (fracs) {{
