@@ -1741,18 +1741,18 @@ def convert_plan(plan_file, scenario_file, location_file):
     for action in actions:
         su = action["shuntingUnit"]
         old_id = su["id"]
-        su["id"] = get_su_id(old_id)
+        su["id"] = get_su_id(_as_id(old_id))
         
         # Fix childIDs/parentIDs to use integer IDs
-        su["childIDs"] = [get_su_id(c) for c in su.get("childIDs", [])]
-        su["parentIDs"] = [get_su_id(c) for c in su.get("parentIDs", [])]
+        su["childIDs"] = [get_su_id(_as_id(c)) for c in su.get("childIDs", [])]
+        su["parentIDs"] = [get_su_id(_as_id(c)) for c in su.get("parentIDs", [])]
         
         # For combined SUs (from shunting_unit_composition), set members from composition
         if old_id in shunting_unit_composition:
             comp = shunting_unit_composition[old_id]
             if comp["memberIDs"]:
                 su["memberIDs"] = comp["memberIDs"]
-            su["parentIDs"] = [get_su_id(p) for p in comp.get("parentIDs", [])]
+            su["parentIDs"] = [get_su_id(_as_id(p)) for p in comp.get("parentIDs", [])]
     
     # Also map train_arrival_times keys. Actions carry integer SU ids produced
     # by get_su_id(_as_id(name)) (make_shunting_unit derives them from the name
