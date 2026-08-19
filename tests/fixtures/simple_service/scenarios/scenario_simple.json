@@ -41,7 +41,7 @@
             "lastParkingTrackPart": 3,
             "arrival": 1000,
             "departure": 1000,
-            "standingIndex": 0.0,
+            "standingIndex": null,
             "trainUnits": [
                 {
                     "typePrefix": "TestUnit",
