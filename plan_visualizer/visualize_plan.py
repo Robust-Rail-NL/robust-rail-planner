@@ -1181,7 +1181,7 @@ function buildMovePath(train, state, prevState) {{
         if (combined.length > 0) {{
           const last = combined[combined.length - 1];
           const first = pts[0];
-          if (Math.abs(last[0] - first[0]) < 0.01 && Math.abs(last[1] - first[1]) < 0.01) {{
+          if (Math.abs(last[0] - first[0]) < 0.01 && Math.abs(last[1] - first[1]) < 0.01 && pts.length > 2) {{
             pts.shift();
           }}
         }}
@@ -1202,23 +1202,46 @@ function buildMovePath(train, state, prevState) {{
   }}
   if (combined.length >= 2 && allTracks.length >= 2 && _moveTrackSegs.length > 0) {{
     const destTrack = allTracks[allTracks.length - 1];
-    const fracs = trainFractionsOnTrack(train, destTrack, state);
-    if (fracs) {{
-      const destEntrySide = edgeSideOf(destTrack, allTracks[allTracks.length - 2]);
-      const frontFrac = destEntrySide === 'b' ? (1 - fracs[0]) : fracs[1];
-      if (frontFrac > 0.02 && frontFrac < 0.99) {{
-        const lastSeg = _moveTrackSegs[_moveTrackSegs.length - 1];
-        const segLen = lastSeg.endDist - lastSeg.startDist;
-        const maxDist = lastSeg.startDist + frontFrac * segLen;
-        const totalLen = polylineLength(combined);
-        if (totalLen > 0 && maxDist < totalLen) {{
-          const frac = maxDist / totalLen;
-          const truncated = subPolyline(combined, 0, frac);
-          if (truncated.length >= 2) {{
-            combined.length = 0;
-            combined.push.apply(combined, truncated);
-            lastSeg.endDist = maxDist;
+    const destEntrySide = edgeSideOf(destTrack, allTracks[allTracks.length - 2]);
+    let frontFrac = null;
+    const destTrains = Object.keys(state.trains).filter(t => {{
+      const ti = state.trains[t];
+      return ti && ti.track === destTrack && t !== train && ti.status !== 'departed' && ti.status !== 'absorbed';
+    }});
+    if (destTrains.length > 0) {{
+      let nearFracs = null;
+      for (const t of destTrains) {{
+        const tf = trainFractionsOnTrack(t, destTrack, state);
+        if (tf) {{
+          if (destEntrySide === 'b') {{
+            if (!nearFracs || tf[1] > nearFracs[1]) nearFracs = tf;
+          }} else {{
+            if (!nearFracs || tf[0] < nearFracs[0]) nearFracs = tf;
           }}
+        }}
+      }}
+      if (nearFracs) {{
+        frontFrac = destEntrySide === 'b' ? (1 - nearFracs[0]) : nearFracs[1];
+      }}
+    }}
+    if (frontFrac === null) {{
+      const fracs = trainFractionsOnTrack(train, destTrack, state);
+      if (fracs) {{
+        frontFrac = destEntrySide === 'b' ? (1 - fracs[0]) : fracs[1];
+      }}
+    }}
+    if (frontFrac !== null && frontFrac > 0.02 && frontFrac < 0.99) {{
+      const lastSeg = _moveTrackSegs[_moveTrackSegs.length - 1];
+      const segLen = lastSeg.endDist - lastSeg.startDist;
+      const maxDist = lastSeg.startDist + frontFrac * segLen;
+      const totalLen = polylineLength(combined);
+      if (totalLen > 0 && maxDist < totalLen) {{
+        const frac = maxDist / totalLen;
+        const truncated = subPolyline(combined, 0, frac);
+        if (truncated.length >= 2) {{
+          combined.length = 0;
+          combined.push.apply(combined, truncated);
+          lastSeg.endDist = maxDist;
         }}
       }}
     }}
@@ -1325,51 +1348,6 @@ function _moveDrawFrame(t) {{
   const color = trainColorMap[train] || '#888';
   const easeT = t < 0.5 ? 2*t*t : -1+(4-2*t)*t;
   const frontDist = easeT * _moveTotalLen;
-
-  // Progressive node/edge highlighting
-  const passedTracks = new Set();
-  let currentSeg = null;
-  for (let s = 0; s < _moveTrackSegs.length; s++) {{
-    const seg = _moveTrackSegs[s];
-    if (seg.endDist <= frontDist) {{
-      passedTracks.add(seg.trackId);
-    }} else if (seg.startDist <= frontDist) {{
-      currentSeg = seg;
-    }}
-  }}
-  passedTracks.forEach(tid => {{
-    const pn = document.getElementById('node-'+tid.replace(/[^a-zA-Z0-9]/g,'_'));
-    if (pn && !pn.getAttribute('data-move-hl')) {{
-      pn.setAttribute('data-move-hl','1');
-      if (pn.getAttribute('data-shape')==='1') {{
-        pn.setAttribute('stroke', color); pn.setAttribute('stroke-width', svgTrackWActive);
-      }} else {{
-        pn.setAttribute('fill', color); pn.setAttribute('r', svgNodeRActive);
-      }}
-    }}
-  }});
-  const passedArr = Array.from(passedTracks);
-  for (let p = 0; p < passedArr.length - 1; p++) {{
-    const a = passedArr[p], b = passedArr[p+1];
-    document.querySelectorAll('#edges-layer line').forEach(l => {{
-      const ls = l.getAttribute('data-source'), lt = l.getAttribute('data-target');
-      if (((ls===a&&lt===b)||(ls===b&&lt===a)) && !l.getAttribute('data-move-hl')) {{
-        l.setAttribute('data-move-hl','1');
-        l.setAttribute('stroke', color); l.setAttribute('stroke-width', '3');
-      }}
-    }});
-  }}
-  // Highlight edge to current segment if any
-  if (currentSeg && passedArr.length > 0) {{
-    const lastPassed = passedArr[passedArr.length - 1];
-    document.querySelectorAll('#edges-layer line').forEach(l => {{
-      const ls = l.getAttribute('data-source'), lt = l.getAttribute('data-target');
-      if (((ls===lastPassed&&lt===currentSeg.trackId)||(ls===currentSeg.trackId&&lt===lastPassed)) && !l.getAttribute('data-move-hl')) {{
-        l.setAttribute('data-move-hl','1');
-        l.setAttribute('stroke', color); l.setAttribute('stroke-width', '3');
-      }}
-    }});
-  }}
 
   // Draw trail (colored line along path up to front)
   let trailAcc = 0;
@@ -1512,6 +1490,11 @@ function trainFractionsOnTrack(train, trackId, state) {{
     const info = state.trains[t];
     if (info && info.track === trackId && info.status !== 'departed' && info.status !== 'absorbed') trainsOnTrack.push(t);
   }});
+  const to = state.trackOrder || {{}};
+  if (to[trackId]) {{
+    const present = to[trackId].filter(t => trainsOnTrack.includes(t));
+    if (present.length === trainsOnTrack.length) {{ trainsOnTrack.length = 0; present.forEach(t => trainsOnTrack.push(t)); }}
+  }}
   const anchorA = [], anchorB = [];
   trainsOnTrack.forEach(t => {{
     const info = state.trains[t];
@@ -1971,9 +1954,32 @@ function updateYard(state, prevState) {{
             const exit = edgeSideOf(tid, trainPath[1]);
             if (exit === parked) {{ const sp = parkedSpan(tid, train, parked); fStart = sp[0]; fEnd = sp[1]; }}
           }} else if (isLast) {{
-            const parked = (info && info.restSide) || 'b';
             const entry = edgeSideOf(tid, trainPath[i-1]);
-            if (entry === parked) {{ const sp = parkedSpan(tid, train, parked); fStart = sp[0]; fEnd = sp[1]; }}
+            let nearFracs = null;
+            Object.keys(state.trains).forEach(t => {{
+              if (t === train) return;
+              const ti = state.trains[t];
+              if (!ti || ti.track !== tid || ti.status === 'departed' || ti.status === 'absorbed') return;
+              const tf = trainFractionsOnTrack(t, tid, state);
+              if (!tf) return;
+              if (entry === 'b') {{
+                if (!nearFracs || tf[1] > nearFracs[1]) nearFracs = tf;
+              }} else {{
+                if (!nearFracs || tf[0] < nearFracs[0]) nearFracs = tf;
+              }}
+            }});
+            if (nearFracs) {{
+              if (entry === 'b') {{ fStart = nearFracs[0]; fEnd = 1; }} else {{ fStart = 0; fEnd = nearFracs[1]; }}
+            }} else {{
+              const fracs = trainFractionsOnTrack(train, tid, state);
+              if (fracs) {{
+                if (entry === 'b') {{ fStart = fracs[0]; fEnd = 1; }} else {{ fStart = 0; fEnd = fracs[1]; }}
+              }} else {{
+                const parked = (info && info.restSide) || 'b';
+                const sp = parkedSpan(tid, train, parked);
+                if (entry === 'b') {{ fStart = sp[0]; fEnd = 1; }} else {{ fStart = 0; fEnd = sp[1]; }}
+              }}
+            }}
           }}
           drawTrainSegment(tid, fStart, fEnd, color, isLast ? svgTrackWActive : svgTrackWPrev);
         }} else if (pn) {{
@@ -2011,6 +2017,7 @@ function updateYard(state, prevState) {{
             const exit=edgeSideOf(src,exitNeighbor);
             let fStart=0,fEnd=1;
             if(exit===parked){{ const sp=parkedSpan(src,train,parked); fStart=sp[0]; fEnd=sp[1]; }}
+            else{{ const sp=parkedSpan(src,train,parked); if(exit==='b'){{ fStart=sp[1]; fEnd=1; }}else{{ fStart=0; fEnd=sp[0]; }} }}
             drawTrainSegment(src,fStart,fEnd,color,svgTrackWPrev);
           }} else {{
             const pn=document.getElementById('node-'+src.replace(/[^a-zA-Z0-9]/g,'_'));
