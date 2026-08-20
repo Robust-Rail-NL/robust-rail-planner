@@ -930,10 +930,13 @@ def convert_plan(plan_file, scenario_file, location_file):
 
     def _normalize_plan_line(plan_line):
         """Convert SymbolicPlanners `action(arg1, arg2)` to PDDL `(action arg1 arg2)` format."""
-        m = re.match(r"(\w[\w_]*)\((.+)\)$", plan_line)
+        m = re.match(r"(\w[\w_]*)\((.*)\)$", plan_line)
         if m:
             action = m.group(1)
-            args = re.split(r",\s*", m.group(2))
+            arguments = m.group(2)
+            if not arguments:
+                return f"({action})"
+            args = re.split(r",\s*", arguments)
             return "(" + action + " " + " ".join(args) + ")"
         return plan_line
 
