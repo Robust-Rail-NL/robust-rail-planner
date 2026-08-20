@@ -98,6 +98,7 @@ SPLIT_THREE_RE = re.compile(
 SERVICE_RE = re.compile(r"\(service_su ([^ ]+) ([^ ]+) ([^)]+)\)")
 MATCH_RE = re.compile(r"\(match ([^ ]+) ([^)]+)\)")
 ARRIVE_SU_RE = re.compile(r"\(arrive_su ([^ ]+) ([^)]+)\)")
+ENTER_YARD_SU_RE = re.compile(r"\(enter_yard_su ([^ ]+) ([^ ]+) ([^)]+)\)")
 UNCOUPLE_RE = re.compile(r"\(uncouple ([^ ]+) ([^)]+)\)")
 PARKING_FULFILL_RE = re.compile(
     r"\(parking_fulfill ([^ ]+) ([^ ]+) ([^ ]+) ([^)]+)\)"
@@ -112,6 +113,9 @@ COMPLETE_REQUEST_RE = re.compile(
     r"\(complete_request_composition ([^ ]+) ([^)]+)\)"
 )
 COMPILED_ADVANCE_RE = re.compile(r"\(compiled_advance_request_\d+\)")
+COMPILED_START_RE = re.compile(
+    r"\(compiled_start_request ([^ ]+) ([^ ]+) ([^ ]+) ([^)]+)\)"
+)
 
 
 COMBINE_DURATION = 180
@@ -747,6 +751,7 @@ def convert_plan(plan_file, scenario_file, location_file):
     train_locations = {}  # Track where each train is currently located
     train_arrival_times = {}  # Track when trains arrive
     shunting_unit_composition = {}  # Track composition of shunting units
+    su_identity = {}  # PDDL request SU name -> existing physical SU name
     actions = []
     
     # SU ID mapping: internal name -> sequential integer ID
@@ -771,6 +776,18 @@ def convert_plan(plan_file, scenario_file, location_file):
             su_name_to_int[name] = next_su_id
             next_su_id += 1
         return su_name_to_int[name]
+
+    def _resolve_su(name):
+        """Return the physical SU represented by a PDDL request alias."""
+        return su_identity.get(name, name)
+
+    def _set_request_departure(su_id, request_su):
+        """Assign the request's departure time to its physical SU."""
+        request_name = request_su[3:] if request_su.startswith("su_") else request_su
+        if request_name in request_lookup:
+            departure = request_lookup[request_name].get("arrival")
+            if departure is not None:
+                su_departure_time[su_id] = int(departure)
 
     def _clock(name):
         """Resolve an SU name to its clock key (kept for parity with the
@@ -925,12 +942,51 @@ def convert_plan(plan_file, scenario_file, location_file):
             su_next_free[_clock(su_id)] = max(su_next_free.get(_clock(su_id), arrival), arrival)
             continue
 
+        m = ENTER_YARD_SU_RE.match(line)
+        if m:
+            su_id, entry, target = m.groups()
+            entry_id = convert_track(entry, track_lookup, track_id_lookup)["id"]
+            target_id = convert_track(target, track_lookup, track_id_lookup)["id"]
+            path = expand_path([entry_id, target_id], a_adj, b_adj, switch_ids)
+            duration = compute_move_duration(
+                path,
+                a_adj,
+                b_adj,
+                switch_costs,
+                get_reversal_duration(su_id, train_lookup),
+            )
+            start_time, end_time = _schedule_move(su_id, path, duration)
+            actions.append(
+                create_move_action(
+                    su_id,
+                    start_time,
+                    end_time,
+                    path,
+                    train_lookup,
+                    track_id_lookup,
+                    unit_lookup,
+                )
+            )
+            train_locations[su_id] = target_id
+            continue
+
+        m = COMPILED_START_RE.match(line)
+        if m:
+            source_su, unit, request_su, track = m.groups()
+            source_su = _resolve_su(source_su)
+            su_identity[request_su] = source_su
+            _set_request_departure(source_su, request_su)
+            train_locations[source_su] = convert_track(
+                track, track_lookup, track_id_lookup
+            )["id"]
+            continue
+
         # --------------------------------
         # START MOVE / START MOVE SU
         # --------------------------------
         m = START_MOVE_SU_RE.match(line)
         if m:
-            train = m.group(1)
+            train = _resolve_su(m.group(1))
             su_start = su_next_free.get(_clock(train), 0)
             if train in train_arrival_times:
                 su_start = max(su_start, train_arrival_times[train])
@@ -982,6 +1038,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         m = MOVE_SU_RE.match(line)
         if m:
             train, from_track, to_track = m.groups()
+            train = _resolve_su(train)
             
             if train not in active_trains:
                 su_start = current_time
@@ -1009,6 +1066,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         m = END_MOVE_SU_RE.match(line)
         if m:
             train, track = m.groups()
+            train = _resolve_su(train)
             
             if train in active_trains:
                 state = active_trains[train]
@@ -1050,6 +1108,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         m = PARK_SU_RE.match(line)
         if m:
             train, unit, parking_slot, track = m.groups()
+            train = _resolve_su(train)
             track_id = convert_track(track, track_lookup, track_id_lookup)["id"]
             
             if train in active_trains:
@@ -1112,6 +1171,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         m = PARKING_FULFILL_RE.match(line)
         if m:
             su_id, unit, parking_slot, track = m.groups()
+            su_id = _resolve_su(su_id)
             track_id = convert_track(track, track_lookup, track_id_lookup)["id"]
             waiting_on_messages[su_id] = parking_slot
             ready_time = su_next_free.get(_clock(su_id), 0)
@@ -1141,7 +1201,7 @@ def convert_plan(plan_file, scenario_file, location_file):
              or COMPILED_DEPART_FOR_REQUEST_RE.match(line))
         if m:
             groups = m.groups()
-            train = groups[0]
+            train = _resolve_su(groups[0])
             track = groups[-1] if len(groups) > 2 else groups[1]
 
             # Bound here, not inside the branch below: a train that departs
@@ -1431,6 +1491,9 @@ def convert_plan(plan_file, scenario_file, location_file):
         m = ADOPT_COMPOSITION_RE.match(line)
         if m:
             source_su, request_su, track = m.groups()
+            source_su = _resolve_su(source_su)
+            su_identity[request_su] = source_su
+            _set_request_departure(source_su, request_su)
             track_id = convert_track(track, track_lookup, track_id_lookup)["id"]
 
             # The arrived, serviced source SU becomes the departing request SU.
