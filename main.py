@@ -6,6 +6,7 @@ resulting plan back to TORS JSON. The three stages live in convert_to_pddl/,
 plan/ and convert_plan_to_tors/ respectively; this module only chains them.
 """
 import argparse
+import importlib
 import json
 import os
 import subprocess
@@ -20,7 +21,6 @@ REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 # tests do.
 sys.path.insert(0, REPO_ROOT)
 
-from convert_to_pddl.corridor_no_switch_unlimited_order_servicing_discrete_compiled_matching.convert import create_instance_from_scenario  # noqa: E402
 from convert_plan_to_tors.convert_to_tors import convert_plan, ScheduleInfeasibleError  # noqa: E402
 from plan.validate_plan import validate_plan  # noqa: E402
 
@@ -31,9 +31,22 @@ PLANNER_SCRIPTS = {
     "enhsp": os.path.join(PLAN_DIR, "enhsp_planner.jl"),
 }
 
+# The --variant values map onto the convert_to_pddl/ subfolder for that PDDL
+# model; everything else in the pipeline is variant-agnostic.
+CONVERTER_MODULES = {
+    "compiled_matching": (
+        "convert_to_pddl.corridor_no_switch_unlimited_order_servicing_discrete_compiled_matching.convert"
+    ),
+    "compiled_matching_no_bumpers": (
+        "convert_to_pddl."
+        "corridor_no_switch_unlimited_order_servicing_discrete_compiled_matching_no_bumpers.convert"
+    ),
+}
 
-def convert_to_pddl(location_path, scenario_path, domain_out, problem_out):
-    create_instance_from_scenario(
+
+def convert_to_pddl(location_path, scenario_path, domain_out, problem_out, variant="compiled_matching"):
+    converter = importlib.import_module(CONVERTER_MODULES[variant])
+    converter.create_instance_from_scenario(
         location_file=location_path,
         scenario_file=scenario_path,
         domain_file=domain_out,
@@ -72,6 +85,9 @@ def main():
         choices=["symbolic", "symbolic-rail", "enhsp"],
         default="symbolic",
     )
+    parser.add_argument("--variant",
+                        choices=sorted(CONVERTER_MODULES), default="compiled_matching",
+                        help="which PDDL model to convert the scenario to")
     # Required, though the help text used to promise stdout when omitted: the
     # Julia planner inherits this process's stdout and prints progress to it, so
     # a plan written there would arrive interleaved with search output and be
@@ -86,7 +102,7 @@ def main():
     problem_pddl = os.path.join(tmp_dir, "problem.pddl")
     raw_plan = os.path.join(tmp_dir, "plan.pddl")
 
-    convert_to_pddl(args.location, args.scenario, domain_pddl, problem_pddl)
+    convert_to_pddl(args.location, args.scenario, domain_pddl, problem_pddl, variant=args.variant)
     run_planner(domain_pddl, problem_pddl, args.planner, raw_plan)
 
     if not validate_plan(domain_pddl, problem_pddl, raw_plan):
