@@ -116,6 +116,12 @@ COMPILED_ADVANCE_RE = re.compile(r"\(compiled_advance_request_\d+\)")
 COMPILED_START_RE = re.compile(
     r"\(compiled_start_request ([^ ]+) ([^ ]+) ([^ ]+) ([^)]+)\)"
 )
+COMPILED_UNCOUPLE_RE = re.compile(
+    r"\(compiled_uncouple_(front|back) ([^ ]+) ([^ ]+) ([^ ]+) ([^)]+)\)"
+)
+COMPILED_COUPLE_RE = re.compile(
+    r"\(compiled_couple_(front|back) ([^ ]+) ([^ ]+) ([^ ]+) ([^)]+)\)"
+)
 
 
 COMBINE_DURATION = 180
@@ -753,6 +759,8 @@ def convert_plan(plan_file, scenario_file, location_file):
     shunting_unit_composition = {}  # Track composition of shunting units
     su_identity = {}  # PDDL request SU name -> existing physical SU name
     actions = []
+    next_generated_su = 1000000
+    # Reserve a separate ID range for SUs created by split and coupling actions.
     
     # SU ID mapping: internal name -> sequential integer ID
     su_name_to_int = {}
@@ -780,6 +788,35 @@ def convert_plan(plan_file, scenario_file, location_file):
     def _resolve_su(name):
         """Return the physical SU represented by a PDDL request alias."""
         return su_identity.get(name, name)
+
+    def _members_for(su_id):
+        """Return the train-unit IDs currently contained in an SU."""
+        if su_id in shunting_unit_composition:
+            return list(shunting_unit_composition[su_id]["memberIDs"])
+        if su_id in train_lookup:
+            return _member_ids(train_lookup[su_id]["members"])
+        if isinstance(su_id, str) and su_id.startswith("su_unit"):
+            unit = unit_lookup.get("unit" + su_id[len("su_unit"):])
+            if unit:
+                return [_as_id(unit)]
+        return []
+
+    def _generated_su(member_ids, parent_ids):
+        """Create an SU identity for the result of a split or coupling."""
+        nonlocal next_generated_su
+        su_id = next_generated_su
+        next_generated_su += 1
+        shunting_unit_composition[su_id] = {
+            "memberIDs": list(member_ids),
+            "parentIDs": list(parent_ids),
+        }
+        return su_id
+
+    def _append_su_action(action, su_id):
+        """Attach the current SU identity and members to a TORS action."""
+        action["shuntingUnit"]["id"] = su_id
+        action["shuntingUnit"]["memberIDs"] = _members_for(su_id)
+        actions.append(action)
 
     def _set_request_departure(su_id, request_su):
         """Assign the request's departure time to its physical SU."""
@@ -1079,7 +1116,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                 duration = compute_move_duration(expanded_path, a_adj, b_adj, switch_costs, get_reversal_duration(train, train_lookup))
                 if len(expanded_path) > 1:
                     start_time, end_time = _schedule_move(train, expanded_path, duration)
-                    actions.append(
+                    _append_su_action(
                         create_move_action(
                             train,
                             start_time,
@@ -1088,7 +1125,8 @@ def convert_plan(plan_file, scenario_file, location_file):
                             train_lookup,
                             track_id_lookup,
                             unit_lookup
-                        )
+                        ),
+                        train,
                     )
                 else:
                     _close_hold(train, su_next_free.get(_clock(train), current_time))
@@ -1121,7 +1159,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                 duration = compute_move_duration(expanded_path, a_adj, b_adj, switch_costs, get_reversal_duration(train, train_lookup))
                 if len(expanded_path) > 1:
                     start_time, end_time = _schedule_move(train, expanded_path, duration)
-                    actions.append(
+                    _append_su_action(
                         create_move_action(
                             train,
                             start_time,
@@ -1130,7 +1168,8 @@ def convert_plan(plan_file, scenario_file, location_file):
                             train_lookup,
                             track_id_lookup,
                             unit_lookup
-                        )
+                        ),
+                        train,
                     )
                 else:
                     _close_hold(train, su_next_free.get(_clock(train), current_time))
@@ -1188,7 +1227,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                 standing_type="OutStanding",
                 track_id_lookup=track_id_lookup
             )
-            actions.append(exit_action)
+            _append_su_action(exit_action, su_id)
             su_next_free[_clock(su_id)] = exit_time + 1
             current_time = max(current_time, exit_time + 1)
             continue
@@ -1225,7 +1264,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                     duration = compute_move_duration(expanded_path, a_adj, b_adj, switch_costs, get_reversal_duration(train, train_lookup))
                     if len(expanded_path) > 1:
                         start_time, end_time = _schedule_move(train, expanded_path, duration)
-                        actions.append(
+                        _append_su_action(
                             create_move_action(
                                 train,
                                 start_time,
@@ -1234,7 +1273,8 @@ def convert_plan(plan_file, scenario_file, location_file):
                                 train_lookup,
                                 track_id_lookup,
                                 unit_lookup
-                            )
+                            ),
+                            train,
                         )
                     else:
                         _close_hold(train, su_next_free.get(_clock(train), current_time))
@@ -1293,9 +1333,133 @@ def convert_plan(plan_file, scenario_file, location_file):
                 unit_lookup,
                 track_id_lookup=track_id_lookup
             )
-            actions.append(exit_action)
+            _append_su_action(exit_action, train)
             su_next_free[_clock(train)] = exit_time + 1
             current_time = max(current_time, exit_time + 1)
+            continue
+
+        m = COMPILED_UNCOUPLE_RE.match(line)
+        if m:
+            side, parent_name, child_name, unit, track = m.groups()
+            # Resolve the parent and verify that the requested unit is at the selected end.
+            parent_su = _resolve_su(parent_name)
+            parent_members = _members_for(parent_su)
+            unit_id = _as_id(unit)
+            expected_unit = parent_members[0] if side == "front" else parent_members[-1]
+            if unit_id != expected_unit:
+                raise ValueError(f"{line} does not remove the {side} unit")
+
+            remaining_members = (
+                parent_members[1:] if side == "front" else parent_members[:-1]
+            )
+            # Represent the detached unit and remaining composition as new physical SUs.
+            detached_su = _generated_su([unit_id], [parent_su])
+            remaining_su = _generated_su(remaining_members, [parent_su])
+            child_ids = (
+                [detached_su, remaining_su]
+                if side == "front"
+                else [remaining_su, detached_su]
+            )
+            track_id = convert_track(track, track_lookup, track_id_lookup)["id"]
+            split_duration = get_train_duration(
+                parent_name, train_lookup, unit_lookup, "split"
+            )
+            # Schedule the split when the parent and its track are available.
+            start_time = earliest_start(
+                [track_id], su_next_free.get(_clock(parent_su), 0), split_duration
+            )
+            end_time = start_time + split_duration
+            split_action = create_split_action(
+                parent_su,
+                child_ids,
+                start_time,
+                end_time,
+                track_id,
+                train_lookup,
+                unit_lookup,
+            )
+            split_action["shuntingUnit"]["id"] = parent_su
+            split_action["shuntingUnit"]["memberIDs"] = parent_members
+            split_action["shuntingUnit"]["childIDs"] = child_ids
+            actions.append(split_action)
+            _close_hold(parent_su, start_time)
+            reserve([track_id], start_time, end_time + 1)
+
+            # Later actions use the corresponding remaining or detached physical SU.
+            su_identity[parent_name] = remaining_su
+            su_identity[child_name] = detached_su
+            train_locations[remaining_su] = track_id
+            train_locations[detached_su] = track_id
+            su_next_free[_clock(parent_su)] = end_time + 1
+            su_next_free[_clock(remaining_su)] = end_time + 1
+            su_next_free[_clock(detached_su)] = end_time + 1
+            active_trains.pop(parent_su, None)
+            current_time = max(current_time, end_time + 1)
+            continue
+
+        m = COMPILED_COUPLE_RE.match(line)
+        if m:
+            side, source_name, unit, request_name, track = m.groups()
+            # Resolve aliases and verify that the source is the requested single unit.
+            source_su = _resolve_su(source_name)
+            request_su = _resolve_su(request_name)
+            source_members = _members_for(source_su)
+            request_members = _members_for(request_su)
+            unit_id = _as_id(unit)
+            if source_members != [unit_id]:
+                raise ValueError(f"{line} does not couple a single-unit source")
+
+            # Preserve front/back unit order in the resulting composition.
+            if side == "front":
+                parent_ids = [source_su, request_su]
+                combined_members = source_members + request_members
+            else:
+                parent_ids = [request_su, source_su]
+                combined_members = request_members + source_members
+
+            result_su = _generated_su(combined_members, parent_ids)
+            track_id = convert_track(track, track_lookup, track_id_lookup)["id"]
+            combine_duration = max(
+                get_train_duration(source_name, train_lookup, unit_lookup, "combine"),
+                get_train_duration(request_name, train_lookup, unit_lookup, "combine"),
+            )
+            # Coupling starts only when both parents and the track are available.
+            start_time = earliest_start(
+                [track_id],
+                max(
+                    su_next_free.get(_clock(source_su), 0),
+                    su_next_free.get(_clock(request_su), 0),
+                ),
+                combine_duration,
+            )
+            end_time = start_time + combine_duration
+            combine_actions, _ = create_combine_action(
+                parent_ids,
+                result_su,
+                start_time,
+                end_time,
+                track_id,
+                train_lookup,
+                unit_lookup,
+            )
+            # TORS records one Combine action per parent, both linked to the result.
+            for combine_action, parent_su in zip(combine_actions, parent_ids):
+                combine_action["shuntingUnit"]["id"] = parent_su
+                combine_action["shuntingUnit"]["memberIDs"] = _members_for(parent_su)
+                combine_action["shuntingUnit"]["childIDs"] = [result_su]
+                actions.append(combine_action)
+            _close_hold(source_su, start_time)
+            _close_hold(request_su, start_time)
+            reserve([track_id], start_time, end_time + 1)
+
+            # Later request actions use the newly combined physical SU.
+            su_identity[request_name] = result_su
+            train_locations[result_su] = track_id
+            _set_request_departure(result_su, request_name)
+            su_next_free[_clock(source_su)] = end_time + 1
+            su_next_free[_clock(request_su)] = end_time + 1
+            su_next_free[_clock(result_su)] = end_time + 1
+            current_time = max(current_time, end_time + 1)
             continue
 
         # --------------------------------
