@@ -15,11 +15,6 @@ An AI Planning approach to solving the TUSPwSS.
   - `enhsp_planner.jl`: shells out to the ENHSP jar (`ENHSP_JAR` env var, defaults to `/opt/enhsp/enhsp.jar`).
   - `Project.toml` / `Manifest.toml`: pinned Julia dependencies (`PDDL`, `SymbolicPlanners`).
 - `convert_plan_to_tors/convert_to_tors.py`: converts a raw `.plan` (PDDL planner output) back into TORS JSON, given the original scenario and location files.
-- `plan_visualizer/`: web-based visualizer for scenarios and plans.
-  - `run_existing_visualizer.py`: local server with a location/scenario/plan picker.
-  - `visualize_plan.py`: renders a scenario + plan into a standalone HTML page.
-  - `layout_editor.py`: browser-based editor for track-layout position files.
-  - `layouts/`: track-position JSON per location, used to place tracks on the canvas.
 - `data/`: sample location and example scenarios. **Pre-unification and currently unusable** — string ids, `in` as an object, no `trainUnitTypes` — so the converters reject them. Use `tests/fixtures/simple_service/` (migrated and schema-validated) or the sibling `scenario-planning-inputs` repo instead, until these are migrated or dropped.
 - `Dockerfile`: builds the distributable image (`ENTRYPOINT ["python3", "main.py"]`) — this is what other tools in the pipeline run.
 - `.devcontainer/`: VS Code dev container config, see [Dev container](#dev-container) below.
@@ -66,32 +61,6 @@ python run_planner.py --dry-run              # print the docker commands only
 It writes `plan_<name>.json` into each location's `plans/` folder — the same
 convention `run_evaluator.py` already reads from.
 
-### The visualizer, from the same image
-
-The image serves the plan visualizer as well. Pass `visualizer` as the first
-argument; anything starting with a flag still goes to the planner, so
-`run_planner.py` is unaffected. Mount the whole inputs repo rather than a single
-location, since the picker lists them all:
-
-```
-cd ../scenario-planning-inputs
-docker run --rm -p 8767:8767 \
-  --user $(id -u):$(id -g) \
-  --mount type=bind,source=$PWD,target=/app/database \
-  planner:latest visualizer \
-  --inputs-root /app/database --output-dir /app/database/tmp_plans
-```
-
-Then open <http://127.0.0.1:8767>. It binds `0.0.0.0` inside the container so the
-published port works; run it natively (`python plan_visualizer/run_existing_visualizer.py`)
-and it stays on `127.0.0.1`.
-
-`--output-dir` should point inside the mount — generated HTML written anywhere
-else disappears with the container. The picker lists each location's
-`scenarios/` and `plans/`, plus the classified corpus under
-`fixtures/{feasible,infeasible,unresolved}/`, as paths relative to the location
-so you can tell which bucket an entry came from.
-
 ### Running natively, without Docker
 
 Requires Julia (with the `PDDL` and `SymbolicPlanners` packages from
@@ -131,21 +100,6 @@ Discrete/corridor variants add `--precompute-matching` and/or
 `--matching-variant N` flags — pass `-h` to any `convert.py` to see what it
 accepts.
 
-### Plan visualizer
-
-```
-python plan_visualizer/run_existing_visualizer.py --port 8767
-```
-Open `http://127.0.0.1:8767`, pick a location/scenario/plan (read from the
-sibling `scenario-planning-inputs/Location_*/` folders) and click
-**Generate & View**.
-
-To edit or create a track-layout file (the `layouts/*.json` files that place
-tracks on the canvas):
-```
-python plan_visualizer/layout_editor.py --location-name Location_KleineBinckhorst --port 8766
-```
-
 ## Dev container
 
 Open this folder in VS Code (or Cursor) and **Reopen in Container**. A few
@@ -164,7 +118,7 @@ things worth knowing:
 - The `julialang.language-julia` and `ms-python.python` extensions, plus the
   Claude Code feature, are installed automatically.
 - Because the full toolchain lives inside the container, run everything —
-  `main.py`, individual converters, the visualizer — from an integrated
+  `main.py`, individual converters — from an integrated
   terminal inside the dev container rather than trying to replicate Julia/JDK/
   ENHSP on the host.
 - When you need the actual artifact external tools consume (e.g. what
