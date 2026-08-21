@@ -659,14 +659,22 @@ def compute_move_duration(expanded_path, a_adj, b_adj, switch_costs=None, revers
 
 
 def get_reversal_duration(train, train_lookup):
-    """ReversalDuration for a train: max across its composed member types (0 if unknown)."""
+    """ReversalDuration for a train: max across its composed member types (0 if unknown).
+
+    Matches the solver's ShuntTrain.ReversalDuration: backNormTime + carriages *
+    backAdditionTime per type (there is no standalone reversalDuration field on the
+    wire; the solver derives it the same way).
+    """
     entry = train_lookup.get(train)
     if not entry:
         return 0
     durations = []
     for t in entry.get("member_types", []):
         try:
-            durations.append(int(t.get("reversalDuration", 0) or 0))
+            back_norm_time = int(t.get("backNormTime", 0) or 0)
+            back_addition_time = int(t.get("backAdditionTime", 0) or 0)
+            carriages = int(t.get("carriages", 0) or 0)
+            durations.append(back_norm_time + carriages * back_addition_time)
         except (TypeError, ValueError):
             durations.append(0)
     return max(durations, default=0)
