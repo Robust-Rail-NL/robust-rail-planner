@@ -17,8 +17,7 @@
                                 "combineDuration": "180",
                                 "splitDuration": "120",
                                 "backNormTime": "120",
-                                "backAdditionTime": "16",
-                                "reversalDuration": "0"
+                                "backAdditionTime": "16"
                             }
                         },
                         "tasks": [
@@ -50,8 +49,7 @@
                                 "combineDuration": "180",
                                 "splitDuration": "120",
                                 "backNormTime": "120",
-                                "backAdditionTime": "16",
-                                "reversalDuration": "0"
+                                "backAdditionTime": "16"
                             }
                         },
                         "tasks": [
@@ -74,8 +72,7 @@
                                 "combineDuration": "180",
                                 "splitDuration": "120",
                                 "backNormTime": "120",
-                                "backAdditionTime": "16",
-                                "reversalDuration": "0"
+                                "backAdditionTime": "16"
                             }
                         },
                         "tasks": []
@@ -99,8 +96,7 @@
                                 "combineDuration": "180",
                                 "splitDuration": "120",
                                 "backNormTime": "120",
-                                "backAdditionTime": "16",
-                                "reversalDuration": "0"
+                                "backAdditionTime": "16"
                             }
                         },
                         "tasks": []
@@ -126,8 +122,7 @@
                             "combineDuration": "180",
                             "splitDuration": "120",
                             "backNormTime": "120",
-                            "backAdditionTime": "16",
-                            "reversalDuration": "0"
+                            "backAdditionTime": "16"
                         },
                         "id": ""
                     }
@@ -149,8 +144,7 @@
                             "combineDuration": "180",
                             "splitDuration": "120",
                             "backNormTime": "120",
-                            "backAdditionTime": "16",
-                            "reversalDuration": "0"
+                            "backAdditionTime": "16"
                         },
                         "id": ""
                     }
@@ -172,8 +166,7 @@
                             "combineDuration": "180",
                             "splitDuration": "120",
                             "backNormTime": "120",
-                            "backAdditionTime": "16",
-                            "reversalDuration": "0"
+                            "backAdditionTime": "16"
                         },
                         "id": ""
                     },
@@ -185,8 +178,7 @@
                             "combineDuration": "180",
                             "splitDuration": "120",
                             "backNormTime": "120",
-                            "backAdditionTime": "16",
-                            "reversalDuration": "0"
+                            "backAdditionTime": "16"
                         },
                         "id": ""
                     }
