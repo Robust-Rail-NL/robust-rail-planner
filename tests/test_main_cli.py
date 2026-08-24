@@ -11,13 +11,16 @@ import pytest
 from conftest import LOCATION_FILE, REPO_ROOT, SCENARIO_FILE, requires_julia
 
 
-def _run_main(output_file, scenario=SCENARIO_FILE):
+def _run_main(output_file, scenario=SCENARIO_FILE, variant="compiled_matching"):
+    cmd = [sys.executable, os.path.join(REPO_ROOT, "main.py"),
+           "--location", LOCATION_FILE,
+           "--scenario", scenario,
+           "--planner", "symbolic",
+           "--output", str(output_file)]
+    if variant:
+        cmd += ["--variant", variant]
     return subprocess.run(
-        [sys.executable, os.path.join(REPO_ROOT, "main.py"),
-         "--location", LOCATION_FILE,
-         "--scenario", scenario,
-         "--planner", "symbolic",
-         "--output", str(output_file)],
+        cmd,
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
@@ -70,6 +73,28 @@ def test_main_output_validates_against_the_plan_schema(tmp_path):
 
 
 @requires_julia
+def test_main_no_bumpers_variant_produces_a_valid_tors_plan(tmp_path):
+    """The no_bumpers corridor model is selectable via --variant and its plan
+    converts to a valid, deadline-respecting TORS plan like the base model."""
+    output_file = tmp_path / "plan.json"
+    result = _run_main(output_file, variant="compiled_matching_no_bumpers")
+
+    assert result.returncode == 0, result.stderr
+    assert output_file.exists()
+
+    tors_plan = json.loads(output_file.read_text())
+    assert tors_plan["actions"], "expected at least one action in the produced plan"
+    assert tors_plan["actions"][0]["taskType"]["predefined"] == "Arrive"
+    assert tors_plan["actions"][-1]["taskType"].get("predefined") == "Exit"
+
+    scenario = json.loads(open(SCENARIO_FILE).read())
+    latest_exit = max(int(a["startTime"]) for a in tors_plan["actions"]
+                      if a["taskType"].get("predefined") == "Exit")
+    latest_requested = max(int(r["departure"]) for r in scenario["out"])
+    assert latest_exit <= latest_requested
+
+
+@requires_julia
 def test_main_plan_ends_with_an_exit(tmp_path):
     """A plan that stops before the departure is not a solution.
 
@@ -86,17 +111,6 @@ def test_main_plan_ends_with_an_exit(tmp_path):
 
 
 @requires_julia
-@pytest.mark.xfail(
-    reason="The PDDL model sequences actions and costs movement, but nothing "
-           "ties a departure to the request's `departure` time, so the planner "
-           "has no reason to be punctual. On this fixture the Exit lands at "
-           "1803 against a requested 1000. Measured the same way on both real "
-           "locations, where the evaluator rejects with \"Trains's departure "
-           "mismatch with Action start/end time\": SimpleService 2902 vs 2000, "
-           "KleineBinckhorst 6301 vs 5400. This is the cheap local proxy for a "
-           "defect that otherwise needs a tors run. See SCHEMA_STATUS.md.",
-    strict=True,
-)
 def test_plan_meets_its_departure_deadlines(tmp_path):
     """No train should leave later than the request asked for.
 
@@ -151,3 +165,31 @@ def test_main_rejects_an_unsolvable_scenario(tmp_path):
 
     assert result.returncode != 0
     assert not output_file.exists()
+
+
+@requires_julia
+def test_main_writes_the_infeasible_plan_before_failing(tmp_path):
+    """A plan that misses a departure deadline must still leave its partial
+    TORS output behind for inspection, while exiting non-zero so the pipeline
+    still treats the run as failed."""
+    scenario = json.loads(open(SCENARIO_FILE).read())
+    # Impossible deadline: the train cannot be cleaned, moved and exited by
+    # second 10. The discrete PDDL model has no temporal deadline, so the
+    # planner still finds a plan; only the converter's deadline check trips.
+    scenario["out"][0]["arrival"] = 10
+    scenario["out"][0]["departure"] = 10
+    scenario_path = tmp_path / "scenario_deadline.json"
+    scenario_path.write_text(json.dumps(scenario))
+
+    output_file = tmp_path / "plan.json"
+    result = _run_main(output_file, scenario=str(scenario_path))
+
+    assert result.returncode != 0
+    assert "INFEASIBLE" in result.stderr
+    assert "wrote the infeasible plan" in result.stderr
+    assert output_file.exists()
+
+    plan = json.loads(output_file.read_text())
+    assert plan["schemaVersion"] == 1
+    assert plan["actions"], "expected the partial plan to carry its actions"
+    assert plan["actions"][0]["taskType"]["predefined"] == "Arrive"
