@@ -2,11 +2,40 @@ import argparse
 import base64
 import json
 import re
+import struct
 from pathlib import Path
 
 
 ACTION_RE = re.compile(r"^\s*(?:\d+(?:\.\d+)?:\s*)?\(([^)]+)\)")
 CALL_RE = re.compile(r"^\s*([A-Za-z_][\w-]*)\((.*)\)\s*$")
+
+IMAGES_DIR = Path(__file__).resolve().parent / "Images"
+
+# Unit type -> sprite file. Only these four have dedicated art for now.
+SPRITE_FILES = {
+    "ICR": "icr_rijtuig_ATP.png",
+    "SLT": "slt_treinstel.png",
+    "SNG": "sng_rijtuig_ATP.png",
+    "VIRM": "virm_treinstel.png",
+}
+
+# Types without their own sprite reuse one of the above until better art exists.
+SPRITE_FALLBACKS = {
+    "DDZ": "VIRM",
+    "FFF": "SLT",
+    "ICM": "ICR",
+    "ICNG": "ICR",
+    "SGMM": "SLT",
+}
+
+# Which way the sprite's front points inside its own image: +1 = right (+x),
+# -1 = left, 0 = symmetric so orientation does not matter.
+SPRITE_FRONT = {
+    "ICR": 0,
+    "SLT": 0,
+    "SNG": 1,
+    "VIRM": -1,
+}
 
 
 def load_json(path):
@@ -103,10 +132,12 @@ def parse_plan(path, id_to_track=None):
 
 def task_type_name(action):
     task_type = action.get("taskType", {})
-    if "predefined" in task_type:
-        return task_type["predefined"]
-    if "other" in task_type:
-        return task_type["other"]
+    predefined = task_type.get("predefined")
+    other = task_type.get("other")
+    if predefined:
+        return predefined
+    if other:
+        return other
     return str(task_type)
 
 
@@ -197,7 +228,7 @@ def parse_solver_plan(path, id_to_track=None):
             label = "Park" if action_name == "park" else "Depart"
             steps.append({"raw": f"{action.get('startTime')}: {label} {train} @ {display(track)}", "action": action_name, "args": [train, track], "path": path_raw})
         else:
-            steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: {task_name} {train} @ {display(track)}", "action": "service", "args": [train, track], "path": path_raw})
+            steps.append({"raw": f"{action.get('startTime')}..{action.get('endTime')}: {task_name} {train} @ {display(track)}", "action": "service", "args": [train, track], "path": path_raw, "service_type": task_name})
     return steps
 
 
@@ -208,9 +239,9 @@ def entry_side_of(track_id, neighbor_id, location):
     for part in location.get("trackParts", []):
         if str(part.get("id")) != track_id:
             continue
-        if neighbor_id in part.get("aSide", []):
+        if neighbor_id in [str(x) for x in part.get("aSide", [])]:
             return "a"
-        if neighbor_id in part.get("bSide", []):
+        if neighbor_id in [str(x) for x in part.get("bSide", [])]:
             return "b"
         return None
     return None
@@ -341,6 +372,44 @@ def collect_train_lengths(scenario, plan_path, states):
     return result
 
 
+def member_type_map(scenario):
+    """member id -> typePrefix for every unit a plan can materialize."""
+    if not isinstance(scenario, dict):
+        return {}
+    types = {}
+    for train in list(scenario.get("in") or []) + list(scenario.get("inStanding") or []):
+        for member in train.get("members", []) or []:
+            unit_id = member.get("id")
+            if unit_id is not None:
+                types[str(unit_id)] = member.get("typePrefix")
+    return types
+
+
+def collect_train_units(scenario, states):
+    """Map train name -> list of {typePrefix, length}, in member-name order.
+
+    The order matters: the JS lays sprites out along the track from the rest
+    anchor, so the first member sits nearest the wall the train rests against.
+    """
+    member_types = member_type_map(scenario)
+    if not member_types:
+        return {}
+    lengths = member_lengths_from_scenario(scenario)
+    names = set()
+    for state in states:
+        names.update(state.get("trains", {}).keys())
+    result = {}
+    for name in names:
+        units = []
+        for part in str(name).split("+"):
+            type_prefix = member_types.get(part)
+            if type_prefix:
+                units.append({"typePrefix": type_prefix, "length": lengths.get(part, 0)})
+        if units:
+            result[name] = units
+    return result
+
+
 def simulate_steps(initial_trains, steps, id_to_track, location=None):
     states = [{"index": 0, "action": "initial", "action_type": "initial", "train": None, "raw": "Initial state", "trains": json.loads(json.dumps(initial_trains))}]
     trains = json.loads(json.dumps(initial_trains))
@@ -371,6 +440,12 @@ def simulate_steps(initial_trains, steps, id_to_track, location=None):
         else:
             train_path = {}
 
+        service_type = None
+        pre_member_tracks = None
+        pre_parent_track = None
+        parent_name = None
+        child_names = None
+
         if action == "move" and len(args) >= 3:
             train, source, target = args[:3]
             land(train, target, "active")
@@ -386,12 +461,14 @@ def simulate_steps(initial_trains, steps, id_to_track, location=None):
         elif action == "park" and len(args) >= 2:
             train, track = args[:2]
             land(train, track, "parked")
+            trains[train]["wasParked"] = True
             action_type = "park"
             if "+" in train:
                 for member_id in train.split("+"):
                     if member_id in trains:
                         trains[member_id]["track"] = to_track_id(track, id_to_track, {})
                         trains[member_id]["status"] = "parked"
+                        trains[member_id]["wasParked"] = True
                         if trains[train].get("restSide"):
                             trains[member_id]["restSide"] = trains[train]["restSide"]
         elif action == "depart" and len(args) >= 2:
@@ -400,13 +477,17 @@ def simulate_steps(initial_trains, steps, id_to_track, location=None):
             action_type = "depart"
             if "+" in train:
                 for member_id in train.split("+"):
-                    if member_id in trains:
+                    if member_id in trains and trains[member_id].get("status") != "absorbed":
                         trains[member_id]["status"] = "departed"
         elif action == "combine" and len(args) >= 1:
             train = args[0]
             track = args[1] if len(args) >= 2 else None
+            pre_member_tracks = {}
             if "+" in train:
                 members = train.split("+")
+                for m in members:
+                    if m in trains:
+                        pre_member_tracks[m] = trains[m].get("track")
                 if track is None:
                     for m in members:
                         if m in trains and trains[m].get("track"):
@@ -426,12 +507,14 @@ def simulate_steps(initial_trains, steps, id_to_track, location=None):
         elif action == "split" and len(args) >= 1:
             parent = args[0]
             track = args[1] if len(args) >= 2 else None
+            pre_parent_track = trains.get(parent, {}).get("track") if parent in trains else None
             combined = trains.pop(parent, None)
             if combined is None and "+" in parent:
                 parent_set = set(parent.split("+"))
                 for key in list(trains):
                     if "+" in key and set(key.split("+")) == parent_set:
                         combined = trains.pop(key)
+                        pre_parent_track = pre_parent_track or combined.get("track")
                         break
             if track is None and combined:
                 track = combined.get("track")
@@ -442,6 +525,8 @@ def simulate_steps(initial_trains, steps, id_to_track, location=None):
                 if combined and combined.get("restSide"):
                     trains[child]["restSide"] = combined["restSide"]
             action_type = "split"
+            parent_name = parent
+            child_names = children
         elif action in ("move_aside_empty", "move_aside_occupied",
                         "move_bside_empty", "move_bside_occupied") and len(args) >= 3:
             train, source, target = args[:3]
@@ -455,6 +540,7 @@ def simulate_steps(initial_trains, steps, id_to_track, location=None):
             train, target = args[:2]
             land(train, target, "service")
             action_type = "service"
+            service_type = step.get("service_type")
         elif action in ("start_move", "end_move"):
             action_type = "wait"
         elif action in ("wait",):
@@ -462,7 +548,7 @@ def simulate_steps(initial_trains, steps, id_to_track, location=None):
         else:
             action_type = "service"
 
-        states.append({
+        state_entry = {
             "index": index,
             "action": action,
             "action_type": action_type,
@@ -470,7 +556,41 @@ def simulate_steps(initial_trains, steps, id_to_track, location=None):
             "raw": label,
             "trains": json.loads(json.dumps(trains)),
             "train_path": train_path,
-        })
+        }
+        if service_type is not None:
+            state_entry["service_type"] = service_type
+        if pre_member_tracks is not None:
+            state_entry["pre_member_tracks"] = pre_member_tracks
+        if pre_parent_track is not None:
+            state_entry["pre_parent_track"] = pre_parent_track
+        if parent_name is not None:
+            state_entry["parent_name"] = parent_name
+        if child_names is not None:
+            state_entry["child_names"] = child_names
+        states.append(state_entry)
+
+    # Per-state track arrival order: for every track, list the trains on it sorted
+    # by the state index at which each train most recently landed there. The train
+    # that has been on the track longest keeps the wall spot; later arrivals stack
+    # behind it instead of swapping places.
+    def landing_index(state_index, train_name):
+        track = states[state_index]["trains"][train_name]["track"]
+        j = state_index
+        while j > 0:
+            prev_track = states[j - 1]["trains"].get(train_name, {}).get("track")
+            if prev_track != track:
+                return j
+            j -= 1
+        return 0
+
+    for i, state in enumerate(states):
+        arrivals = {}
+        for train_name, info in state["trains"].items():
+            track = info.get("track")
+            if track and info.get("status") not in ("departed", "absorbed"):
+                arrivals.setdefault(track, []).append((landing_index(i, train_name), train_name))
+        state["trackOrder"] = {track: [t for _, t in sorted(lst)] for track, lst in arrivals.items()}
+
     return states
 
 
@@ -497,7 +617,60 @@ def encode_image_base64(image_path):
     return f"data:{mime};base64,{data}"
 
 
-def render_html(location_name, states, edges, layout, output_path, image_data_uri=None, image_width=None, image_height=None, track_meta=None, train_lengths=None):
+def png_dimensions(path):
+    """(width, height) read from the PNG header, or (0, 0) for a non-PNG file."""
+    with open(path, "rb") as handle:
+        header = handle.read(24)
+    if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n":
+        return 0, 0
+    return struct.unpack(">II", header[16:24])
+
+
+def load_unit_images():
+    """{typePrefix: {"uri", "aspect", "flip"}} for every sprite that exists.
+
+    Types without their own sprite are resolved to their fallback here, so the
+    JS never has to map unknown types itself. `aspect` is h/w (used to size the
+    sprite so its width covers the unit's track fraction); `flip` is True when
+    the sprite faces left in its own image.
+    """
+    images = {}
+    for type_prefix, filename in SPRITE_FILES.items():
+        path = IMAGES_DIR / filename
+        if not path.exists():
+            continue
+        uri = encode_image_base64(path)
+        if uri is None:
+            continue
+        width, height = png_dimensions(path)
+        images[type_prefix] = {
+            "uri": uri,
+            "aspect": (height / width) if width else 1.0,
+            "flip": SPRITE_FRONT.get(type_prefix) == -1,
+        }
+    for type_prefix, fallback in SPRITE_FALLBACKS.items():
+        if fallback in images and type_prefix not in images:
+            images[type_prefix] = images[fallback]
+    return images
+
+
+PARTICLE_FILES = {"waterdrop": "waterdrop.jpg", "gears": "gears.jpg"}
+
+
+def load_particle_images():
+    """{name: uri} for every particle image that exists."""
+    images = {}
+    for name, filename in PARTICLE_FILES.items():
+        path = IMAGES_DIR / filename
+        if not path.exists():
+            continue
+        uri = encode_image_base64(path)
+        if uri is not None:
+            images[name] = uri
+    return images
+
+
+def render_html(location_name, states, edges, layout, output_path, image_data_uri=None, image_width=None, image_height=None, track_meta=None, train_lengths=None, unit_images=None, train_units=None, particle_images=None):
     payload = {
         "locationName": location_name,
         "states": states,
@@ -508,6 +681,9 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
         "imageHeight": image_height,
         "trackMeta": track_meta or {},
         "trainLengths": train_lengths or {},
+        "unitImages": unit_images or {},
+        "trainUnits": train_units or {},
+        "particleImages": particle_images or {},
     }
     data_json = json.dumps(payload)
 
@@ -577,7 +753,7 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
       --btn-bg: #1e2333; --btn-border: #2a2f42; --btn-fg: #e2e8f8; --btn-hover: #2a2f42;
       --play-bg: #3b82f6; --play-hover: #2563eb;
       --yard-bg: #141824; --yard-edge: #2a2f42; --yard-node: #374151;
-    }}
+}}
 
     body {{ font-family: system-ui, sans-serif; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; overflow: hidden; font-size: 13px; transition: background 0.2s, color 0.2s; }}
 
@@ -602,10 +778,13 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
     .action-badge {{ padding: 2px 10px; border-radius: 20px; font-size: 11px; font-weight: 600; }}
 
     /* YARD MAP */
-    #yard-panel {{ background: var(--yard-bg); border-bottom: 1px solid var(--border); flex-shrink: 0; padding: 8px 20px; display: flex; align-items: center; gap: 12px; }}
+    #yard-panel {{ background: var(--yard-bg); border-bottom: 1px solid var(--border); flex: 1; padding: 8px 20px; display: flex; align-items: center; gap: 12px; min-height: 0; }}
+    #yard-panel.panel-open {{ flex: none; height: 50vh; }}
+    #panel-toggle {{ background: var(--surface); border-bottom: 1px solid var(--border); text-align: center; padding: 4px 0; cursor: pointer; flex-shrink: 0; font-size: 14px; color: var(--muted); user-select: none; }}
+    #panel-toggle:hover {{ background: var(--action-bar-bg); }}
     #yard-label {{ font-size: 11px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; white-space: nowrap; }}
-    #yard-svg-wrap {{ flex: 1; overflow: hidden; }}
-    #yard-svg {{ width: 100%; display: block; }}
+    #yard-svg-wrap {{ flex: 1; overflow: hidden; min-height: 0; align-self: stretch; }}
+    #yard-svg {{ width: 100%; height: 100%; display: block; }}
     #yard-legend {{ display: flex; flex-direction: column; gap: 4px; flex-shrink: 0; }}
     .yard-leg {{ display: flex; align-items: center; gap: 5px; font-size: 10px; color: var(--muted); white-space: nowrap; }}
     .yard-leg-dot {{ width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }}
@@ -710,16 +889,31 @@ def render_html(location_name, states, edges, layout, output_path, image_data_ur
   <div id="yard-label">Yard map</div>
   <div id="yard-svg-wrap">
     <svg id="yard-svg" height="120" viewBox="0 0 1000 120" preserveAspectRatio="xMidYMid meet">
+      <defs>
+        <filter id="greenTint" color-interpolation-filters="sRGB">
+          <feFlood flood-color="#059669" flood-opacity="0.5" result="flood"/>
+          <feComposite in="flood" in2="SourceGraphic" operator="in" result="mask"/>
+          <feBlend in="SourceGraphic" in2="mask" mode="multiply"/>
+        </filter>
+        <filter id="greenTintPulse" color-interpolation-filters="sRGB">
+          <feFlood id="greenTintPulseFlood" flood-color="#059669" flood-opacity="0.5" result="flood"/>
+          <feComposite in="flood" in2="SourceGraphic" operator="in" result="mask"/>
+          <feBlend in="SourceGraphic" in2="mask" mode="multiply"/>
+        </filter>
+      </defs>
       <g id="edges-layer"></g>
       <g id="nodes-layer"></g>
       <g id="train-layer"></g>
+      <g id="particles-layer"></g>
     </svg>
   </div>
   <div id="yard-legend"></div>
   <div id="node-tooltip"><span class="tt-name"></span><span class="tt-type"></span><span class="tt-parking"></span></div>
 </div>
 
-<main>
+<div id="panel-toggle" onclick="toggleBottom()"><span id="toggle-arrow">▲</span></div>
+
+<main id="bottom-panel" style="display:none">
   <div id="table-wrap">
     <table>
       <thead>
@@ -767,6 +961,637 @@ const allTrains = [...new Set(data.states.flatMap(s => Object.keys(s.trains)))]
   }});
 const trainColorMap = {{}};
 allTrains.forEach((t, i) => {{ trainColorMap[t] = TRAIN_COLORS[i % TRAIN_COLORS.length]; }});
+
+// ---- COLOR HELPERS ----
+function parseHex(h) {{
+  h = h.replace('#','');
+  if (h.length === 3) h = h[0]+h[0]+h[1]+h[1]+h[2]+h[2];
+  return [parseInt(h.substring(0,2),16), parseInt(h.substring(2,4),16), parseInt(h.substring(4,6),16)];
+}}
+function toHex(r,g,b) {{
+  return '#' + [r,g,b].map(v => Math.max(0,Math.min(255,Math.round(v))).toString(16).padStart(2,'0')).join('');
+}}
+function lerpColor(a, b, t) {{
+  const ca = parseHex(a), cb = parseHex(b);
+  return toHex(ca[0]+(cb[0]-ca[0])*t, ca[1]+(cb[1]-ca[1])*t, ca[2]+(cb[2]-ca[2])*t);
+}}
+
+// ---- COMBINE / SPLIT ANIMATION ----
+let _animRaf = null;
+let _animStart = 0;
+let _animDuration = 3000;
+let _animType = null;  // 'combine' or 'split'
+let _animState = null;
+let _animFrameFn = null;
+
+function startCombineAnim(state) {{
+  _animType = 'combine'; _animStart = performance.now(); _animState = state;
+  _animFrameFn = drawCombineFrame;
+  if (!_animRaf) _animLoop();
+}}
+function startSplitAnim(state) {{
+  _animType = 'split'; _animStart = performance.now(); _animState = state;
+  _animFrameFn = drawSplitFrame;
+  if (!_animRaf) _animLoop();
+}}
+function cancelAnim() {{
+  if (_animRaf) {{ cancelAnimationFrame(_animRaf); _animRaf = null; }}
+  _animType = null; _animFrameFn = null;
+  cancelMoveAnim();
+}}
+function _animLoop() {{
+  if (!_animType) return;
+  const elapsed = performance.now() - _animStart;
+  const t = Math.min(1, elapsed / _animDuration);
+  if (t < 1 && _animFrameFn) {{
+    _animFrameFn(t);
+    _animRaf = requestAnimationFrame(_animLoop);
+  }} else {{
+    _animType = null; _animFrameFn = null; _animRaf = null;
+    render(current);
+  }}
+}}
+
+function drawCombineFrame(t) {{
+  const state = _animState;
+  const trainName = state.train;
+  if (!trainName || !trainName.includes('+')) return;
+  const members = trainName.split('+');
+  const combinedColor = trainColorMap[trainName] || '#888888';
+  const layer = document.getElementById('train-layer');
+  layer.querySelectorAll('polyline[data-combine-member]').forEach(el => {{
+    const m = el.getAttribute('data-combine-member');
+    const origColor = trainColorMap[m] || '#888888';
+    el.setAttribute('stroke', lerpColor(origColor, combinedColor, t));
+  }});
+  layer.querySelectorAll('circle[data-combine-member]').forEach(el => {{
+    const m = el.getAttribute('data-combine-member');
+    const origColor = trainColorMap[m] || '#888888';
+    el.setAttribute('fill', lerpColor(origColor, combinedColor, t));
+  }});
+}}
+
+function drawSplitFrame(t) {{
+  const state = _animState;
+  const parentName = state.parent_name;
+  const childNames = state.child_names || [];
+  if (!parentName) return;
+  const parentColor = trainColorMap[parentName] || '#888888';
+  const layer = document.getElementById('train-layer');
+  layer.querySelectorAll('polyline[data-split-child]').forEach(el => {{
+    const c = el.getAttribute('data-split-child');
+    const childColor = trainColorMap[c] || '#888888';
+    el.setAttribute('stroke', lerpColor(parentColor, childColor, t));
+  }});
+  layer.querySelectorAll('circle[data-split-child]').forEach(el => {{
+    const c = el.getAttribute('data-split-child');
+    const childColor = trainColorMap[c] || '#888888';
+    el.setAttribute('fill', lerpColor(parentColor, childColor, t));
+  }});
+}}
+
+// ---- PARK PULSE ANIMATION ----
+let _parkRaf = null;
+let _parkStart = 0;
+let _parkTrainName = null;
+function startParkPulse(trainName) {{
+  _parkTrainName = trainName;
+  _parkStart = performance.now();
+  document.querySelectorAll(`#train-layer image[data-train="${{trainName}}"]`).forEach(el => el.setAttribute('filter', 'url(#greenTintPulse)'));
+  if (!_parkRaf) _parkPulseLoop();
+}}
+function cancelParkPulse() {{
+  if (_parkRaf) {{ cancelAnimationFrame(_parkRaf); _parkRaf = null; }}
+  if (_parkTrainName) {{
+    document.querySelectorAll(`#train-layer image[data-train="${{_parkTrainName}}"]`).forEach(el => el.setAttribute('filter', 'url(#greenTint)'));
+  }}
+  const flood = document.getElementById('greenTintPulseFlood');
+  if (flood) flood.setAttribute('flood-opacity', '0.5');
+  _parkTrainName = null;
+}}
+function _parkPulseLoop() {{
+  const flood = document.getElementById('greenTintPulseFlood');
+  if (!flood || !_parkTrainName) return;
+  const elapsed = performance.now() - _parkStart;
+  const opacity = 0.3 + 0.4 * Math.sin(elapsed / 300);
+  flood.setAttribute('flood-opacity', opacity.toFixed(3));
+  _parkRaf = requestAnimationFrame(_parkPulseLoop);
+}}
+
+// ---- ARRIVAL / DEPARTURE FADE ANIMATION ----
+let _arrivalRaf = null;
+let _arrivalStart = 0;
+let _arrivalTrainName = null;
+function startArrivalAnim(trainName) {{
+  _arrivalTrainName = trainName;
+  _arrivalStart = performance.now();
+  if (!_arrivalRaf) _arrivalAnimLoop();
+}}
+function cancelArrivalAnim() {{
+  if (_arrivalRaf) {{ cancelAnimationFrame(_arrivalRaf); _arrivalRaf = null; }}
+  if (_arrivalTrainName) {{
+    document.querySelectorAll(`#train-layer image[data-train="${{_arrivalTrainName}}"]`).forEach(el => el.setAttribute('opacity', '1'));
+  }}
+  _arrivalTrainName = null;
+}}
+function _arrivalAnimLoop() {{
+  if (!_arrivalTrainName) return;
+  const els = document.querySelectorAll(`#train-layer image[data-train="${{_arrivalTrainName}}"]`);
+  const elapsed = performance.now() - _arrivalStart;
+  const opacity = 0.1 + 0.9 * ((Math.sin(elapsed / 400) + 1) / 2);
+  els.forEach(el => el.setAttribute('opacity', opacity.toFixed(3)));
+  _arrivalRaf = requestAnimationFrame(_arrivalAnimLoop);
+}}
+
+let _departRaf = null;
+let _departStart = 0;
+let _departTrainName = null;
+function startDepartAnim(trainName) {{
+  _departTrainName = trainName;
+  _departStart = performance.now();
+  if (!_departRaf) _departAnimLoop();
+}}
+function cancelDepartAnim() {{
+  if (_departRaf) {{ cancelAnimationFrame(_departRaf); _departRaf = null; }}
+  if (_departTrainName) {{
+    document.querySelectorAll(`#train-layer image[data-train="${{_departTrainName}}"]`).forEach(el => el.setAttribute('opacity', '0'));
+  }}
+  _departTrainName = null;
+}}
+function _departAnimLoop() {{
+  if (!_departTrainName) return;
+  const els = document.querySelectorAll(`#train-layer image[data-train="${{_departTrainName}}"]`);
+  const elapsed = performance.now() - _departStart;
+  const opacity = 1.0 - 0.9 * ((Math.sin(elapsed / 400) + 1) / 2);
+  els.forEach(el => el.setAttribute('opacity', opacity.toFixed(3)));
+  _departRaf = requestAnimationFrame(_departAnimLoop);
+}}
+
+// ---- MOVEMENT ANIMATION ----
+let _moveRaf = null;
+let _moveStart = 0;
+let _moveDuration = 1500;
+let _moveState = null;
+let _movePrevState = null;
+let _movePath = null;
+let _moveTotalLen = 0;
+let _moveFixedW = 60;
+let _moveUnits = [];
+let _moveAnimCompleted = false;
+let _moveAnimIdx = -1;
+let _moveTrackSegs = [];
+let _moveAnimFinished = false;
+
+function buildMovePath(train, state, prevState) {{
+  const trackIds = state.train_path && state.train_path[train];
+  if (!trackIds || trackIds.length < 1) return null;
+  const srcTrack = prevState && prevState.trains[train] ? prevState.trains[train].track : null;
+  let allTracks;
+  if (srcTrack && trackIds[0] !== srcTrack) {{
+    allTracks = [srcTrack].concat(trackIds);
+  }} else {{
+    allTracks = trackIds.slice();
+  }}
+  if (allTracks.length < 2) return null;
+  const combined = [];
+  _moveTrackSegs = [];
+  let distAcc = 0;
+  for (let i = 0; i < allTracks.length; i++) {{
+    const tid = allTracks[i];
+    const pos = positions[tid];
+    const shape = pos && Array.isArray(pos.shape) && pos.shape.length >= 2 ? pos.shape : null;
+    if (shape) {{
+      let pts;
+      if (i === 0) {{
+        const restSide = (prevState.trains[train] && prevState.trains[train].restSide) || 'b';
+        const ratio = trainRatio(train, tid);
+        const center = restSide === 'a' ? Math.min(ratio / 2, 0.99) : Math.max(1 - ratio / 2, 0.01);
+        const exitSide = edgeSideOf(tid, allTracks[1]);
+        if (exitSide === 'b') {{
+          pts = subPolyline(shape, Math.min(center, 0.99), 1);
+        }} else {{
+          pts = subPolyline(shape, 0, Math.max(center, 0.01));
+          if (pts.length >= 2) pts.reverse();
+        }}
+      }} else {{
+        const entrySide = edgeSideOf(tid, allTracks[i-1]);
+        pts = (entrySide === 'b') ? shape.slice().reverse() : shape.slice();
+      }}
+      if (pts && pts.length >= 2) {{
+        if (combined.length > 0) {{
+          const last = combined[combined.length - 1];
+          const first = pts[0];
+          if (Math.abs(last[0] - first[0]) < 0.01 && Math.abs(last[1] - first[1]) < 0.01 && pts.length > 2) {{
+            pts.shift();
+          }}
+        }}
+        if (pts.length >= 2) {{
+          const segLen = polylineLength(pts);
+          _moveTrackSegs.push({{ trackId: tid, startDist: distAcc, endDist: distAcc + segLen }});
+          distAcc += segLen;
+          combined.push.apply(combined, pts);
+        }}
+      }}
+    }} else {{
+      const x = pos ? pos.x : 0;
+      const y = pos ? pos.y : 0;
+      if (combined.length === 0 || Math.abs(combined[combined.length-1][0] - x) > 0.01 || Math.abs(combined[combined.length-1][1] - y) > 0.01) {{
+        combined.push([x, y]);
+      }}
+    }}
+  }}
+  if (combined.length >= 2 && allTracks.length >= 2 && _moveTrackSegs.length > 0) {{
+    const destTrack = allTracks[allTracks.length - 1];
+    const destEntrySide = edgeSideOf(destTrack, allTracks[allTracks.length - 2]);
+    let frontFrac = null;
+    const destTrains = Object.keys(state.trains).filter(t => {{
+      const ti = state.trains[t];
+      return ti && ti.track === destTrack && t !== train && ti.status !== 'departed' && ti.status !== 'absorbed';
+    }});
+    if (destTrains.length > 0) {{
+      let nearFracs = null;
+      for (const t of destTrains) {{
+        const tf = trainFractionsOnTrack(t, destTrack, state);
+        if (tf) {{
+          if (destEntrySide === 'b') {{
+            if (!nearFracs || tf[1] > nearFracs[1]) nearFracs = tf;
+          }} else {{
+            if (!nearFracs || tf[0] < nearFracs[0]) nearFracs = tf;
+          }}
+        }}
+      }}
+      if (nearFracs) {{
+        frontFrac = destEntrySide === 'b' ? (1 - nearFracs[0]) : nearFracs[1];
+      }}
+    }}
+    if (frontFrac === null) {{
+      const fracs = trainFractionsOnTrack(train, destTrack, state);
+      if (fracs) {{
+        frontFrac = destEntrySide === 'b' ? (1 - fracs[0]) : fracs[1];
+      }}
+    }}
+    if (frontFrac !== null && frontFrac > 0.02 && frontFrac < 0.99) {{
+      const lastSeg = _moveTrackSegs[_moveTrackSegs.length - 1];
+      const segLen = lastSeg.endDist - lastSeg.startDist;
+      const maxDist = lastSeg.startDist + frontFrac * segLen;
+      const totalLen = polylineLength(combined);
+      if (totalLen > 0 && maxDist < totalLen) {{
+        const frac = maxDist / totalLen;
+        const truncated = subPolyline(combined, 0, frac);
+        if (truncated.length >= 2) {{
+          combined.length = 0;
+          combined.push.apply(combined, truncated);
+          lastSeg.endDist = maxDist;
+        }}
+      }}
+    }}
+  }}
+  return combined.length >= 2 ? combined : null;
+}}
+
+function pointOnPath(polyline, dist) {{
+  if (!polyline || polyline.length < 2) return {{ x: 0, y: 0, angle: 0 }};
+  let acc = 0;
+  for (let i = 1; i < polyline.length; i++) {{
+    const a = polyline[i-1], b = polyline[i];
+    const seg = Math.hypot(b[0]-a[0], b[1]-a[1]);
+    if (seg <= 0) continue;
+    if (acc + seg >= dist) {{
+      const t = (dist - acc) / seg;
+      return {{
+        x: a[0] + (b[0]-a[0]) * t,
+        y: a[1] + (b[1]-a[1]) * t,
+        angle: Math.atan2(b[1]-a[1], b[0]-a[0]) * 180 / Math.PI
+      }};
+    }}
+    acc += seg;
+  }}
+  const last = polyline[polyline.length - 1];
+  const prev = polyline[polyline.length - 2];
+  return {{
+    x: last[0], y: last[1],
+    angle: Math.atan2(last[1]-prev[1], last[0]-prev[0]) * 180 / Math.PI
+  }};
+}}
+
+function startMoveAnim(state, prevState) {{
+  cancelMoveAnim();
+  const train = state.train;
+  if (!train) return;
+  const path = buildMovePath(train, state, prevState);
+  if (!path || path.length < 2) return;
+  _movePath = path;
+  _moveTotalLen = polylineLength(path);
+  if (_moveTotalLen <= 0) return;
+  _moveState = state;
+  _movePrevState = prevState;
+  const units = data.trainUnits ? data.trainUnits[train] : null;
+  const totalLen = data.trainLengths ? data.trainLengths[train] : 0;
+  if (units && units.length) {{
+    const unitTotal = units.reduce((s, u) => s + (u.length || 0), 0) || units.length;
+    _moveUnits = units.map(u => {{
+      const frac = (u.length || 0) > 0 ? u.length / unitTotal : 1 / units.length;
+      return {{ typePrefix: u.typePrefix, frac: frac, img: data.unitImages ? data.unitImages[u.typePrefix] : null }};
+    }});
+  }} else {{
+    _moveUnits = [];
+  }}
+  _moveFixedW = 60;
+  if (totalLen > 0 && _moveUnits.length) {{
+    const avgTrackLen = 800;
+    _moveFixedW = Math.max(30, Math.min(120, totalLen * (_moveTotalLen / avgTrackLen)));
+  }}
+  const trainEls = document.querySelectorAll('#train-layer [data-train="'+train+'"]');
+  trainEls.forEach(el => {{ el.setAttribute('data-move-hidden','1'); el.style.display='none'; }});
+  _moveStart = performance.now();
+  if (!_moveRaf) _moveMoveLoop();
+}}
+
+function cancelMoveAnim() {{
+  if (_moveRaf) {{ cancelAnimationFrame(_moveRaf); _moveRaf = null; }}
+  document.querySelectorAll('#train-layer [data-move-hidden]').forEach(el => {{
+    el.removeAttribute('data-move-hidden'); el.style.display='';
+  }});
+  document.querySelectorAll('#train-layer [data-move-anim]').forEach(el => el.remove());
+  document.querySelectorAll('#edges-layer line[data-move-hl]').forEach(el => {{
+    el.setAttribute('stroke','var(--yard-edge)'); el.setAttribute('stroke-width','1.5');
+    el.removeAttribute('data-move-hl');
+  }});
+  document.querySelectorAll('#nodes-layer .t-node[data-move-hl]').forEach(el => {{
+    el.removeAttribute('data-move-hl');
+  }});
+  _movePath = null; _moveState = null; _movePrevState = null; _moveUnits = []; _moveTrackSegs = [];
+}}
+
+function _moveMoveLoop() {{
+  if (!_movePath) return;
+  const elapsed = performance.now() - _moveStart;
+  const t = Math.min(1, elapsed / _moveDuration);
+  _moveDrawFrame(t);
+  if (t < 1) {{
+    _moveRaf = requestAnimationFrame(_moveMoveLoop);
+  }} else {{
+    _moveRaf = null;
+    _movePath = null;
+    _moveAnimCompleted = true;
+    _moveAnimIdx = current;
+    _moveAnimFinished = true;
+    render(current);
+  }}
+}}
+
+function _moveDrawFrame(t) {{
+  if (!_movePath || !_moveState) return;
+  const layer = document.getElementById('train-layer');
+  layer.querySelectorAll('[data-move-anim]').forEach(el => el.remove());
+  const train = _moveState.train;
+  const color = trainColorMap[train] || '#888';
+  const easeT = t < 0.5 ? 2*t*t : -1+(4-2*t)*t;
+  const frontDist = easeT * _moveTotalLen;
+
+  // Draw trail (colored line along path up to front)
+  let trailAcc = 0;
+  for (let i = 1; i < _movePath.length; i++) {{
+    const a = _movePath[i-1], b = _movePath[i];
+    const segLen = Math.hypot(b[0]-a[0], b[1]-a[1]);
+    if (segLen <= 0) {{ trailAcc += segLen; continue; }}
+    if (trailAcc + segLen <= frontDist) {{
+      const trail = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      trail.setAttribute('x1', toSvgX(a[0])); trail.setAttribute('y1', toSvgY(a[1]));
+      trail.setAttribute('x2', toSvgX(b[0])); trail.setAttribute('y2', toSvgY(b[1]));
+      trail.setAttribute('stroke', color); trail.setAttribute('stroke-width', svgTrackWActive);
+      trail.setAttribute('stroke-linecap', 'round');
+      trail.setAttribute('style', 'pointer-events:none;opacity:0.4');
+      trail.setAttribute('data-move-anim','1');
+      layer.appendChild(trail);
+    }} else {{
+      const frac = Math.min(1, (frontDist - trailAcc) / segLen);
+      const trail = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+      trail.setAttribute('x1', toSvgX(a[0])); trail.setAttribute('y1', toSvgY(a[1]));
+      trail.setAttribute('x2', toSvgX(a[0]+(b[0]-a[0])*frac));
+      trail.setAttribute('y2', toSvgY(a[1]+(b[1]-a[1])*frac));
+      trail.setAttribute('stroke', color); trail.setAttribute('stroke-width', svgTrackWActive);
+      trail.setAttribute('stroke-linecap', 'round');
+      trail.setAttribute('style', 'pointer-events:none;opacity:0.4');
+      trail.setAttribute('data-move-anim','1');
+      layer.appendChild(trail);
+      break;
+    }}
+    trailAcc += segLen;
+  }}
+
+  // Draw train sprites with constant size
+  const sampleD = 3;
+  if (_moveUnits.length > 0) {{
+    let unitOffset = 0;
+    _moveUnits.forEach(u => {{
+      const unitLen = _moveFixedW * u.frac * 0.6;
+      const unitStart = frontDist - unitOffset - unitLen;
+      const unitEnd = frontDist - unitOffset;
+      if (unitEnd < 0 || unitStart > _moveTotalLen) {{ unitOffset += unitLen; return; }}
+      const midD = Math.max(0, Math.min(_moveTotalLen, (unitStart + unitEnd) / 2));
+      const fwdD = Math.min(_moveTotalLen, midD + sampleD);
+      const pm = pointOnPath(_movePath, midD);
+      const pf = pointOnPath(_movePath, fwdD);
+      const cx = toSvgX(pm.x);
+      const cy = toSvgY(pm.y);
+      const deg = Math.atan2(pf.y - pm.y, pf.x - pm.x) * 180 / Math.PI;
+      const w = Math.max(10, unitLen);
+      if (u.img) {{
+        const h = Math.max(3, w * u.img.aspect);
+        const el = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+        el.setAttribute('href', u.img.uri);
+        el.setAttribute('x', -w/2); el.setAttribute('y', -h);
+        el.setAttribute('width', w); el.setAttribute('height', h);
+        el.setAttribute('transform', `translate(${{cx}},${{cy}}) rotate(${{deg}})`);
+        el.setAttribute('style', 'pointer-events:none');
+        if (train) el.setAttribute('data-train', train);
+        el.setAttribute('data-move-anim','1');
+        layer.appendChild(el);
+      }}
+      unitOffset += unitLen;
+    }});
+  }} else {{
+    const midDist = Math.max(0, frontDist - _moveFixedW * 0.3);
+    const pm = pointOnPath(_movePath, midDist);
+    const pf = pointOnPath(_movePath, Math.min(_moveTotalLen, frontDist));
+    const cx = toSvgX((pm.x + pf.x) / 2);
+    const cy = toSvgY((pm.y + pf.y) / 2);
+    const w = Math.max(10, _moveFixedW * 0.6);
+    const deg = Math.atan2(pf.y - pm.y, pf.x - pm.x) * 180 / Math.PI;
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    el.setAttribute('x', -w/2); el.setAttribute('y', -6);
+    el.setAttribute('width', w); el.setAttribute('height', 12);
+    el.setAttribute('rx', 3); el.setAttribute('fill', color);
+    el.setAttribute('transform', `translate(${{cx}},${{cy}}) rotate(${{deg}})`);
+    el.setAttribute('style', 'pointer-events:none');
+    if (train) el.setAttribute('data-train', train);
+    el.setAttribute('data-move-anim','1');
+    layer.appendChild(el);
+  }}
+}}
+
+// ---- PARTICLE IMAGE PROCESSING ----
+const _processedParticleCache = {{}};
+function processParticleImage(uri) {{
+  if (!uri) return Promise.resolve(uri);
+  if (_processedParticleCache[uri]) return Promise.resolve(_processedParticleCache[uri]);
+  return new Promise(resolve => {{
+    const img = new Image();
+    img.onload = () => {{
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      const ctx = c.getContext('2d');
+      ctx.drawImage(img, 0, 0);
+      const id = ctx.getImageData(0, 0, c.width, c.height);
+      const d = id.data;
+      for (let i = 0; i < d.length; i += 4) {{
+        if (d[i] > 230 && d[i+1] > 230 && d[i+2] > 230) d[i+3] = 0;
+      }}
+      ctx.putImageData(id, 0, 0);
+      const out = c.toDataURL('image/png');
+      _processedParticleCache[uri] = out;
+      resolve(out);
+    }};
+    img.onerror = () => resolve(uri);
+    img.src = uri;
+  }});
+}}
+let _particlesReady = false;
+function ensureParticleImages() {{
+  if (_particlesReady) return Promise.resolve();
+  const uris = data.particleImages || {{}};
+  const keys = Object.keys(uris);
+  return Promise.all(keys.map(k => processParticleImage(uris[k]))).then(results => {{
+    keys.forEach((k, i) => {{ data.particleImages[k] = results[i]; }});
+    _particlesReady = true;
+  }});
+}}
+
+// ---- PARTICLE SYSTEM ----
+const particles = [];
+let _particleRaf = null;
+let _serviceSpawn = null;  // trackId, serviceType, state, nextSpawn
+
+function Particle(x, y, vx, vy, size, imgUri, life) {{
+  this.x = x; this.y = y; this.vx = vx; this.vy = vy;
+  this.size = size; this.imgUri = imgUri;
+  this.life = life; this.maxLife = life;
+  this.opacity = 1;
+}}
+
+// Compute the fraction range a train occupies on a track (replicates updateYard anchor logic)
+function trainFractionsOnTrack(train, trackId, state) {{
+  const pos = positions[trackId];
+  const shape = pos && Array.isArray(pos.shape) && pos.shape.length >= 2 ? pos.shape : null;
+  if (!shape) return null;
+  const trainsOnTrack = [];
+  Object.keys(state.trains).forEach(t => {{
+    const info = state.trains[t];
+    if (info && info.track === trackId && info.status !== 'departed' && info.status !== 'absorbed') trainsOnTrack.push(t);
+  }});
+  const to = state.trackOrder || {{}};
+  if (to[trackId]) {{
+    const present = to[trackId].filter(t => trainsOnTrack.includes(t));
+    if (present.length === trainsOnTrack.length) {{ trainsOnTrack.length = 0; present.forEach(t => trainsOnTrack.push(t)); }}
+  }}
+  const anchorA = [], anchorB = [];
+  trainsOnTrack.forEach(t => {{
+    const info = state.trains[t];
+    (info.restSide === 'a' ? anchorA : anchorB).push(t);
+  }});
+  let cum = 0;
+  for (const t of anchorA) {{
+    const end = Math.min(1, cum + trainRatio(t, trackId));
+    if (t === train) return [cum, end];
+    cum = end;
+  }}
+  let cumEnd = 1;
+  for (const t of anchorB) {{
+    const start = Math.max(0, cumEnd - trainRatio(t, trackId));
+    if (t === train) return [start, cumEnd];
+    cumEnd = start;
+  }}
+  return null;
+}}
+
+function spawnParticles(trackId, serviceType, state) {{
+  const MAX_PARTICLES = 15;
+  if (particles.length >= MAX_PARTICLES) return;
+  const pos = positions[trackId];
+  if (!pos) return;
+  const imgUri = serviceType === 'Monteur'
+    ? (data.particleImages.gears || null)
+    : (data.particleImages.waterdrop || null);
+  if (!imgUri) return;
+  let cx, cy;
+  const fracs = state ? trainFractionsOnTrack(state.train, trackId, state) : null;
+  if (fracs && pos.shape && pos.shape.length >= 2) {{
+    const pts = subPolyline(pos.shape, fracs[0], fracs[1]);
+    if (pts.length >= 2) {{
+      const mid = pts[Math.floor(pts.length / 2)];
+      cx = toSvgX(mid[0]); cy = toSvgY(mid[1]);
+    }} else {{
+      cx = toSvgX(pos.x); cy = toSvgY(pos.y);
+    }}
+  }} else {{
+    cx = toSvgX(pos.x); cy = toSvgY(pos.y);
+  }}
+  const isMonteur = serviceType === 'Monteur';
+  const batch = Math.min(3, MAX_PARTICLES - particles.length);
+  for (let i = 0; i < batch; i++) {{
+    const ox = (Math.random() - 0.5) * 30;
+    const oy = (Math.random() - 0.5) * 15;
+    const vx = (Math.random() - 0.5) * 0.3;
+    const vy = isMonteur ? -(0.2 + Math.random() * 0.4) : (0.2 + Math.random() * 0.4);
+    const size = isMonteur ? 16 + Math.random() * 10 : 14 + Math.random() * 8;
+    const life = 1200 + Math.random() * 800;
+    particles.push(new Particle(cx + ox, cy + oy, vx, vy, size, imgUri, life));
+  }}
+}}
+
+function updateParticles(now) {{
+  const layer = document.getElementById('particles-layer');
+  if (!layer) return;
+  if (!now) now = performance.now();
+  for (let i = particles.length - 1; i >= 0; i--) {{
+    const p = particles[i];
+    p.life -= 16;
+    if (p.life <= 0) {{ particles.splice(i, 1); continue; }}
+    p.x += p.vx; p.y += p.vy;
+    p.opacity = Math.min(1, p.life / (p.maxLife * 0.3));
+  }}
+  layer.innerHTML = '';
+  particles.forEach(p => {{
+    const el = document.createElementNS('http://www.w3.org/2000/svg', 'image');
+    el.setAttribute('href', p.imgUri);
+    el.setAttribute('x', p.x - p.size / 2);
+    el.setAttribute('y', p.y - p.size / 2);
+    el.setAttribute('width', p.size);
+    el.setAttribute('height', p.size);
+    el.setAttribute('opacity', p.opacity);
+    el.setAttribute('style', 'pointer-events:none');
+    layer.appendChild(el);
+  }});
+}}
+
+function _particleLoop(now) {{
+  if (!_serviceSpawn && particles.length === 0) {{ _particleRaf = null; return; }}
+  if (_serviceSpawn && now >= _serviceSpawn.nextSpawn) {{
+    spawnParticles(_serviceSpawn.trackId, _serviceSpawn.serviceType, _serviceSpawn.state);
+    _serviceSpawn.nextSpawn = now + 1500;
+  }}
+  updateParticles(now);
+  _particleRaf = requestAnimationFrame(_particleLoop);
+}}
+
+function stopParticles() {{
+  _serviceSpawn = null;
+  particles.length = 0;
+  const layer = document.getElementById('particles-layer');
+  if (layer) layer.innerHTML = '';
+  if (_particleRaf) {{ cancelAnimationFrame(_particleRaf); _particleRaf = null; }}
+}}
 
 function shortName(n) {{
   if (/^train_in_standing_\d+$/.test(n)) return n.replace(/^train_in_standing_(\d+)$/, 'Standing $1');
@@ -973,7 +1798,7 @@ function trainRatio(train, trackId) {{
   return 1;
 }}
 
-function drawTrainSegment(trackId, fStart, fEnd, color) {{
+function drawTrainSegment(trackId, fStart, fEnd, color, width) {{
   const pos = positions[trackId];
   const shape = pos && Array.isArray(pos.shape) && pos.shape.length >= 2 ? pos.shape : null;
   if (!shape) return;
@@ -983,15 +1808,110 @@ function drawTrainSegment(trackId, fStart, fEnd, color) {{
   poly.setAttribute('points', pts.map(p => toSvgX(p[0]) + ',' + toSvgY(p[1])).join(' '));
   poly.setAttribute('fill','none');
   poly.setAttribute('stroke', color);
-  poly.setAttribute('stroke-width', svgTrackWActive);
+  poly.setAttribute('stroke-width', width || svgTrackWActive);
   poly.setAttribute('stroke-linejoin','round');
   poly.setAttribute('stroke-linecap','round');
   poly.setAttribute('style','pointer-events:none');
+  poly.setAttribute('data-track', trackId);
   document.getElementById('train-layer').appendChild(poly);
+}}
+
+// Direction (degrees) of the first->last chord of a sub-polyline. Track shapes
+// use image/SVG coordinates, so a y-down rotation keeps the sprite aligned.
+function segAngle(pts) {{
+  if (!pts || pts.length < 2) return 0;
+  const a = pts[0], b = pts[pts.length - 1];
+  return Math.atan2(b[1] - a[1], b[0] - a[0]) * 180 / Math.PI;
+}}
+
+// Minimum visible width (px) for a whole train on a track, so arrivals on short
+// entry tracks (e.g. 906a) are clearly visible instead of a ~12px sliver.
+const MIN_TRAIN_PX = 30;
+// Draw one unit's sprite along the track fraction [fStart, fEnd]. The sprite is
+// scaled so its width covers that fraction, sits bottom-center on the rail, and
+// is rotated so the train's FRONT faces the wall it rests flush against (the
+// restSide end). `flip` cancels sprites that face left inside their own image.
+function drawTrainSprite(trackId, fStart, fEnd, typePrefix, restSideB, flip, parked, trainName) {{
+  const pos = positions[trackId];
+  const shape = pos && Array.isArray(pos.shape) && pos.shape.length >= 2 ? pos.shape : null;
+  const img = data.unitImages ? data.unitImages[typePrefix] : null;
+  if (!shape || !img) return;
+  const pts = subPolyline(shape, fStart, fEnd);
+  if (pts.length < 2) return;
+  const w = Math.max(3, polylineLength(pts));
+  const h = Math.max(3, w * img.aspect);
+  const cx = toSvgX((pts[0][0] + pts[pts.length - 1][0]) / 2);
+  const cy = toSvgY((pts[0][1] + pts[pts.length - 1][1]) / 2);
+  let deg = segAngle(pts);
+  const el = document.createElementNS('http://www.w3.org/2000/svg','image');
+  el.setAttribute('href', img.uri);
+  el.setAttribute('x', -w/2);
+  el.setAttribute('y', -h);
+  el.setAttribute('width', w);
+  el.setAttribute('height', h);
+  el.setAttribute('transform', `translate(${{cx}},${{cy}}) rotate(${{deg}})`);
+  el.setAttribute('style','pointer-events:none');
+  if (parked) el.setAttribute('filter','url(#greenTint)');
+  if (trainName) el.setAttribute('data-train', trainName);
+  document.getElementById('train-layer').appendChild(el);
+}}
+
+// Draw a train's proportional segment (colored base), then one sprite per
+// member laid out in name order from the rest anchor, split by member length.
+function drawTrainOnTrack(trackId, fStart, fEnd, train, restSideB, parked, minPx) {{
+  const _minPx = minPx || MIN_TRAIN_PX;
+  // Widen spans that would render as a tiny sliver (short entry tracks) so the
+  // whole train stays visible; grow away from the wall the train rests flush
+  // against, clamped to the track. Unknown restSide trains are anchored at the
+  // b-end, so infer the flush wall from the fractions rather than restSideB.
+  const pos = positions[trackId];
+  const shape = pos && Array.isArray(pos.shape) && pos.shape.length >= 2 ? pos.shape : null;
+  if (shape) {{
+    const spanLen = polylineLength(subPolyline(shape, fStart, fEnd));
+    const totalLen = polylineLength(shape);
+    if (spanLen > 0 && spanLen < _minPx && totalLen > 0) {{
+      const wantFrac = Math.min(1, _minPx / totalLen);
+      const extra = Math.max(0, wantFrac - (fEnd - fStart));
+      if (fEnd >= 1 - 1e-6) fStart = Math.max(0, fStart - extra);       // flush at b-end
+      else if (fStart <= 1e-6) fEnd = Math.min(1, fEnd + extra);        // flush at a-end
+      else {{ fStart = Math.max(0, fStart - extra / 2); fEnd = Math.min(1, fEnd + extra / 2); }}
+    }}
+  }}
+  drawTrainSegment(trackId, fStart, fEnd, trainColorMap[train]);
+  const units = data.trainUnits ? data.trainUnits[train] : null;
+  if (!units || !units.length) return;
+  const total = units.reduce((s,u) => s + (u.length || 0), 0) || units.length;
+  let cur = fStart;
+  units.forEach(u => {{
+    const span = (u.length || 0) > 0 ? (u.length / total) * (fEnd - fStart) : (fEnd - fStart) / units.length;
+    const next = Math.min(fEnd, cur + span);
+    if (next > cur) {{
+      const img = data.unitImages ? data.unitImages[u.typePrefix] : null;
+      drawTrainSprite(trackId, cur, next, u.typePrefix, restSideB, !!(img && img.flip), parked, train);
+    }}
+    cur = next;
+  }});
+}}
+
+// Which end ('a' or 'b') of trackId connects to neighborId, via data.edges.
+function edgeSideOf(trackId, neighborId) {{
+  for (let i = 0; i < data.edges.length; i++) {{
+    const e = data.edges[i];
+    if (e.source === trackId && e.target === neighborId) return e.sourceSide;
+    if (e.source === neighborId && e.target === trackId) return e.targetSide;
+  }}
+  return null;
+}}
+
+// Fraction span a train occupies on trackId when parked flush against `side`.
+function parkedSpan(trackId, train, side) {{
+  const ratio = trainRatio(train, trackId);
+  return side === 'a' ? [0, Math.min(1, ratio)] : [Math.max(0, 1 - ratio), 1];
 }}
 
 function updateYard(state, prevState) {{
   if(!hasPositions) return;
+  const effectiveMinPx = (state.action_type === 'arrive' || state.action_type === 'depart') ? 50 : MIN_TRAIN_PX;
   document.querySelectorAll('#edges-layer line').forEach(l => {{
     l.setAttribute('stroke','var(--yard-edge)'); l.setAttribute('stroke-width','1.5');
   }});
@@ -1013,21 +1933,58 @@ function updateYard(state, prevState) {{
   const trainsToShow=filterTrain?[filterTrain]:allTrains;
   trainsToShow.forEach(train => {{
     const info=state.trains[train];
-    if(!info||!info.track||info.status==='departed'||info.status==='absorbed') return;
+    if(!info||!info.track||(info.status==='departed'&&state.action_type!=='depart')||info.status==='absorbed') return;
     const color=trainColorMap[train];
     const trainPath = state.train_path && state.train_path[train];
-    if (trainPath && trainPath.length >= 2) {{
+    if (trainPath && trainPath.length >= 2 && !(_movePath && _moveState && _moveState.train === train)) {{
+      const srcTrack = prevState && prevState.trains[train] ? prevState.trains[train].track : null;
       for (let i = 0; i < trainPath.length; i++) {{
-        const pn = document.getElementById('node-'+trainPath[i].replace(/[^a-zA-Z0-9]/g,'_'));
-        if (pn) {{
-          const isLast = i === trainPath.length - 1;
-          if (pn.getAttribute('data-shape')==='1') {{
-            pn.setAttribute('stroke', color);
-            pn.setAttribute('stroke-width', isLast ? svgTrackWActive : svgTrackWPrev);
-          }} else {{
-            pn.setAttribute('fill', color);
-            pn.setAttribute('r', isLast ? svgNodeRActive : svgNodeRPrev);
+        const tid = trainPath[i];
+        const pos = positions[tid];
+        const shape = pos && Array.isArray(pos.shape) && pos.shape.length >= 2 ? pos.shape : null;
+        const pn = document.getElementById('node-'+tid.replace(/[^a-zA-Z0-9]/g,'_'));
+        const isLast = i === trainPath.length - 1;
+        if (shape) {{
+          // Light only the span the train occupies or travels: parked flush at
+          // one end, extended to the connection it enters/exits through. If it
+          // crosses the whole track (entry/exit on opposite ends), light it all.
+          let fStart = 0, fEnd = 1;
+          if (i === 0 && tid === srcTrack) {{
+            const parked = (prevState.trains[train] && prevState.trains[train].restSide) || 'b';
+            const exit = edgeSideOf(tid, trainPath[1]);
+            if (exit === parked) {{ const sp = parkedSpan(tid, train, parked); fStart = sp[0]; fEnd = sp[1]; }}
+          }} else if (isLast) {{
+            const entry = edgeSideOf(tid, trainPath[i-1]);
+            let nearFracs = null;
+            Object.keys(state.trains).forEach(t => {{
+              if (t === train) return;
+              const ti = state.trains[t];
+              if (!ti || ti.track !== tid || ti.status === 'departed' || ti.status === 'absorbed') return;
+              const tf = trainFractionsOnTrack(t, tid, state);
+              if (!tf) return;
+              if (entry === 'b') {{
+                if (!nearFracs || tf[1] > nearFracs[1]) nearFracs = tf;
+              }} else {{
+                if (!nearFracs || tf[0] < nearFracs[0]) nearFracs = tf;
+              }}
+            }});
+            if (nearFracs) {{
+              if (entry === 'b') {{ fStart = nearFracs[0]; fEnd = 1; }} else {{ fStart = 0; fEnd = nearFracs[1]; }}
+            }} else {{
+              const fracs = trainFractionsOnTrack(train, tid, state);
+              if (fracs) {{
+                if (entry === 'b') {{ fStart = fracs[0]; fEnd = 1; }} else {{ fStart = 0; fEnd = fracs[1]; }}
+              }} else {{
+                const parked = (info && info.restSide) || 'b';
+                const sp = parkedSpan(tid, train, parked);
+                if (entry === 'b') {{ fStart = sp[0]; fEnd = 1; }} else {{ fStart = 0; fEnd = sp[1]; }}
+              }}
+            }}
           }}
+          drawTrainSegment(tid, fStart, fEnd, color, isLast ? svgTrackWActive : svgTrackWPrev);
+        }} else if (pn) {{
+          pn.setAttribute('fill', color);
+          pn.setAttribute('r', isLast ? svgNodeRActive : svgNodeRPrev);
         }}
         if (i < trainPath.length - 1) {{
           const a = trainPath[i], b = trainPath[i+1];
@@ -1044,31 +2001,57 @@ function updateYard(state, prevState) {{
       const prev=prevState.trains[train];
       if(prev&&prev.track&&prev.track!==info.track) {{
         const src=prev.track,tgt=info.track;
+        const srcInPath = trainPath && trainPath.length >= 2 && trainPath[0] === src;
         document.querySelectorAll('#edges-layer line').forEach(l => {{
           const ls=l.getAttribute('data-source'),lt=l.getAttribute('data-target');
           if((ls===src&&lt===tgt)||(ls===tgt&&lt===src)) {{
             l.setAttribute('stroke',color); l.setAttribute('stroke-width','3');
           }}
         }});
-        const pn=document.getElementById('node-'+src.replace(/[^a-zA-Z0-9]/g,'_'));
-        if(pn&&(pn.getAttribute('fill')==='var(--yard-node)'||pn.getAttribute('stroke')==='var(--yard-node)')) {{
-          if (pn.getAttribute('data-shape')==='1') {{ pn.setAttribute('stroke',color); pn.setAttribute('stroke-width',svgTrackWPrev); }}
-          else {{ pn.setAttribute('fill',color); pn.setAttribute('r',svgNodeRPrev); }}
+        if(!srcInPath) {{
+          const spos=positions[src];
+          const sshape=spos&&Array.isArray(spos.shape)&&spos.shape.length>=2?spos.shape:null;
+          if(sshape) {{
+            const parked=(prev.restSide)||'b';
+            const exitNeighbor=(trainPath&&trainPath.length>=2)?trainPath[0]:tgt;
+            const exit=edgeSideOf(src,exitNeighbor);
+            let fStart=0,fEnd=1;
+            if(exit===parked){{ const sp=parkedSpan(src,train,parked); fStart=sp[0]; fEnd=sp[1]; }}
+            else{{ const sp=parkedSpan(src,train,parked); if(exit==='b'){{ fStart=sp[1]; fEnd=1; }}else{{ fStart=0; fEnd=sp[0]; }} }}
+            drawTrainSegment(src,fStart,fEnd,color,svgTrackWPrev);
+          }} else {{
+            const pn=document.getElementById('node-'+src.replace(/[^a-zA-Z0-9]/g,'_'));
+            if(pn&&(pn.getAttribute('fill')==='var(--yard-node)'||pn.getAttribute('stroke')==='var(--yard-node)')) {{
+              pn.setAttribute('fill',color); pn.setAttribute('r',svgNodeRPrev);
+            }}
+          }}
         }}
       }}
     }}
   }});
 
-  // Parked / waiting trains: draw proportional-length segments along track shapes.
+  // Trains on tracks: draw proportional-length segments along track shapes.
+  // Every train with a track gets a colored segment + sprite (moving trains are
+  // drawn on their current track too, so color is always accompanied by art).
   // Each train rests flush against its restSide end (a-side or b-side), i.e. it
   // moved as far as possible away from the side it entered; unknown -> b-side.
   const groups = {{}};
+  const trackOrder = state.trackOrder || {{}};
   Object.keys(state.trains).forEach(train => {{
     if (filterTrain && train !== filterTrain) return;
     const info = state.trains[train];
-    if (!info || !info.track || info.status==='departed' || info.status==='absorbed') return;
-    if (state.train_path && state.train_path[train] && state.train_path[train].length >= 2) return;
-    (groups[info.track] = groups[info.track] || []).push(train);
+    if (!info || !info.track || (info.status==='departed'&&state.action_type!=='depart') || info.status==='absorbed') return;
+    let renderTrack = info.track;
+    if (info.status==='departed' && state.action_type==='depart' && prevState && prevState.trains[train] && prevState.trains[train].track) {{
+      renderTrack = prevState.trains[train].track;
+    }}
+    (groups[renderTrack] = groups[renderTrack] || []).push(train);
+  }});
+  Object.keys(groups).forEach(trackId => {{
+    if (trackOrder[trackId]) {{
+      const present = trackOrder[trackId].filter(t => groups[trackId].includes(t));
+      if (present.length === groups[trackId].length) groups[trackId] = present;
+    }}
   }});
   Object.keys(groups).forEach(trackId => {{
     const pos = positions[trackId];
@@ -1083,13 +2066,13 @@ function updateYard(state, prevState) {{
       let cum = 0;
       anchorA.forEach(train => {{
         const end = Math.min(1, cum + trainRatio(train, trackId));
-        if (end > cum) drawTrainSegment(trackId, cum, end, trainColorMap[train]);
+        if (end > cum) drawTrainOnTrack(trackId, cum, end, train, state.trains[train].restSide === 'b', !!state.trains[train].wasParked, effectiveMinPx);
         cum = end;
       }});
       let cumEnd = 1;
       anchorB.forEach(train => {{
         const start = Math.max(0, cumEnd - trainRatio(train, trackId));
-        if (cumEnd > start) drawTrainSegment(trackId, start, cumEnd, trainColorMap[train]);
+        if (cumEnd > start) drawTrainOnTrack(trackId, start, cumEnd, train, state.trains[train].restSide === 'b', !!state.trains[train].wasParked, effectiveMinPx);
         cumEnd = start;
       }});
     }} else if (node) {{
@@ -1099,6 +2082,71 @@ function updateYard(state, prevState) {{
       }});
     }}
   }});
+
+  // ---- ANIMATION OVERLAYS ----
+  // For combine: draw absorbed members' segments at the combined train's track,
+  // within the combined train's actual fraction range, colored with individual colors.
+  if (state.action_type === 'combine' && state.train && state.train.includes('+')) {{
+    const members = state.train.split('+');
+    const trackId = state.trains[state.train] && state.trains[state.train].track;
+    if (trackId) {{
+      const fracs = trainFractionsOnTrack(state.train, trackId, state);
+      const pos = positions[trackId];
+      const shape = pos && Array.isArray(pos.shape) && pos.shape.length >= 2 ? pos.shape : null;
+      if (fracs && shape) {{
+        const span = fracs[1] - fracs[0];
+        const totalMemberLen = members.reduce((s, m) => s + (data.trainLengths ? (data.trainLengths[m] || 0) : 0), 0);
+        let cum = fracs[0];
+        members.forEach(m => {{
+          const mLen = data.trainLengths ? (data.trainLengths[m] || 0) : 0;
+          const frac = totalMemberLen > 0 ? (mLen / totalMemberLen) * span : span / members.length;
+          const end = Math.min(fracs[1], cum + frac);
+          if (end > cum) {{
+            const color = trainColorMap[m] || '#888';
+            const pts = subPolyline(shape, cum, end);
+            if (pts.length >= 2) {{
+              const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+              poly.setAttribute('points', pts.map(p => toSvgX(p[0]) + ',' + toSvgY(p[1])).join(' '));
+              poly.setAttribute('fill', 'none');
+              poly.setAttribute('stroke', color);
+              poly.setAttribute('stroke-width', svgTrackWActive);
+              poly.setAttribute('stroke-linejoin', 'round');
+              poly.setAttribute('stroke-linecap', 'round');
+              poly.setAttribute('style', 'pointer-events:none');
+              poly.setAttribute('data-combine-member', m);
+              document.getElementById('train-layer').appendChild(poly);
+            }}
+          }}
+          cum = end;
+        }});
+      }}
+    }}
+  }}
+  // For split: draw parent's segment at the children's track,
+  // colored with the parent's color, so the animation can tween it.
+  if (state.action_type === 'split' && state.parent_name && state.child_names && state.child_names.length) {{
+    const childTrack = state.trains[state.child_names[0]] && state.trains[state.child_names[0]].track;
+    if (childTrack) {{
+      const pos = positions[childTrack];
+      const shape = pos && Array.isArray(pos.shape) && pos.shape.length >= 2 ? pos.shape : null;
+      const parentColor = trainColorMap[state.parent_name] || '#888';
+      if (shape) {{
+        const pts = subPolyline(shape, 0, 1);
+        if (pts.length >= 2) {{
+          const poly = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+          poly.setAttribute('points', pts.map(p => toSvgX(p[0]) + ',' + toSvgY(p[1])).join(' '));
+          poly.setAttribute('fill', 'none');
+          poly.setAttribute('stroke', parentColor);
+          poly.setAttribute('stroke-width', svgTrackWActive);
+          poly.setAttribute('stroke-linejoin', 'round');
+          poly.setAttribute('stroke-linecap', 'round');
+          poly.setAttribute('style', 'pointer-events:none');
+          poly.setAttribute('data-split-child', state.parent_name);
+          document.getElementById('train-layer').appendChild(poly);
+        }}
+      }}
+    }}
+  }}
 }}
 
 // ---- TABLE ----
@@ -1164,6 +2212,7 @@ function updateSummary() {{
 
 function render(idx) {{
   current=Math.max(0,Math.min(data.states.length-1,idx));
+  if (current !== _moveAnimIdx) {{ _moveAnimCompleted = false; _moveAnimFinished = false; }}
   const state=data.states[current];
   const prevState=data.states[Math.max(0,current-1)];
   const atype=state.action_type||'initial';
@@ -1217,7 +2266,43 @@ function render(idx) {{
     prevEl.innerHTML=`<span class="prev-track">${{prev&&prev.track?trackName(prev.track):'-'}}</span>`;
   }});
 
+  if (_moveAnimFinished) {{
+    _moveAnimFinished = false;
+  }} else {{
+
   updateYard(state,prevState);
+
+  // ---- ANIMATION & PARTICLE LIFECYCLE ----
+  cancelAnim();
+  cancelParkPulse();
+  cancelArrivalAnim();
+  cancelDepartAnim();
+  stopParticles();
+  if ((atype === 'move' || atype === 'move_to') && !(_moveAnimCompleted && _moveAnimIdx === current) && state.train && state.train_path && state.train_path[state.train] && state.train_path[state.train].length >= 2) {{
+    startMoveAnim(state, prevState);
+  }} else if (atype === 'combine' && state.train && state.train.includes('+')) {{
+    startCombineAnim(state);
+  }} else if (atype === 'split' && state.parent_name) {{
+    startSplitAnim(state);
+  }} else if (atype === 'park') {{
+    startParkPulse(state.train);
+  }} else if (atype === 'arrive') {{
+    startArrivalAnim(state.train);
+  }} else if (atype === 'depart') {{
+    startDepartAnim(state.train);
+  }}
+  if (atype === 'service' && state.service_type) {{
+    const svcTrack = state.trains[state.train] && state.trains[state.train].track;
+    if (svcTrack) {{
+      ensureParticleImages().then(() => {{
+        _serviceSpawn = {{ trackId: svcTrack, serviceType: state.service_type, state: state, nextSpawn: 0 }};
+        spawnParticles(svcTrack, state.service_type, state);
+        if (!_particleRaf) _particleRaf = requestAnimationFrame(_particleLoop);
+      }});
+    }}
+  }}
+
+  }}
 
   document.querySelectorAll('.t-item').forEach((el,i)=>el.classList.toggle('current',i===current));
   const cur=document.querySelector('.t-item.current:not(.hidden)');
@@ -1242,6 +2327,22 @@ function toggleTheme(){{
   html.setAttribute('data-theme',isDark?'light':'dark');
   document.getElementById('theme-btn').textContent=isDark?'Dark':'Light';
   localStorage.setItem('shunting-theme',isDark?'light':'dark');
+}}
+let bottomOpen=false;
+function toggleBottom(){{
+  bottomOpen=!bottomOpen;
+  const panel=document.getElementById('bottom-panel');
+  const yp=document.getElementById('yard-panel');
+  const arrow=document.getElementById('toggle-arrow');
+  if(bottomOpen){{
+    panel.style.display='grid';
+    yp.classList.add('panel-open');
+    arrow.textContent='\u25BC';
+  }} else {{
+    panel.style.display='none';
+    yp.classList.remove('panel-open');
+    arrow.textContent='\u25B2';
+  }}
 }}
 const saved=localStorage.getItem('shunting-theme');
 if(saved){{
@@ -1312,11 +2413,16 @@ def main():
         image_height = layout.get("height")
 
     track_meta = {str(t["id"]): {"name": str(t["name"]), "parkingAllowed": t.get("parkingAllowed", False), "type": t.get("type", ""), "length": t.get("length", 0)} for t in location.get("trackParts", [])}
+    unit_images = load_unit_images()
+    particle_images = load_particle_images()
+    train_units = collect_train_units(scenario, states)
     render_html(Path(args.location).parent.name, states, edges, layout, args.output,
                 image_data_uri=image_data_uri, image_width=image_width, image_height=image_height,
-                track_meta=track_meta, train_lengths=train_lengths)
+                track_meta=track_meta, train_lengths=train_lengths,
+                unit_images=unit_images, train_units=train_units, particle_images=particle_images)
     print(f"Wrote visualizer to {args.output}")
     print(f"Steps: {len(steps)}; trains: {len(initial)}; yard nodes: {len(positions)}")
+    print(f"Sprites loaded: {len(unit_images)} unit types; {len(train_units)} trains mapped")
 
 
 if __name__ == "__main__":
