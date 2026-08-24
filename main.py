@@ -27,6 +27,7 @@ from plan.validate_plan import validate_plan  # noqa: E402
 PLAN_DIR = os.path.join(REPO_ROOT, "plan")
 PLANNER_SCRIPTS = {
     "symbolic": os.path.join(PLAN_DIR, "symbolic_planner.jl"),
+    "symbolic-rail": os.path.join(PLAN_DIR, "symbolic_planner.jl"),
     "enhsp": os.path.join(PLAN_DIR, "enhsp_planner.jl"),
 }
 
@@ -55,8 +56,14 @@ def convert_to_pddl(location_path, scenario_path, domain_out, problem_out, varia
 
 def run_planner(domain_path, problem_path, planner, plan_out):
     script = PLANNER_SCRIPTS[planner]
+    command = [
+        "julia", f"--project={PLAN_DIR}", script,
+        domain_path, problem_path, plan_out,
+    ]
+    if planner.startswith("symbolic"):
+        command.append(planner)
     subprocess.run(
-        ["julia", f"--project={PLAN_DIR}", script, domain_path, problem_path, plan_out],
+        command,
         check=True,
     )
 
@@ -73,7 +80,11 @@ def main():
     parser.add_argument("--scenario", required=True,
                         help="Path to a scenario_*.json file (inside the container, "
                              "when containerised)")
-    parser.add_argument("--planner", choices=["symbolic", "enhsp"], default="symbolic")
+    parser.add_argument(
+        "--planner",
+        choices=["symbolic", "symbolic-rail", "enhsp"],
+        default="symbolic",
+    )
     parser.add_argument("--variant",
                         choices=sorted(CONVERTER_MODULES), default="compiled_matching",
                         help="which PDDL model to convert the scenario to")
