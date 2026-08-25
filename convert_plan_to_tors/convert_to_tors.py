@@ -545,7 +545,6 @@ def build_directed_adj(location, side_key):
     adj = {tp["id"]: [] for tp in location["trackParts"]}
     for tp in location["trackParts"]:
         for nb_id in tp.get(side_key, []):
-            nb_id = str(nb_id)
             if nb_id in adj:
                 adj[tp["id"]].append(nb_id)
     return adj
@@ -566,7 +565,7 @@ def bfs_through_switches(a_adj, b_adj, start, goal, switch_ids):
             for nb in adj.get(node, []):
                 if nb == goal:
                     return path + [nb]
-                if nb not in visited and nb in switch_ids:
+                if nb not in visited:
                     visited.add(nb)
                     queue.append(path + [nb])
         return []
@@ -712,6 +711,7 @@ def convert_plan(plan_file, scenario_file, location_file):
     request_lookup = build_request_lookup(scenario)
     track_lookup = build_track_lookup(location)
     track_id_lookup = build_track_id_lookup(location)
+    track_parts_by_id = {tp["id"]: tp for tp in location["trackParts"]}
     a_adj = build_directed_adj(location, "aSide")
     b_adj = build_directed_adj(location, "bSide")
     switch_ids = build_switch_sets(location)
@@ -762,6 +762,7 @@ def convert_plan(plan_file, scenario_file, location_file):
     su_departure_deadline = {} # SU name -> requested departure time (hard deadline)
     waiting_on_messages = {}   # parked-out SU name -> parking slot id (unit waits there)
     active_trains = {}
+    pending_entry_paths = {}  # SU name -> expanded path from entry to yard (from enter_yard_su)
     train_locations = {}  # Track where each train is currently located
     train_arrival_times = {}  # Track when trains arrive
     shunting_unit_composition = {}  # Track composition of shunting units
@@ -795,7 +796,8 @@ def convert_plan(plan_file, scenario_file, location_file):
 
     def _resolve_su(name):
         """Return the physical SU represented by a PDDL request alias."""
-        return su_identity.get(name, name)
+        result = su_identity.get(name, name)
+        return str(result) if isinstance(result, int) else result
 
     def _members_for(su_id):
         """Return the train-unit IDs currently contained in an SU."""
@@ -995,27 +997,8 @@ def convert_plan(plan_file, scenario_file, location_file):
             su_id, entry, target = m.groups()
             entry_id = convert_track(entry, track_lookup, track_id_lookup)["id"]
             target_id = convert_track(target, track_lookup, track_id_lookup)["id"]
-            path = expand_path([entry_id, target_id], a_adj, b_adj, switch_ids)
-            duration = compute_move_duration(
-                path,
-                a_adj,
-                b_adj,
-                switch_costs,
-                get_reversal_duration(su_id, train_lookup),
-            )
-            start_time, end_time = _schedule_move(su_id, path, duration)
-            actions.append(
-                create_move_action(
-                    su_id,
-                    start_time,
-                    end_time,
-                    path,
-                    train_lookup,
-                    track_id_lookup,
-                    unit_lookup,
-                )
-            )
             train_locations[su_id] = target_id
+            pending_entry_paths[su_id] = expand_path([entry_id, target_id], a_adj, b_adj, switch_ids)
             continue
 
         m = COMPILED_START_RE.match(line)
@@ -1038,9 +1021,10 @@ def convert_plan(plan_file, scenario_file, location_file):
             su_start = su_next_free.get(_clock(train), 0)
             if train in train_arrival_times:
                 su_start = max(su_start, train_arrival_times[train])
+            pending_entry_paths.pop(train, None)
             active_trains[train] = {
                 "start_time": su_start,
-                "path": []
+                "path": [],
             }
             
             # Look up initial position from scenario if not already known
@@ -1266,15 +1250,17 @@ def convert_plan(plan_file, scenario_file, location_file):
             if train in active_trains:
                 state = active_trains[train]
                 
-                dest_track = convert_track(track, track_lookup, track_id_lookup)["id"]
                 if not state["path"] and train in train_locations:
-                    state["path"] = [train_locations[train], dest_track]
+                    state["path"] = [train_locations[train]]
                 
                 if state["path"]:
-                    expanded_path = _strip_for_departure(expand_path(state["path"], a_adj, b_adj, switch_ids))
+                    raw_expanded = expand_path(state["path"], a_adj, b_adj, switch_ids)
+                    expanded_path = _strip_trailing_zero_length(list(raw_expanded))
+                    print(f"  DEBUG depart: train={train} path={state['path']} raw_expanded={raw_expanded} stripped={expanded_path}", flush=True)
                     duration = compute_move_duration(expanded_path, a_adj, b_adj, switch_costs, get_reversal_duration(train, train_lookup))
                     if len(expanded_path) > 1:
                         start_time, end_time = _schedule_move(train, expanded_path, duration)
+                        print(f"  DEBUG depart: CREATING MOVE {train} path={expanded_path} [{start_time}-{end_time}]", flush=True)
                         _append_su_action(
                             create_move_action(
                                 train,
@@ -1288,6 +1274,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                             train,
                         )
                     else:
+                        print(f"  DEBUG depart: NO MOVE (path len={len(expanded_path)})", flush=True)
                         _close_hold(train, su_next_free.get(_clock(train), current_time))
                 
                 del active_trains[train]
@@ -1327,14 +1314,10 @@ def convert_plan(plan_file, scenario_file, location_file):
                 if dep > exit_time:
                     exit_time = dep
             
-            # Use the stripped path's last track for exit location
-            exit_track = expanded_path[-1] if len(expanded_path) > 0 else track
-            if exit_time > ready_time:
-                reserve(
-                    [convert_track(exit_track, track_lookup, track_id_lookup)["id"]],
-                    ready_time,
-                    exit_time,
-                )
+            # Determine the exit location. TORS expects the Exit at the
+            # lastParkingTrackPart (a parkable track like 906a), NOT at the
+            # leaveTrackPart (a zero-length signal like Sein70).
+            exit_track = track
             exit_action = create_exit_action(
                 train,
                 exit_time,
@@ -1344,6 +1327,17 @@ def convert_plan(plan_file, scenario_file, location_file):
                 unit_lookup,
                 track_id_lookup=track_id_lookup
             )
+            # Override exit location with the scenario's departure track
+            req_name_for_exit = None
+            if len(groups) >= 4 and not train.startswith("su_request"):
+                req_name_for_exit = groups[-2]
+            elif train.startswith("su_request"):
+                req_name_for_exit = "request" + train[10:]
+            if req_name_for_exit and req_name_for_exit in request_lookup:
+                dep_track_id = request_lookup[req_name_for_exit].get("lastParkingTrackPart")
+                if dep_track_id is not None and dep_track_id in track_id_lookup:
+                    exit_action["location"] = dep_track_id
+                    exit_action["resources"] = [track_id_lookup[dep_track_id]]
             _append_su_action(exit_action, train)
             su_next_free[_clock(train)] = exit_time + 1
             current_time = max(current_time, exit_time + 1)
@@ -1778,7 +1772,7 @@ def convert_plan(plan_file, scenario_file, location_file):
     # Post-process: Add Arrive actions and calculate Wait periods
     actions = post_process_actions(actions, train_lookup, unit_lookup, track_lookup, 
                                    track_id_lookup, train_locations_int, train_arrival_times_int, scenario, get_su_id,
-                                   parkable_tracks)
+                                   parkable_tracks, track_parts_by_id)
     
     # Fill in missing members/parentIDs/childIDs for actions that reference SUs
     # by integer ID (e.g., Wait actions created by post_process_actions)
@@ -1857,7 +1851,7 @@ def convert_plan(plan_file, scenario_file, location_file):
 
 def post_process_actions(actions, train_lookup, unit_lookup, track_lookup, 
                          track_id_lookup, train_locations, train_arrival_times, scenario, su_id_fn=None,
-                         parkable_tracks=None):
+                         parkable_tracks=None, track_parts_by_id=None):
     """Add Arrive actions and Wait periods to make the plan realistic"""
     
     # Track when each shunting unit first appears or moves
@@ -1950,10 +1944,25 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
                     standing_type = "OutStanding"
                 
                 # Add Arrive action
-                if arrive_location in track_id_lookup:
-                    resource = track_id_lookup[arrive_location]
+                # If arrive_location is a signal/bumper (0-length, non-parking),
+                # the train physically occupies the adjacent gateway track, not
+                # the signal itself.  Resolve the resource to that track.
+                arrive_resource_loc = arrive_location
+                if arrive_location in track_parts_by_id:
+                    _tp = track_parts_by_id[arrive_location]
+                    if _tp.get("length", 0) == 0 and not _tp.get("parkingAllowed", False):
+                        _neighbors = _tp.get("aSide", []) + _tp.get("bSide", [])
+                        for _nb in _neighbors:
+                            if _nb in track_parts_by_id and (
+                                track_parts_by_id[_nb].get("length", 0) > 0
+                                or track_parts_by_id[_nb].get("parkingAllowed", False)
+                            ):
+                                arrive_resource_loc = _nb
+                                break
+                if arrive_resource_loc in track_id_lookup:
+                    resource = track_id_lookup[arrive_resource_loc]
                 else:
-                    resource = convert_track(arrive_location, track_lookup)
+                    resource = convert_track(arrive_resource_loc, track_lookup)
                 shunting_unit = make_shunting_unit(cur_su_id, train_lookup, unit_lookup)
                 arrive_action = {
                     "startTime": _as_time(arrive_time),

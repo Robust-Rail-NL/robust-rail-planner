@@ -82,7 +82,7 @@ COPY . .
 
 # Cheap insurance: COPY preserves the host's mode bit, so this only matters when
 # the file arrives without it (a checkout that dropped it, a Windows clone).
-RUN chmod +x /app/docker-entrypoint.sh
+RUN sed -i 's/\r$//' /app/docker-entrypoint.sh && chmod +x /app/docker-entrypoint.sh
 
 # The visualizer's default port, for `docker run -p 8767:8767 ... visualizer`.
 # Documentation only — EXPOSE publishes nothing by itself.
