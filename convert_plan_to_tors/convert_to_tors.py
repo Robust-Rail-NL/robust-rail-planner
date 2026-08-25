@@ -649,23 +649,30 @@ def compute_reversals(expanded_path, a_adj, b_adj):
     return reversals
 
 
-def compute_move_duration(expanded_path, a_adj, b_adj, switch_costs=None, reversal_duration=0):
+def compute_move_duration(expanded_path, a_adj, b_adj, switch_costs=None, reversal_duration=0, track_parts_by_id=None):
     """Compute a Move action's duration using the C# solver's ComputeDuration model:
 
         duration = (Tracks.Length + TotalReversals) * TrackCrossingTime
                  + TotalSwitches * SwitchCrossingTime
                  + TotalReversals * ReversalDuration
 
-    Tracks.Length is the path length (start track included), TotalSwitches is the
-    summed switch cost over the path, TotalReversals counts same-side turn-arounds.
+    Tracks.Length counts only track parts with physical length > 0 (i.e.
+    actual railroad segments, not zero-length switches/connectors).
+    TotalSwitches is the summed switch cost over the path, TotalReversals
+    counts same-side turn-arounds.
     Unknown tracks are treated as plain tracks (60s, no switch cost).
     """
     if switch_costs is None:
         switch_costs = {}
     reversals = compute_reversals(expanded_path, a_adj, b_adj)
     total_switches = sum(switch_costs.get(tid, 0) for tid in expanded_path)
+    if track_parts_by_id:
+        nonzero_tracks = sum(1 for tid in expanded_path
+                             if track_parts_by_id.get(tid, {}).get("length", 0) > 0)
+    else:
+        nonzero_tracks = len(expanded_path)
     return (
-        (len(expanded_path) + reversals) * TRACK_CROSSING_TIME
+        (nonzero_tracks + reversals) * TRACK_CROSSING_TIME
         + total_switches * SWITCH_CROSSING_TIME
         + reversals * reversal_duration
     )
@@ -1108,7 +1115,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                     state["path"] = [train_locations[train], dest_track]
                 
                 expanded_path = _strip_trailing_zero_length(expand_path(state["path"], a_adj, b_adj, switch_ids))
-                duration = compute_move_duration(expanded_path, a_adj, b_adj, switch_costs, get_reversal_duration(train, train_lookup))
+                duration = compute_move_duration(expanded_path, a_adj, b_adj, switch_costs, get_reversal_duration(train, train_lookup), track_parts_by_id)
                 if len(expanded_path) > 1:
                     start_time, end_time = _schedule_move(train, expanded_path, duration)
                     _append_su_action(
@@ -1151,7 +1158,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                     state["path"] = [train_locations[train], track_id]
                 
                 expanded_path = _strip_trailing_zero_length(expand_path(state["path"], a_adj, b_adj, switch_ids))
-                duration = compute_move_duration(expanded_path, a_adj, b_adj, switch_costs, get_reversal_duration(train, train_lookup))
+                duration = compute_move_duration(expanded_path, a_adj, b_adj, switch_costs, get_reversal_duration(train, train_lookup), track_parts_by_id)
                 if len(expanded_path) > 1:
                     start_time, end_time = _schedule_move(train, expanded_path, duration)
                     _append_su_action(
@@ -1257,7 +1264,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                     raw_expanded = expand_path(state["path"], a_adj, b_adj, switch_ids)
                     expanded_path = _strip_trailing_zero_length(list(raw_expanded))
                     print(f"  DEBUG depart: train={train} path={state['path']} raw_expanded={raw_expanded} stripped={expanded_path}", flush=True)
-                    duration = compute_move_duration(expanded_path, a_adj, b_adj, switch_costs, get_reversal_duration(train, train_lookup))
+                    duration = compute_move_duration(expanded_path, a_adj, b_adj, switch_costs, get_reversal_duration(train, train_lookup), track_parts_by_id)
                     if len(expanded_path) > 1:
                         start_time, end_time = _schedule_move(train, expanded_path, duration)
                         print(f"  DEBUG depart: CREATING MOVE {train} path={expanded_path} [{start_time}-{end_time}]", flush=True)
@@ -1573,7 +1580,7 @@ def convert_plan(plan_file, scenario_file, location_file):
             if su_id in active_trains:
                 state = active_trains[su_id]
                 expanded_path = expand_path(state["path"], a_adj, b_adj, switch_ids)
-                duration = compute_move_duration(expanded_path, a_adj, b_adj, switch_costs, get_reversal_duration(su_id, train_lookup))
+                duration = compute_move_duration(expanded_path, a_adj, b_adj, switch_costs, get_reversal_duration(su_id, train_lookup), track_parts_by_id)
                 if len(expanded_path) > 1:
                     start_time, end_time = _schedule_move(su_id, expanded_path, duration)
                     actions.append(
