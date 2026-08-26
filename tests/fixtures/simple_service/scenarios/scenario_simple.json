@@ -1,0 +1,60 @@
+{
+    "schemaVersion": 1,
+    "trainUnitTypes": [
+        {
+            "typePrefix": "TestUnit",
+            "carriages": 1,
+            "length": 50,
+            "combineDuration": 180,
+            "splitDuration": 120,
+            "backNormTime": 0,
+            "backAdditionTime": 0
+        }
+    ],
+    "in": [
+        {
+            "id": 9001,
+            "entryTrackPart": 0,
+            "firstParkingTrackPart": 3,
+            "arrival": 0,
+            "departure": 0,
+            "members": [
+                {
+                    "typePrefix": "TestUnit",
+                    "carriages": 1,
+                    "id": 9101,
+                    "tasks": [
+                        {
+                            "type": {
+                                "other": "Cleaning"
+                            },
+                            "duration": 300
+                        }
+                    ]
+                }
+            ]
+        }
+    ],
+    "out": [
+        {
+            "id": 1,
+            "leaveTrackPart": 4,
+            "lastParkingTrackPart": 3,
+            "arrival": 1000,
+            "departure": 1000,
+            "standingIndex": null,
+            "trainUnits": [
+                {
+                    "typePrefix": "TestUnit",
+                    "carriages": 1,
+                    "id": null,
+                    "tasks": null
+                }
+            ]
+        }
+    ],
+    "inStanding": [],
+    "outStanding": [],
+    "startTime": 0,
+    "endTime": 2000
+}
