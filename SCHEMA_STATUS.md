@@ -2,7 +2,7 @@
 
 Where `planning-approach` stands against the 2.0.0 interchange schema, as of
 2026-08-10. The schema lives in `robust-rail-generator/schema/`; the roadmap is
-`scenario-planning-inputs/docs/roadmap-2.0.0.md`.
+`robust-rail-general/docs/roadmap-2.0.0.md`.
 
 ## Layout
 
@@ -23,7 +23,7 @@ The merge takes the layout from the former and the Python from the latter.
 **Deleted, recoverable from git** (`git show 7c0346e:<path>`): `pipeline.py`,
 `run.py`, `cli.py`, `evaluate.py`, `generate.py`, `src/local_search/solve.py`,
 `src/plan/audit_discrete_plan.py`. The batch-driver role they played now belongs
-to `scenario-planning-inputs`' `run_planner.py` / `run_evaluator.py`. Local
+to `robust-rail-general`'s `run_planner.py` / `run_evaluator.py`. Local
 search and the discrete-plan auditor have **no** replacement — they were dropped
 as part of the restructure, not superseded.
 

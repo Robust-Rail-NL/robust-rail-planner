@@ -2,7 +2,7 @@
 # Dispatch between the two things this image can do.
 #
 # The planner is the default and keeps its exact argument list, because
-# scenario-planning-inputs/run_planner.py invokes the image with
+# robust-rail-general/run_planner.py invokes the image with
 # `--location ... --scenario ... --planner ... --output ...` and nothing else.
 # Any argument list that starts with a flag, or is empty, therefore goes
 # straight to main.py — adding the visualizer must not change that contract.

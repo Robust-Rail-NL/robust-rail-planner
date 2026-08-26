@@ -48,7 +48,7 @@ def plan_schema():
 @pytest.fixture(scope="session")
 def inputs():
     """A real location and scenario, as the pipeline would be given them."""
-    root = _sibling("scenario-planning-inputs", "RRN_INPUTS_DIR") / "Location_KleineBinckhorst"
+    root = _sibling("robust-rail-general", "RRN_INPUTS_DIR") / "Location_KleineBinckhorst"
     scenarios = sorted((root / "scenarios").glob("scenario_*.json"))
     assert scenarios, f"no scenarios under {root}"
     return (
@@ -150,7 +150,7 @@ def test_no_fabricated_arrive_for_non_scenario_su():
     Fabricating an Arrive for them makes TORS re-add trains that were already
     added by their real arrival, and the second AddShuntingUnit throws.
     """
-    root = _sibling("scenario-planning-inputs", "RRN_INPUTS_DIR") / "Location_KleineBinckhorst"
+    root = _sibling("robust-rail-general", "RRN_INPUTS_DIR") / "Location_KleineBinckhorst"
     location = json.loads((root / "location.json").read_text())
     scenario = json.loads(
         (root / "scenarios" / "scenario_KleineBinckhorst_6t_custom_example3.json").read_text()

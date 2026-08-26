@@ -18,14 +18,14 @@ jobs:
     - uses: actions/checkout@v5
 
     # The schemas live in the generator, and the fixtures these tests read live
-    # in scenario-planning-inputs. Both are taken from the branch of the same
+    # in robust-rail-general. Both are taken from the branch of the same
     # name, so a coordinated schema change is validated against its own schema
     # rather than the base branch's. That works because every repo in this
     # release shares one branch name — see roadmap "Branch naming".
     - name: Check out the sibling repos
       run: |
         ref="${{ github.head_ref || github.ref_name }}"
-        for name in robust-rail-generator scenario-planning-inputs; do
+        for name in robust-rail-generator robust-rail-general; do
           repo="https://github.com/Robust-Rail-NL/$name"
           use="$ref"
           if ! git ls-remote --exit-code --heads "$repo" "$use" >/dev/null 2>&1; then
@@ -35,7 +35,7 @@ jobs:
           git clone --quiet --depth 1 --branch "$use" "$repo" "$name"
         done
 
-    # Gating, and for the same reason as in scenario-planning-inputs: validating
+    # Gating, and for the same reason as in robust-rail-general: validating
     # against a schema that no longer matches its models does not fail, it
     # passes, having checked the wrong contract.
     - name: Check the generator's schemas are not stale
@@ -80,9 +80,9 @@ jobs:
       run: |
         docker run --rm \
           -e RRN_GENERATOR_DIR=/siblings/robust-rail-generator \
-          -e RRN_INPUTS_DIR=/siblings/scenario-planning-inputs \
+          -e RRN_INPUTS_DIR=/siblings/robust-rail-general \
           -v "$PWD/robust-rail-generator:/siblings/robust-rail-generator:ro" \
-          -v "$PWD/scenario-planning-inputs:/siblings/scenario-planning-inputs:ro" \
+          -v "$PWD/robust-rail-general:/siblings/robust-rail-general:ro" \
           --entrypoint sh planner:ci -c '
             pip install --quiet --no-cache-dir -r requirements-test.txt jsonschema &&
             python3 -m pytest tests -q -rs

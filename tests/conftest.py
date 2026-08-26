@@ -13,7 +13,7 @@ FIXTURES_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixture
 # location_solver.json / scenario_solver_simple.json in the pre-unification
 # shape, which every converter in this repo would now reject.
 #
-# Kept in-repo rather than pointed at scenario-planning-inputs: this is a
+# Kept in-repo rather than pointed at robust-rail-general: this is a
 # deliberately minimal five-track corridor with one train and one request, and
 # the assertions in test_convert_to_pddl.py name its tracks and goal directly.
 # Real-world inputs are covered by test_plan_schema.py, which does read the

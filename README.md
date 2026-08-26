@@ -15,7 +15,7 @@ An AI Planning approach to solving the TUSPwSS.
   - `enhsp_planner.jl`: shells out to the ENHSP jar (`ENHSP_JAR` env var, defaults to `/opt/enhsp/enhsp.jar`).
   - `Project.toml` / `Manifest.toml`: pinned Julia dependencies (`PDDL`, `SymbolicPlanners`).
 - `convert_plan_to_tors/convert_to_tors.py`: converts a raw `.plan` (PDDL planner output) back into TORS JSON, given the original scenario and location files.
-- `data/`: sample location and example scenarios. **Pre-unification and currently unusable** — string ids, `in` as an object, no `trainUnitTypes` — so the converters reject them. Use `tests/fixtures/simple_service/` (migrated and schema-validated) or the sibling `scenario-planning-inputs` repo instead, until these are migrated or dropped.
+- `data/`: sample location and example scenarios. **Pre-unification and currently unusable** — string ids, `in` as an object, no `trainUnitTypes` — so the converters reject them. Use `tests/fixtures/simple_service/` (migrated and schema-validated) or the sibling `robust-rail-general` repo instead, until these are migrated or dropped.
 - `Dockerfile`: builds the distributable image (`ENTRYPOINT ["python3", "main.py"]`) — this is what other tools in the pipeline run.
 - `.devcontainer/`: VS Code dev container config, see [Dev container](#dev-container) below.
 - `requirements.txt`: Python dependencies (`unified-planning`).
@@ -50,10 +50,10 @@ producing a TORS plan out.
 | `--planner {symbolic,enhsp}` | Planner backend to use (default: `symbolic`) |
 | `--output` | Path to write the resulting TORS plan JSON (required) |
 
-In practice this image is driven by the sibling `scenario-planning-inputs`
+In practice this image is driven by the sibling `robust-rail-general`
 repo, which mirrors the existing generator/solver/evaluator steps:
 ```
-cd ../scenario-planning-inputs
+cd ../robust-rail-general
 python run_planner.py                       # every location, every scenario
 python run_planner.py --location Location_KleineBinckhorst --planner enhsp
 python run_planner.py --dry-run              # print the docker commands only
