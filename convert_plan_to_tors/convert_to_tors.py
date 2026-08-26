@@ -1756,9 +1756,12 @@ def convert_plan(plan_file, scenario_file, location_file):
         su["childIDs"] = [get_su_id(_as_id(c)) for c in su.get("childIDs", [])]
         su["parentIDs"] = [get_su_id(_as_id(c)) for c in su.get("parentIDs", [])]
         
-        # For combined SUs (from shunting_unit_composition), set members from composition
-        if old_id in shunting_unit_composition:
-            comp = shunting_unit_composition[old_id]
+        # For split/coupled SUs (from shunting_unit_composition), set members
+        # from composition.  _resolve_su may return a string while
+        # _generated_su stores integer keys, so normalise with _as_id.
+        int_id = _as_id(old_id)
+        if int_id in shunting_unit_composition:
+            comp = shunting_unit_composition[int_id]
             if comp["memberIDs"]:
                 su["memberIDs"] = comp["memberIDs"]
             su["parentIDs"] = [get_su_id(_as_id(p)) for p in comp.get("parentIDs", [])]
