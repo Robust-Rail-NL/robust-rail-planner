@@ -9,7 +9,7 @@
 #
 # The version is this repo's own, deliberately not 2.0.0. The generator, solver
 # and evaluator share that number because they share an interchange format;
-# planning-approach is a consumer of it on its own release line.
+# robust-rail-planner is a consumer of it on its own release line.
 #
 # The :latest tag is only applied to final releases (no prerelease suffix), so a
 # prerelease never shadows the current stable image.

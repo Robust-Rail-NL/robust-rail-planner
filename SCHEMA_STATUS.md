@@ -1,6 +1,6 @@
 # Schema status of this repo
 
-Where `planning-approach` stands against the 2.0.0 interchange schema, as of
+Where `robust-rail-planner` stands against the 2.0.0 interchange schema, as of
 2026-08-10. The schema lives in `robust-rail-generator/schema/`; the roadmap is
 `robust-rail-general/docs/roadmap-2.0.0.md`.
 

@@ -27,7 +27,7 @@ FROM ubuntu:22.04
 ARG JULIA_VERSION=1.10.5
 
 ARG VERSION=0.0.0
-LABEL org.opencontainers.image.source="https://github.com/Robust-Rail-NL/planning-approach" \
+LABEL org.opencontainers.image.source="https://github.com/Robust-Rail-NL/robust-rail-planner" \
       org.opencontainers.image.description="Robust Rail PDDL planner" \
       org.opencontainers.image.version="${VERSION}"
 
