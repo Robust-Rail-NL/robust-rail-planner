@@ -804,7 +804,7 @@ def convert_plan(plan_file, scenario_file, location_file):
     def _resolve_su(name):
         """Return the physical SU represented by a PDDL request alias."""
         result = su_identity.get(name, name)
-        return str(result) if isinstance(result, int) else result
+        return result
 
     def _members_for(su_id):
         """Return the train-unit IDs currently contained in an SU."""
@@ -1035,7 +1035,7 @@ def convert_plan(plan_file, scenario_file, location_file):
             }
             
             # Look up initial position from scenario if not already known
-            if train not in train_locations:
+            if train not in train_locations and isinstance(train, str):
                 stripped = train[3:] if train.startswith("su_") else train
                 found = False
                 for i, standing in enumerate(scenario.get("inStanding", [])):
@@ -1242,6 +1242,7 @@ def convert_plan(plan_file, scenario_file, location_file):
              or COMPILED_DEPART_FOR_REQUEST_RE.match(line))
         if m:
             groups = m.groups()
+            raw_train = groups[0]
             train = _resolve_su(groups[0])
             track = groups[-1] if len(groups) > 2 else groups[1]
 
@@ -1254,44 +1255,18 @@ def convert_plan(plan_file, scenario_file, location_file):
             # Location_KleineBinckhorst produces and the fixture does not.
             expanded_path = []
 
-            if train in active_trains:
-                state = active_trains[train]
-                
-                if not state["path"] and train in train_locations:
-                    state["path"] = [train_locations[train]]
-                
-                if state["path"]:
-                    raw_expanded = expand_path(state["path"], a_adj, b_adj, switch_ids)
-                    expanded_path = _strip_trailing_zero_length(list(raw_expanded))
-                    print(f"  DEBUG depart: train={train} path={state['path']} raw_expanded={raw_expanded} stripped={expanded_path}", flush=True)
-                    duration = compute_move_duration(expanded_path, a_adj, b_adj, switch_costs, get_reversal_duration(train, train_lookup), track_parts_by_id)
-                    if len(expanded_path) > 1:
-                        start_time, end_time = _schedule_move(train, expanded_path, duration)
-                        print(f"  DEBUG depart: CREATING MOVE {train} path={expanded_path} [{start_time}-{end_time}]", flush=True)
-                        _append_su_action(
-                            create_move_action(
-                                train,
-                                start_time,
-                                end_time,
-                                expanded_path,
-                                train_lookup,
-                                track_id_lookup,
-                                unit_lookup
-                            ),
-                            train,
-                        )
-                    else:
-                        print(f"  DEBUG depart: NO MOVE (path len={len(expanded_path)})", flush=True)
-                        _close_hold(train, su_next_free.get(_clock(train), current_time))
-                
-                del active_trains[train]
-            
-            # Determine departure time: look up from request, but never before
-            # the SU is physically ready on the exit track.
+            # Determine the departure time FIRST, before emitting the
+            # exit-approach Move, so that Move can be scheduled to END at the
+            # departure time rather than at the train's earliest-free clock. The
+            # old order scheduled the approach at the earliest free time, which
+            # emitted a spurious "move straight back toward the corridor the
+            # moment it parked" action and left the train abandoned on the
+            # approach track for the rest of its idle time (blocking later
+            # arrivals at the corridor in the KleineBinckhorst plan).
             ready_time = su_next_free.get(_clock(train), 0)
             exit_time = ready_time
             dep = None
-            if len(groups) >= 4 and not train.startswith("su_request"):
+            if len(groups) >= 4 and not raw_train.startswith("su_request"):
                 # Both departure-for-request forms end (…, request, track), so the
                 # request is the second-to-last group whether or not the action
                 # carries a slot argument. This read groups[4] and called it the
@@ -1309,18 +1284,110 @@ def convert_plan(plan_file, scenario_file, location_file):
                         break
             elif train in su_departure_time:
                 dep = su_departure_time[train]
-            elif train.startswith("su_request"):
-                req_name = "request" + train[10:]
+            elif raw_train.startswith("su_request"):
+                req_name = "request" + raw_train[len("su_request"):]
                 if req_name in request_lookup:
                     dep = request_lookup[req_name].get("arrival")
-            
+
             if dep is not None:
                 dep = int(dep)
                 su_departure_deadline[train] = dep
                 departing_sus.add(train)
                 if dep > exit_time:
                     exit_time = dep
-            
+
+            if train in active_trains:
+                state = active_trains[train]
+
+                if not state["path"] and train in train_locations:
+                    state["path"] = [train_locations[train]]
+
+                if state["path"]:
+                    raw_expanded = expand_path(state["path"], a_adj, b_adj, switch_ids)
+                    expanded_path = _strip_trailing_zero_length(list(raw_expanded))
+                    print(f"  DEBUG depart: train={train} path={state['path']} raw_expanded={raw_expanded} stripped={expanded_path}", flush=True)
+
+                del active_trains[train]
+
+            # The track the train stands on while waiting for its departure.
+            if len(expanded_path) > 1:
+                parked_track = expanded_path[0]
+            elif train in train_locations:
+                parked_track = convert_track(train_locations[train], track_lookup, track_id_lookup)["id"]
+            else:
+                parked_track = convert_track(track, track_lookup, track_id_lookup)["id"]
+
+            if len(expanded_path) > 1:
+                # Exit-approach Move, scheduled to END at the departure time:
+                # the train stands on its parked track until the approach must
+                # start, then moves to the exit and leaves exactly at the
+                # deadline — the same Arrive/Move/Wait/Move/Exit shape the
+                # reference plans use.
+                duration = compute_move_duration(
+                    expanded_path, a_adj, b_adj, switch_costs,
+                    get_reversal_duration(train, train_lookup), track_parts_by_id
+                )
+                approach_end = exit_time
+                approach_start = approach_end - duration
+                if approach_start < ready_time:
+                    problems.append(
+                        f"INFEASIBLE: SU {train} cannot reach its departure track "
+                        f"by {exit_time}; the approach needs {duration}s but the "
+                        f"SU is only ready at {ready_time}."
+                    )
+                    # Still emit a best-effort Move so the plan stays inspectable.
+                    approach_start = ready_time
+                _close_hold(train, approach_start)
+                if approach_start > ready_time:
+                    _append_su_action(
+                        create_wait_action(
+                            train,
+                            ready_time,
+                            approach_start,
+                            parked_track,
+                            train_lookup,
+                            unit_lookup
+                        ),
+                        train,
+                    )
+                    reserve([parked_track], ready_time, approach_start)
+                print(f"  DEBUG depart: CREATING MOVE {train} path={expanded_path} [{approach_start}-{approach_end}]", flush=True)
+                _append_su_action(
+                    create_move_action(
+                        train,
+                        approach_start,
+                        approach_end,
+                        expanded_path,
+                        train_lookup,
+                        track_id_lookup,
+                        unit_lookup
+                    ),
+                    train,
+                )
+                reserve(expanded_path, approach_start, approach_end + 1)
+                su_next_free[_clock(train)] = approach_end + 1
+                current_time = max(current_time, approach_end + 1)
+            else:
+                # Already at (or immediately beside) the departure track. Hold it
+                # there until it leaves rather than inventing a departure move.
+                print(f"  DEBUG depart: NO MOVE (path len={len(expanded_path)})", flush=True)
+                _close_hold(train, exit_time if exit_time > ready_time else ready_time)
+                if exit_time > ready_time:
+                    _append_su_action(
+                        create_wait_action(
+                            train,
+                            ready_time,
+                            exit_time,
+                            parked_track,
+                            train_lookup,
+                            unit_lookup
+                        ),
+                        train,
+                    )
+                    reserve([parked_track], ready_time, exit_time + 1)
+                su_next_free[_clock(train)] = exit_time + 1
+                current_time = max(current_time, exit_time + 1)
+
             # Determine the exit location. TORS expects the Exit at the
             # lastParkingTrackPart (a parkable track like 906a), NOT at the
             # leaveTrackPart (a zero-length signal like Sein70).
@@ -1336,10 +1403,10 @@ def convert_plan(plan_file, scenario_file, location_file):
             )
             # Override exit location with the scenario's departure track
             req_name_for_exit = None
-            if len(groups) >= 4 and not train.startswith("su_request"):
+            if len(groups) >= 4 and not raw_train.startswith("su_request"):
                 req_name_for_exit = groups[-2]
-            elif train.startswith("su_request"):
-                req_name_for_exit = "request" + train[10:]
+            elif raw_train.startswith("su_request"):
+                req_name_for_exit = "request" + raw_train[len("su_request"):]
             if req_name_for_exit and req_name_for_exit in request_lookup:
                 dep_track_id = request_lookup[req_name_for_exit].get("lastParkingTrackPart")
                 if dep_track_id is not None and dep_track_id in track_id_lookup:

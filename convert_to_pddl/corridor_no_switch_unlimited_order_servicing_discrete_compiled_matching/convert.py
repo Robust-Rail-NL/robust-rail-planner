@@ -949,7 +949,26 @@ def create_instance_from_scenario(
     su_previous_arrived = problem.add_fluent(up.Fluent("su_previous_arrived", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
     su_arrival_immediately_before = problem.add_fluent(up.Fluent("su_arrival_immediately_before", up.BoolType(), first=shunting_unit_type, second=shunting_unit_type), default_initial_value=False)
     compiled_arrival_ready = problem.add_fluent(up.Fluent("compiled_arrival_ready", up.BoolType(), su=shunting_unit_type), default_initial_value=False)
-    compiled_departure_unlocks = problem.add_fluent(up.Fluent("compiled_departure_unlocks", up.BoolType(), departing_su=shunting_unit_type, next_su=shunting_unit_type), default_initial_value=False)
+    # Time-derived global order over every arrival and departure in the
+    # scenario. Each event gets its own ready flag (arrival events use
+    # compiled_arrival_ready keyed by the arriving SU; departure events use
+    # compiled_departure_ready keyed by the SU that performs the departure).
+    # The completion of an event unlocks the next event through the four
+    # next_* link fluents below, so the scenario's in[]/out[] times become a
+    # hard ordering: if all arrivals precede the earliest departure, every
+    # train must arrive before any departs; where a departure time falls
+    # between two arrivals, that departure is forced between them.
+    #
+    # A shunting unit can be both an arriving train and a departing train, so
+    # the link fluent is disambiguated on both the kind of the event that is
+    # completing (after an arrival vs. after a departure) and the kind of the
+    # event that is unlocked next. enter_yard_su completes an arrival; the
+    # depart actions complete a departure.
+    compiled_departure_ready = problem.add_fluent(up.Fluent("compiled_departure_ready", up.BoolType(), su=shunting_unit_type), default_initial_value=False)
+    next_after_arrival_to_arrival = problem.add_fluent(up.Fluent("next_after_arrival_to_arrival", up.BoolType(), after_su=shunting_unit_type, next_su=shunting_unit_type), default_initial_value=False)
+    next_after_arrival_to_departure = problem.add_fluent(up.Fluent("next_after_arrival_to_departure", up.BoolType(), after_su=shunting_unit_type, next_su=shunting_unit_type), default_initial_value=False)
+    next_after_departure_to_arrival = problem.add_fluent(up.Fluent("next_after_departure_to_arrival", up.BoolType(), after_su=shunting_unit_type, next_su=shunting_unit_type), default_initial_value=False)
+    next_after_departure_to_departure = problem.add_fluent(up.Fluent("next_after_departure_to_departure", up.BoolType(), after_su=shunting_unit_type, next_su=shunting_unit_type), default_initial_value=False)
 
     phantom_track = problem.add_object("phantom", track_part_type)
     su_arrival_track = problem.add_fluent(up.Fluent("su_arrival_track", up.BoolType(), su=shunting_unit_type, track=track_part_type), default_initial_value=False)
@@ -1939,8 +1958,10 @@ def create_instance_from_scenario(
                     compiled_departure_material(single_unit_su_obj), True
                 )
         compiled_request_sources = []
+        departure_event_records = []
 
-        for _, request_obj, request_su, slot_objects, coupling_tracks in request_action_records:
+        for request, request_obj, request_su, slot_objects, coupling_tracks in request_action_records:
+            departure_event_time = int(request.get("arrival", 0))
             slot_units = [assigned_unit_by_slot[slot_name] for slot_name in slot_objects]
             compiled_request_sources.append(
                 (
@@ -1954,6 +1975,9 @@ def create_instance_from_scenario(
                 source_su = source_su_by_unit_sequence.get((slot_units[0].name,))
                 if source_su is not None:
                     departure_su_by_source[source_su] = source_su
+                    departure_event_records.append(
+                        (departure_event_time, source_su)
+                    )
                     if source_su in direct_departure_sources:
                         problem.set_initial_value(compiled_direct_departure(source_su), True)
                 continue
@@ -1964,6 +1988,9 @@ def create_instance_from_scenario(
                 if source_units == slot_units:
                     problem.set_initial_value(compiled_whole_target(source_su, request_su), True)
                     departure_su_by_source[source_su] = request_su
+                    departure_event_records.append(
+                        (departure_event_time, request_su)
+                    )
                     if source_su in direct_departure_sources:
                         problem.set_initial_value(compiled_direct_departure(source_su), True)
                         problem.set_initial_value(compiled_direct_departure(request_su), True)
@@ -2016,141 +2043,84 @@ def create_instance_from_scenario(
                     True,
                 )
 
-        # When every arriving composition already exactly matches one departure request,
-        # admit the next arrival only after the previous composition has departed.
-        ordered_arrival_sus = [su for _, su in in_train_sus]
-        if ordered_arrival_sus and all(su in departure_su_by_source for su in ordered_arrival_sus):
-            arrive_su.add_precondition(compiled_arrival_ready(arrive_su.su))
-            problem.set_initial_value(compiled_arrival_ready(ordered_arrival_sus[0]), True)
-            for current_su, next_arrival_su in zip(ordered_arrival_sus, ordered_arrival_sus[1:]):
-                departing_su = departure_su_by_source[current_su]
-                problem.set_initial_value(compiled_departure_unlocks(departing_su, next_arrival_su), True)
+        # Build a single time-derived total order over every arrival and departure
+        # event in the scenario and encode it as the hard ordering the planner must
+        # respect. Arrivals and departures are sorted by their scenario times
+        # (arrivals before departures on a tie), and each event's completion
+        # unlocks only the next event. This makes the PDDL model reflect the
+        # in[]/out[] times directly: if all arrivals precede the earliest
+        # departure, every train must arrive before any departs; where a
+        # departure time falls between two arrivals, that departure is forced in
+        # between them.
+        events = [(time, "arrival", su) for time, su in in_train_sus]
+        events += [(time, "departure", su) for time, su in departure_event_records]
+        events.sort(key=lambda event: (event[0], 0 if event[1] == "arrival" else 1))
 
-            next_arrival = up.Variable("compiled_next_arrival", shunting_unit_type)
-            for departure_action in (
-                depart_aside_su,
-                depart_bside_su,
-                compiled_depart_aside,
-                compiled_depart_bside,
-            ):
-                departure_action.add_effect(
-                    fluent=compiled_arrival_ready(next_arrival),
-                    value=True,
-                    condition=compiled_departure_unlocks(departure_action.su, next_arrival),
-                    forall=[next_arrival],
-                )
-        elif ordered_arrival_sus:
-            # Requests connected through shared source compositions form independent
-            # assembly components. Process one component at a time to avoid admitting
-            # unrelated trains that can only congest the yard.
-            arrive_su.add_precondition(compiled_arrival_ready(arrive_su.su))
-            node_neighbors = {}
-            request_completion = {}
-            source_object_by_name = {
-                source_su.name: source_su for source_su, _ in source_composition_records
-            }
-            for request_obj, request_su, source_sus in compiled_request_sources:
-                request_node = ("request", request_obj.name)
-                node_neighbors.setdefault(request_node, set())
-                request_completion[request_obj.name] = (request_obj, request_su)
-                for source_su in source_sus:
-                    source_node = ("source", source_su.name)
-                    node_neighbors.setdefault(source_node, set()).add(request_node)
-                    node_neighbors[request_node].add(source_node)
+        if events:
+            _, first_kind, first_su = events[0]
+            if first_kind == "arrival":
+                problem.set_initial_value(compiled_arrival_ready(first_su), True)
+            else:
+                problem.set_initial_value(compiled_departure_ready(first_su), True)
 
-            components = []
-            unseen = set(node_neighbors)
-            while unseen:
-                start = min(unseen)
-                component = set()
-                queue = deque([start])
-                unseen.remove(start)
-                while queue:
-                    node = queue.popleft()
-                    component.add(node)
-                    for neighbor in node_neighbors[node]:
-                        if neighbor in unseen:
-                            unseen.remove(neighbor)
-                            queue.append(neighbor)
-                components.append(component)
+        for (_, after_kind, after_su), (_, next_kind, next_su) in zip(events, events[1:]):
+            if after_kind == "arrival" and next_kind == "arrival":
+                link = next_after_arrival_to_arrival
+            elif after_kind == "arrival" and next_kind == "departure":
+                link = next_after_arrival_to_departure
+            elif after_kind == "departure" and next_kind == "arrival":
+                link = next_after_departure_to_arrival
+            else:
+                link = next_after_departure_to_departure
+            problem.set_initial_value(link(after_su, next_su), True)
 
-            arrival_rank = {su.name: rank for rank, su in enumerate(ordered_arrival_sus)}
-            components.sort(
-                key=lambda component: min(
-                    (arrival_rank.get(name, -1) for kind, name in component if kind == "source"),
-                    default=-1,
-                )
+        # Every arrival is gated by its position in the global event chain.
+        arrive_su.add_precondition(compiled_arrival_ready(arrive_su.su))
+
+        # Completing an event unlocks whichever event follows it. enter_yard_su
+        # completes an arrival event, so it advances the chain from the four
+        # next_after_arrival_* links; each depart action completes a departure
+        # event, so it advances from the next_after_departure_* links.
+        advance_next = up.Variable("compiled_next_event", shunting_unit_type)
+        enter_yard_su.add_effect(
+            fluent=compiled_arrival_ready(advance_next),
+            value=True,
+            condition=next_after_arrival_to_arrival(enter_yard_su.su, advance_next),
+            forall=[advance_next],
+        )
+        enter_yard_su.add_effect(
+            fluent=compiled_departure_ready(advance_next),
+            value=True,
+            condition=next_after_arrival_to_departure(enter_yard_su.su, advance_next),
+            forall=[advance_next],
+        )
+        for depart_action in (
+            depart_aside_su,
+            depart_bside_su,
+            compiled_depart_aside,
+            compiled_depart_bside,
+        ):
+            depart_action.add_effect(
+                fluent=compiled_arrival_ready(advance_next),
+                value=True,
+                condition=next_after_departure_to_arrival(depart_action.su, advance_next),
+                forall=[advance_next],
             )
-            incoming_names = set(arrival_rank)
-            for su in ordered_arrival_sus:
-                problem.set_initial_value(su_previous_arrived(su), True)
+            depart_action.add_effect(
+                fluent=compiled_departure_ready(advance_next),
+                value=True,
+                condition=next_after_departure_to_departure(depart_action.su, advance_next),
+                forall=[advance_next],
+            )
 
-            request_sources_by_name = {
-                request_obj.name: {source_su.name for source_su in source_sus}
-                for request_obj, _, source_sus in compiled_request_sources
-            }
-            scheduled_source_names = set().union(
-                *request_sources_by_name.values()
-            ) if request_sources_by_name else set()
-            for source_name in incoming_names - scheduled_source_names:
-                problem.set_initial_value(
-                    compiled_arrival_ready(source_object_by_name[source_name]), True
-                )
-            request_schedule = []
-            for component in components:
-                remaining_requests = {
-                    name for kind, name in component if kind == "request"
-                }
-                current_sources = set()
-                while remaining_requests:
-                    sharing = [
-                        name
-                        for name in remaining_requests
-                        if request_sources_by_name[name] & current_sources
-                    ]
-                    candidates = sharing or list(remaining_requests)
-                    selected = min(
-                        candidates,
-                        key=lambda name: min(
-                            (
-                                arrival_rank.get(source_name, -1)
-                                for source_name in request_sources_by_name[name]
-                            ),
-                            default=-1,
-                        ),
-                    )
-                    request_schedule.append(selected)
-                    current_sources = request_sources_by_name[selected]
-                    remaining_requests.remove(selected)
-
-            enabled_sources = set()
-            for request_index, request_name in enumerate(request_schedule):
-                needed_sources = {
-                    source_name
-                    for source_name in request_sources_by_name[request_name]
-                    if source_name in incoming_names and source_name not in enabled_sources
-                }
-                if request_index == 0:
-                    for source_name in needed_sources:
-                        problem.set_initial_value(
-                            compiled_arrival_ready(source_object_by_name[source_name]), True
-                        )
-                elif needed_sources:
-                    previous_name = request_schedule[request_index - 1]
-                    previous_request, previous_su = request_completion[previous_name]
-                    advance = up.InstantaneousAction(
-                        f"compiled_advance_request_{request_index}"
-                    )
-                    if previous_su is None:
-                        advance.add_precondition(request_departed(previous_request))
-                    else:
-                        advance.add_precondition(departed_su(previous_su))
-                    for source_name in needed_sources:
-                        advance.add_effect(
-                            compiled_arrival_ready(source_object_by_name[source_name]), True
-                        )
-                    problem.add_action(advance)
-                enabled_sources.update(needed_sources)
+        # Every departure is gated by its position in the global event chain.
+        for depart_action in (
+            depart_aside_su,
+            depart_bside_su,
+            compiled_depart_aside,
+            compiled_depart_bside,
+        ):
+            depart_action.add_precondition(compiled_departure_ready(depart_action.su))
 
 
     if output_file is None:
