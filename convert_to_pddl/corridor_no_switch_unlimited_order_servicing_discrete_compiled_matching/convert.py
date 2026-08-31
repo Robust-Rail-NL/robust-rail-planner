@@ -1026,6 +1026,7 @@ def create_instance_from_scenario(
     enter_yard_su.add_precondition(at_su(enter_yard_su.su, enter_yard_su.entry))
     enter_yard_su.add_precondition(su_arrival_track(enter_yard_su.su, enter_yard_su.entry))
     enter_yard_su.add_precondition(su_first_parking_track(enter_yard_su.su, enter_yard_su.target))
+    enter_yard_su.add_precondition(parking_allowed(enter_yard_su.target))
     enter_yard_su.add_precondition(up.Equals(number_of_trains_on_track(enter_yard_su.target), 0))
     enter_yard_su.add_precondition(occupied_length(enter_yard_su.target) + su_length(enter_yard_su.su) <= track_length(enter_yard_su.target))
     enter_yard_su.add_effect(at_su(enter_yard_su.su, enter_yard_su.entry), False)
@@ -1092,6 +1093,7 @@ def create_instance_from_scenario(
     move_aside_occupied_su.add_precondition(connected_aside(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to))
     move_aside_occupied_su.add_precondition(occupied_length(move_aside_occupied_su.l_to) + su_length(move_aside_occupied_su.su) <= track_length(move_aside_occupied_su.l_to))
     move_aside_occupied_su.add_precondition(number_of_trains_on_track(move_aside_occupied_su.l_to) > 0)
+    move_aside_occupied_su.add_precondition(parking_allowed(move_aside_occupied_su.l_to))
     move_aside_occupied_su.add_effect(number_of_trains_on_track(move_aside_occupied_su.l_from), number_of_trains_on_track(move_aside_occupied_su.l_from) - 1)
     move_aside_occupied_su.add_effect(number_of_trains_on_track(move_aside_occupied_su.l_to), number_of_trains_on_track(move_aside_occupied_su.l_to) + 1)
     move_aside_occupied_su.add_effect(occupied_length(move_aside_occupied_su.l_from), occupied_length(move_aside_occupied_su.l_from) - su_length(move_aside_occupied_su.su))
@@ -1138,6 +1140,7 @@ def create_instance_from_scenario(
     move_bside_occupied_su.add_precondition(connected_bside(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to))
     move_bside_occupied_su.add_precondition(occupied_length(move_bside_occupied_su.l_to) + su_length(move_bside_occupied_su.su) <= track_length(move_bside_occupied_su.l_to))
     move_bside_occupied_su.add_precondition(number_of_trains_on_track(move_bside_occupied_su.l_to) > 0)
+    move_bside_occupied_su.add_precondition(parking_allowed(move_bside_occupied_su.l_to))
     move_bside_occupied_su.add_effect(number_of_trains_on_track(move_bside_occupied_su.l_from), number_of_trains_on_track(move_bside_occupied_su.l_from) - 1)
     move_bside_occupied_su.add_effect(number_of_trains_on_track(move_bside_occupied_su.l_to), number_of_trains_on_track(move_bside_occupied_su.l_to) + 1)
     move_bside_occupied_su.add_effect(occupied_length(move_bside_occupied_su.l_from), occupied_length(move_bside_occupied_su.l_from) - su_length(move_bside_occupied_su.su))
@@ -1593,6 +1596,7 @@ def create_instance_from_scenario(
     bfs_dist = _bfs_from(adjacency, exit_ids)
 
     parking_ids = {tp["id"] for tp in location_object["trackParts"] if tp.get("parkingAllowed")}
+    _track_part_by_id = {tp["id"]: tp for tp in location_object["trackParts"]}
     parking_bfs_values = sorted({bfs_dist[pid] for pid in parking_ids if pid in bfs_dist})
     bfs_to_entry_dist = {d: i + 1 for i, d in enumerate(parking_bfs_values)}
 
@@ -1750,6 +1754,27 @@ def create_instance_from_scenario(
         preferred_track_keys = ["firstParkingTrackPart", "entryTrackPart"] if source == "inStanding" else ["entryTrackPart", "firstParkingTrackPart"]
         initial_track_id = _train_initial_track_id(train, preferred_track_keys)
         first_parking_track_id = train.get("firstParkingTrackPart")
+
+        # The scenario's firstParkingTrackPart is often the non-parkable arrival
+        # corridor (906a). Such a track is not a legal resting place for an
+        # arrived train (parking_allowed is False, and enter_yard_su now demands
+        # a parkable target), so redirect the arrival onto the nearest parkable
+        # deep-yard track that is actually modelled in this problem instance.
+        # Trains may still share a track; the only hard rule is that the resting
+        # track must permit parking, matching the human reference plans.
+        if source == "in" and first_parking_track_id is not None:
+            _tid = first_parking_track_id
+            _tp = _track_part_by_id.get(_tid)
+            if _tp is None or not _tp.get("parkingAllowed", False):
+                _candidates = [
+                    pid for pid in parking_ids
+                    if pid in bfs_dist and pid in id_to_track_part
+                ]
+                if _candidates:
+                    first_parking_track_id = min(
+                        _candidates, key=lambda pid: bfs_dist[pid]
+                    )
+
         train_members = train["members"]
 
         shunting_unit = problem.add_object("su_" + _train_object_name(source, index, train), shunting_unit_type)

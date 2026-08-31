@@ -1028,7 +1028,36 @@ def convert_plan(plan_file, scenario_file, location_file):
             su_start = su_next_free.get(_clock(train), 0)
             if train in train_arrival_times:
                 su_start = max(su_start, train_arrival_times[train])
-            pending_entry_paths.pop(train, None)
+
+            # A train that entered the yard via enter_yard_su recorded an
+            # intended physical entry move (entry track -> resting track, e.g.
+            # 906a -> 906b) but never materialized it: the accumulated MOVE
+            # path always starts on the target track, so without this the train
+            # would teleport from its entry track straight onto its resting
+            # track. Emit that entry move now so it physically enters the yard.
+            entry_path = pending_entry_paths.pop(train, None)
+            if entry_path:
+                entry_duration = compute_move_duration(
+                    entry_path, a_adj, b_adj, switch_costs,
+                    get_reversal_duration(train, train_lookup), track_parts_by_id
+                )
+                entry_start, entry_end = _schedule_move(
+                    train, entry_path, entry_duration, t_min=su_start
+                )
+                _append_su_action(
+                    create_move_action(
+                        train,
+                        entry_start,
+                        entry_end,
+                        entry_path,
+                        train_lookup,
+                        track_id_lookup,
+                        unit_lookup,
+                    ),
+                    train,
+                )
+                su_start = entry_end + 1
+
             active_trains[train] = {
                 "start_time": su_start,
                 "path": [],
