@@ -1879,6 +1879,11 @@ def convert_plan(plan_file, scenario_file, location_file):
     actions = post_process_actions(actions, train_lookup, unit_lookup, track_lookup, 
                                    track_id_lookup, train_locations_int, train_arrival_times_int, scenario, get_su_id,
                                    parkable_tracks, track_parts_by_id)
+
+    # Remove redundant back-and-forth Move excursions the planner emitted as
+    # separate move groups (they become separate Moves that TORS rejects for
+    # re-entering a track the unit already stands on).
+    actions = consolidate_loops(actions)
     
     # Fill in missing members/parentIDs/childIDs for actions that reference SUs
     # by integer ID (e.g., Wait actions created by post_process_actions)
@@ -1953,6 +1958,65 @@ def convert_plan(plan_file, scenario_file, location_file):
         raise ScheduleInfeasibleError(problems, plan=result)
 
     return result
+
+
+def consolidate_loops(actions):
+    """Remove redundant back-and-forth Move excursions from the final action
+    list. The planner sometimes emits a pointless round-trip (park, leave the
+    parked track, then come straight back to it) as separate move groups; those
+    come out of convert_plan as distinct Move actions that TORS rejects for
+    re-entering a track the unit already stands on.
+
+    Every Move keeps its absolute times, so removing an excursion only leaves a
+    time gap that TORS fills with its own Wait mechanism -- the surviving moves
+    (and their reservations/positions) stay correct, which is why this pass can
+    run after scheduling with no re-timing.
+
+    A Move is kept only if it advances onto a track the unit has not already
+    visited in the retained sequence; any Move that returns to a previously
+    visited track is treated as part of a loop and dropped (the unit is
+    considered to remain where the last kept Move left it).
+    """
+    to_remove = set()
+    by_su = {}
+    for i, a in enumerate(actions):
+        by_su.setdefault(a["shuntingUnit"]["id"], []).append(i)
+
+    for sid, idxs in by_su.items():
+        moves = [
+            i for i in idxs
+            if actions[i]["taskType"].get("predefined") == "Move"
+        ]
+        moves.sort(key=lambda i: int(actions[i]["startTime"]))
+        if not moves:
+            continue
+
+        def end_track(a):
+            res = a.get("resources")
+            return res[-1]["id"] if res else a["location"]
+
+        # The unit starts at the end of its very first move (typically the
+        # entry move onto the yard).
+        current = end_track(actions[moves[0]])
+        visited = {current}
+        for i in moves[1:]:
+            a = actions[i]
+            start = a["location"]
+            end = end_track(a)
+            if start != current:
+                # Move starts somewhere we are not standing -> it jumped to a
+                # track already left behind, i.e. it is part of a dropped
+                # excursion. Ignore it; the unit is still at `current`.
+                to_remove.add(i)
+                continue
+            if end in visited:
+                # Returning to a previously visited track is a loop.
+                to_remove.add(i)
+                continue
+            visited.add(end)
+            current = end
+
+    return [a for i, a in enumerate(actions) if i not in to_remove]
 
 
 def post_process_actions(actions, train_lookup, unit_lookup, track_lookup, 
