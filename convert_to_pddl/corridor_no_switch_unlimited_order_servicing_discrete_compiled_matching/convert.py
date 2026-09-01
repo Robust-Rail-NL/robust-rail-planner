@@ -1248,6 +1248,13 @@ def create_instance_from_scenario(
         up.Fluent("compiled_direct_departure", up.BoolType(), su=shunting_unit_type),
         default_initial_value=False,
     )
+    # A source composition whose units match a multi-unit request's slots
+    # exactly must depart as-is (whole adopt); it must not be split and
+    # re-assembled, which would leave a required unit unaccounted for.
+    compiled_must_stay_coupled = problem.add_fluent(
+        up.Fluent("compiled_must_stay_coupled", up.BoolType(), su=shunting_unit_type),
+        default_initial_value=False,
+    )
     compiled_departure_material = problem.add_fluent(
         up.Fluent("compiled_departure_material", up.BoolType(), su=shunting_unit_type),
         default_initial_value=False,
@@ -1364,6 +1371,7 @@ def create_instance_from_scenario(
             action.add_precondition(active_su(action.parent_su))
             action.add_precondition(compiled_arrival_composition_su(action.parent_su))
             action.add_precondition(up.Not(compiled_direct_departure(action.parent_su)))
+            action.add_precondition(up.Not(compiled_must_stay_coupled(action.parent_su)))
             action.add_precondition(compiled_uncouple_track(action.parent_su, action.track))
             action.add_precondition(allowed_to_move_su(action.parent_su))
             action.add_precondition(up.Not(active_su(action.child_su)))
@@ -2012,6 +2020,7 @@ def create_instance_from_scenario(
             for source_su, source_units in source_composition_records:
                 if source_units == slot_units:
                     problem.set_initial_value(compiled_whole_target(source_su, request_su), True)
+                    problem.set_initial_value(compiled_must_stay_coupled(source_su), True)
                     departure_su_by_source[source_su] = request_su
                     departure_event_records.append(
                         (departure_event_time, request_su)
