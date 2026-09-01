@@ -57,10 +57,11 @@ def _build_problem(tmp_path):
     )
 
 
-def _apply(problem, sim, state, action_name, *params):
+def _apply(problem, sim, state, plan, action_name, *params):
     objs = {o.name: o for o in problem.all_objects}
     action_instance = ActionInstance(problem.action(action_name), [objs[p] for p in params])
     assert sim.is_applicable(state, action_instance), action_name + " not applicable"
+    plan.append(action_instance)
     return sim.apply(state, action_instance)
 
 
@@ -68,40 +69,55 @@ def test_pddl_allows_a_train_to_pass_through_another_on_906b(tmp_path):
     problem = _build_problem(tmp_path)
     sim = UPSequentialSimulator(problem)
     state = sim.get_initial_state()
+    plan = []
 
     # su_train2 (arrival 0) arrives, enters the yard on 906b, then moves aside
     # to o_52 so 906b is free again.
-    state = _apply(problem, sim, state, "arrive_su", "su_train2", "sein70")
-    state = _apply(problem, sim, state, "enter_yard_su", "su_train2", "sein70", "o_906b")
-    state = _apply(problem, sim, state, "start_move_su", "su_train2")
-    state = _apply(problem, sim, state, "move_aside_empty_su", "su_train2", "o_906b", "o_906a")
-    state = _apply(problem, sim, state, "move_bside_empty_su", "su_train2", "o_906a", "o_52")
-    state = _apply(problem, sim, state, "end_move_su", "su_train2", "o_52")
+    state = _apply(problem, sim, state, plan, "arrive_su", "su_train2", "sein70")
+    state = _apply(problem, sim, state, plan, "enter_yard_su", "su_train2", "sein70", "o_906b")
+    state = _apply(problem, sim, state, plan, "start_move_su", "su_train2")
+    state = _apply(problem, sim, state, plan, "move_aside_empty_su", "su_train2", "o_906b", "o_906a")
+    state = _apply(problem, sim, state, plan, "move_bside_empty_su", "su_train2", "o_906a", "o_52")
+    state = _apply(problem, sim, state, plan, "end_move_su", "su_train2", "o_52")
 
     # su_train1 (arrival 900) arrives and occupies 906b.
-    state = _apply(problem, sim, state, "arrive_su", "su_train1", "sein70")
-    state = _apply(problem, sim, state, "enter_yard_su", "su_train1", "sein70", "o_906b")
+    state = _apply(problem, sim, state, plan, "arrive_su", "su_train1", "sein70")
+    state = _apply(problem, sim, state, plan, "enter_yard_su", "su_train1", "sein70", "o_906b")
 
     # su_train2 moves back and joins su_train1 on 906b through the throat,
     # ending up between su_train1 and the 906b -> 906a exit.
-    state = _apply(problem, sim, state, "start_move_su", "su_train2")
-    state = _apply(problem, sim, state, "move_aside_empty_su", "su_train2", "o_52", "o_906a")
-    state = _apply(problem, sim, state, "move_bside_occupied_su", "su_train2", "o_906a", "o_906b")
-    state = _apply(problem, sim, state, "end_move_su", "su_train2", "o_906b")
+    state = _apply(problem, sim, state, plan, "start_move_su", "su_train2")
+    state = _apply(problem, sim, state, plan, "move_aside_empty_su", "su_train2", "o_52", "o_906a")
+    state = _apply(problem, sim, state, plan, "move_bside_occupied_su", "su_train2", "o_906a", "o_906b")
+    state = _apply(problem, sim, state, plan, "end_move_su", "su_train2", "o_906b")
 
     # su_train1 tries to leave 906b through su_train2. Physically impossible;
     # the model (incorrectly) allows it.
-    state = _apply(problem, sim, state, "start_move_su", "su_train1")
+    state = _apply(problem, sim, state, plan, "start_move_su", "su_train1")
     pass_through = ActionInstance(
         problem.action("move_aside_empty_su"),
         [{o.name: o for o in problem.all_objects}[name] for name in ("su_train1", "o_906b", "o_906a")],
     )
     applicable = sim.is_applicable(state, pass_through)
-    assert not applicable, "expected the model to allow the pass-through first"
 
-    state = sim.apply(state, pass_through)
-    at_su = problem.fluent("at_su")
-    em = problem.environment.expression_manager
-    objs = {o.name: o for o in problem.all_objects}
-    assert state.get_value(em.FluentExp(at_su, (objs["su_train1"], objs["o_906a"])))
-    assert state.get_value(em.FluentExp(at_su, (objs["su_train2"], objs["o_906b"])))
+    # Print the plan the PDDL model made.
+    print("\n=== plan made by the PDDL model ===")
+    for i, action_instance in enumerate(plan, 1):
+        print(f"{i:>2}. {action_instance}")
+    print(f"    -> pass-through move_aside_empty_su(su_train1 o_906b o_906a)"
+          f" applicable: {applicable}")
+
+    if applicable:
+        state = sim.apply(state, pass_through)
+        at_su = problem.fluent("at_su")
+        em = problem.environment.expression_manager
+        objs = {o.name: o for o in problem.all_objects}
+        su1_on_906a = state.get_value(em.FluentExp(at_su, (objs["su_train1"], objs["o_906a"])))
+        su2_on_906b = state.get_value(em.FluentExp(at_su, (objs["su_train2"], objs["o_906b"])))
+        print(f"    -> after: su_train1 on o_906a: {su1_on_906a};"
+              f" su_train2 still on o_906b: {su2_on_906b}")
+
+    assert not applicable, (
+        "the model still allows su_train1 to drive 906b -> 906a through "
+        "su_train2; the exclusive-path-clearance fix is not in place"
+    )
