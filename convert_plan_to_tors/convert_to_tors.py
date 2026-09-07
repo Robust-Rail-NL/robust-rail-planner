@@ -767,6 +767,8 @@ def convert_plan(plan_file, scenario_file, location_file):
     problems = []              # infeasibility diagnostics collected during conversion
     departing_sus = set()      # SU names with a scenario departure deadline
     su_departure_deadline = {} # SU name -> requested departure time (hard deadline)
+    repark_deadline = {}       # SU name -> departure horizon for re-park (step-aside) moves
+    rested_on = {}             # SU name -> track it is physically parked on (materialized)
     waiting_on_messages = {}   # parked-out SU name -> parking slot id (unit waits there)
     active_trains = {}
     pending_entry_paths = {}  # SU name -> expanded path from entry to yard (from enter_yard_su)
@@ -960,6 +962,38 @@ def convert_plan(plan_file, scenario_file, location_file):
     with open(plan_file) as f:
         lines = [line.strip() for line in f if line.strip()]
 
+    # Pre-scan for departure deadlines so re-park moves (LIFO step-asides) can
+    # be forced to clear the destination before any other unit needs it. A unit
+    # that re-parks stands on the destination until its departure, so its
+    # standing window must not overlap later arrivals or exit approaches. The
+    # deadlines are discovered before scheduling so the constraint does not
+    # depend on processing order.
+    for line in lines:
+        norm = _normalize_plan_line(line)
+        for pat in (DEPART_SU_RE, DEPART_SU_FOR_REQUEST_RE,
+                    COMPILED_DEPART_FOR_REQUEST_RE):
+            m = pat.match(norm)
+            if not m:
+                continue
+            groups = m.groups()
+            raw_train = groups[0]
+            dep = None
+            if len(groups) >= 4 and not raw_train.startswith("su_request"):
+                req_name = groups[-2]
+                if req_name in request_lookup:
+                    dep = request_lookup[req_name].get("arrival")
+                else:
+                    for req in scenario.get("out", []):
+                        dep = req.get("arrival")
+                        break
+            elif raw_train.startswith("su_request"):
+                dep = request_lookup.get(
+                    "request" + raw_train[len("su_request"):], {}
+                ).get("arrival")
+            if dep is not None:
+                repark_deadline[raw_train] = int(dep)
+            break
+
     unhandled = []
     for line in lines:
         line = _normalize_plan_line(line)
@@ -1146,7 +1180,28 @@ def convert_plan(plan_file, scenario_file, location_file):
                 expanded_path = _strip_trailing_zero_length(expand_path(state["path"], a_adj, b_adj, switch_ids))
                 duration = compute_move_duration(expanded_path, a_adj, b_adj, switch_costs, get_reversal_duration(train, train_lookup), track_parts_by_id)
                 if len(expanded_path) > 1:
-                    start_time, end_time = _schedule_move(train, expanded_path, duration)
+                    prev_rest = rested_on.get(train)
+                    if prev_rest is not None and prev_rest != dest_track:
+                        # Re-park (e.g. a LIFO step-aside off a yard track): the
+                        # unit stands on `dest_track` until its departure, so the
+                        # move must end after every existing reservation that
+                        # precedes that horizon, and the standing window is
+                        # reserved so later schedulers steer clear of it.
+                        horizon = repark_deadline.get(train, scenario_end_time)
+                        max_end = max(
+                            (e for s, e in _intervals(dest_track) if s < horizon),
+                            default=0)
+                        t_min = max(
+                            su_next_free.get(_clock(train), 0),
+                            int(max_end) - 1 - duration,
+                            0)
+                        start_time, end_time = _schedule_move(
+                            train, expanded_path, duration, t_min)
+                        if end_time + 1 < horizon:
+                            reserve([dest_track], end_time + 1, horizon)
+                    else:
+                        start_time, end_time = _schedule_move(
+                            train, expanded_path, duration)
                     _append_su_action(
                         create_move_action(
                             train,
@@ -1163,6 +1218,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                     _close_hold(train, su_next_free.get(_clock(train), current_time))
                 
                 train_locations[train] = dest_track
+                rested_on[train] = dest_track
                 del active_trains[train]
             continue
 
@@ -1209,6 +1265,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                 del active_trains[train]
             
             train_locations[train] = track_id
+            rested_on[train] = track_id
 
             if unit is not None:
                 # The no_bumpers park_su parks a specific unit in a specific
@@ -1999,7 +2056,11 @@ def consolidate_loops(actions, a_adj, b_adj, switch_ids, switch_costs,
     """
     # By scanning the SU-ordered indices we naturally form maximal runs of
     # *consecutive* Moves: a Move run continues only while the next action of
-    # this SU is also a Move. Any other action type breaks the run.
+    # this SU is also a Move AND immediately follows the previous one (same
+    # driving maneuver). Any other action type — or a gap where the unit sits
+    # parked between moves — breaks the run: a long-idle unit that later steps
+    # aside to another track (e.g. a LIFO step-aside off a yard track) is a
+    # separate maneuver and must not be folded into the earlier drive.
     by_su = {}
     for i, a in enumerate(actions):
         by_su.setdefault(a["shuntingUnit"]["id"], []).append(i)
@@ -2017,7 +2078,12 @@ def consolidate_loops(actions, a_adj, b_adj, switch_ids, switch_costs,
                 i += 1
                 continue
             j = i
-            while j + 1 < n and actions[idxs[j + 1]]["taskType"].get("predefined") == "Move":
+            while (
+                j + 1 < n
+                and actions[idxs[j + 1]]["taskType"].get("predefined") == "Move"
+                and int(actions[idxs[j + 1]]["startTime"])
+                <= int(actions[idxs[j]]["endTime"]) + 1
+            ):
                 j += 1
             run = idxs[i:j + 1]
 
@@ -2086,14 +2152,13 @@ def _run_track_set(actions, run0):
 def _pick_rest_track(actions, run0, a_adj, b_adj, switch_ids, zero_length_tracks):
     """Choose the track where the unit actually rests at the end of a move run.
 
-    For a run that simply creeps across the entrance corridor onto one track the
-    net path's end is the rest. For a run that goes out and back (e.g. 906b ->
-    o_52 -> 906b) the unit really rests at the *deepest* parkable track it
-    reached (o_52), and the trailing return-to-entrance leg is a behind-the-scenes
-    repositioning that just piles extra units back onto the shared corridor
-    track. Resting at the deepest reach keeps the departing unit on its own deep
-    park track instead of forcing it back onto 906b (which otherwise exceeds
-    TORS track length when several units do it).
+    A run that drives to a new track and stays there is a net transit: the unit
+    rests where the run ends. Only a run that goes out and returns to the track
+    it started from (e.g. 906b -> o_52 -> 906b) is a behind-the-scenes
+    repositioning, where the deepest parkable track it reached (o_52) is the
+    real rest. Using the run's end track for net transits keeps a unit that
+    legitimately parked on 906b (after stepping aside) from being shoved back
+    onto 52.
     """
     tracks = _run_track_set(actions, run0)
     start = int(actions[run0[0]]["location"])
@@ -2101,6 +2166,16 @@ def _pick_rest_track(actions, run0, a_adj, b_adj, switch_ids, zero_length_tracks
     parkable = [t for t in tracks if t not in zero_length_tracks and t != start]
     if not parkable:
         return int(actions[run0[-1]]["location"])
+
+    last = actions[run0[-1]]
+    last_resources = last.get("resources", [])
+    end_track = int(last_resources[-1]["id"]) if last_resources else int(last["location"])
+
+    if end_track in parkable:
+        # Net transit: the drive ends somewhere new, so the unit rests there.
+        return end_track
+    # Out-and-back (unit returned to its start): the true rest is the deepest
+    # parkable track reached during the excursion.
     return max(parkable, key=lambda t: dist.get(t, -1))
 
 
@@ -2177,6 +2252,12 @@ def _relocate_rest(actions, run, rest_track, a_adj, b_adj, switch_ids,
         if a["shuntingUnit"]["id"] != sid:
             continue
         tt = a["taskType"].get("predefined")
+        if tt == "Move" and wait_idx is None:
+            # The unit drove again before it rested (e.g. a LIFO step-aside
+            # toward its departure track): the run was not its final approach,
+            # so its Wait and departure correctly point where the PDDL put
+            # them and must not be relocated.
+            break
         if tt == "Wait" and wait_idx is None:
             wait_idx = k
         elif tt == "Move" and depart_idx is None:

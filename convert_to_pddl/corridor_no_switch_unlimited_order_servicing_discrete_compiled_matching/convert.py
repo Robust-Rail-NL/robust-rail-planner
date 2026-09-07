@@ -795,6 +795,35 @@ def _bfs_through_switches(adj, start, switch_ids, allowed_ids):
     return reachable
 
 
+def _bfs_through_switches_with_predecessors(adj, start, switch_ids, allowed_ids):
+    """Same reachability as _bfs_through_switches, but also records one
+    predecessor per reached non-switch target (the node that leads into it)."""
+    visited = {start}
+    queue = deque([start])
+    pred = {}
+    while queue:
+        node = queue.popleft()
+        for neighbor in adj.get(node, []):
+            if neighbor in allowed_ids and neighbor != start:
+                if neighbor not in pred:
+                    pred[neighbor] = node
+            elif neighbor in switch_ids and neighbor not in visited:
+                visited.add(neighbor)
+                queue.append(neighbor)
+    return pred
+
+
+def _entry_side_on_target(track_part_by_id, target_id, pred_id):
+    """Which end of `target_id` its neighbour `pred_id` plugs into: "a" or "b".
+
+    The predecessor is either the source track or a switch, and it is listed
+    in exactly one of the target's side lists."""
+    target = track_part_by_id.get(target_id, {})
+    if pred_id in target.get("aSide", []):
+        return "a"
+    return "b"
+
+
 def _build_side_aware_track_graph(location_object, allowed_track_ids=None):
     """Build the exact no-switch movement graph while retaining A/B edge labels."""
     switch_ids = {
@@ -917,6 +946,14 @@ def create_instance_from_scenario(
     turning_allowed = problem.add_fluent(up.Fluent("turning_allowed", up.BoolType(), trackpart=track_part_type),                         default_initial_value=False)
     connected_aside = problem.add_fluent(up.Fluent("connected_aside", up.BoolType(), from_=track_part_type, to=track_part_type),           default_initial_value=False)
     connected_bside = problem.add_fluent(up.Fluent("connected_bside", up.BoolType(), from_=track_part_type, to=track_part_type),           default_initial_value=False)
+    # Which end of the target track a movement from a given source arrives at.
+    # A mover leaving the source via its A-side or B-side does not always enter
+    # the same-named end of the target: for instance 906a's B-side plugs into
+    # the A-side (throat) of the 906b stub. Knowing the arrival end is what
+    # lets the movement actions place the mover at the physically correct end
+    # of the target and deny an older unit the exit it now blocks.
+    land_on_a = problem.add_fluent(up.Fluent("land_on_a", up.BoolType(), from_=track_part_type, to=track_part_type),                       default_initial_value=False)
+    land_on_b = problem.add_fluent(up.Fluent("land_on_b", up.BoolType(), from_=track_part_type, to=track_part_type),                       default_initial_value=False)
     departure_exit_a = problem.add_fluent(up.Fluent("departure_exit_a", up.BoolType(), trackpart=track_part_type),                          default_initial_value=False)
     departure_exit_b = problem.add_fluent(up.Fluent("departure_exit_b", up.BoolType(), trackpart=track_part_type),                          default_initial_value=False)
     entry_distance = problem.add_fluent(up.Fluent("entry_distance", up.IntType(),  trackpart=track_part_type),                          default_initial_value=up.Int(0))
@@ -1105,11 +1142,18 @@ def create_instance_from_scenario(
     move_aside_occupied_su.add_precondition(frontmost_a_su(move_aside_occupied_su.su))
     move_aside_occupied_su.add_effect(fluent=frontmost_a_su(_maov), value=True, condition=behind_su(_maov, move_aside_occupied_su.su), forall=[_maov])
     move_aside_occupied_su.add_effect(fluent=behind_su(_maov, move_aside_occupied_su.su), value=False, condition=behind_su(_maov, move_aside_occupied_su.su), forall=[_maov])
-    move_aside_occupied_su.add_effect(fluent=frontmost_a_su(_maop), value=False, condition=up.And(at_su(_maop, move_aside_occupied_su.l_to), frontmost_a_su(_maop)), forall=[_maop])
-    # move_aside_occupied_su.add_effect(fluent=frontmost_b_su(_maop), value=False, condition=up.And(at_su(_maop, move_aside_occupied_su.l_to), frontmost_b_su(_maop)), forall=[_maop])
-    move_aside_occupied_su.add_effect(fluent=behind_su(_maop, move_aside_occupied_su.su), value=True, condition=up.And(at_su(_maop, move_aside_occupied_su.l_to), frontmost_a_su(_maop)), forall=[_maop])
-    move_aside_occupied_su.add_effect(frontmost_a_su(move_aside_occupied_su.su), True)
-    move_aside_occupied_su.add_effect(frontmost_b_su(move_aside_occupied_su.su), False)
+    # The mover leaves the source A-side but lands on whichever end of the
+    # target its connection plugs into. On an A-side landing it becomes the
+    # unit closest to the exit and drives the previous A-side unit to its rear;
+    # on a B-side landing it buries itself at the far end instead.
+    move_aside_occupied_su.add_effect(fluent=frontmost_a_su(_maop), value=False, condition=up.And(land_on_a(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to), at_su(_maop, move_aside_occupied_su.l_to), frontmost_a_su(_maop)), forall=[_maop])
+    move_aside_occupied_su.add_effect(fluent=behind_su(_maop, move_aside_occupied_su.su), value=True, condition=up.And(land_on_a(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to), at_su(_maop, move_aside_occupied_su.l_to), frontmost_a_su(_maop)), forall=[_maop])
+    move_aside_occupied_su.add_effect(frontmost_a_su(move_aside_occupied_su.su), True, condition=land_on_a(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to))
+    move_aside_occupied_su.add_effect(frontmost_b_su(move_aside_occupied_su.su), False, condition=land_on_a(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to))
+    move_aside_occupied_su.add_effect(fluent=frontmost_b_su(_maop), value=False, condition=up.And(land_on_b(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to), at_su(_maop, move_aside_occupied_su.l_to), frontmost_b_su(_maop)), forall=[_maop])
+    move_aside_occupied_su.add_effect(fluent=behind_su(move_aside_occupied_su.su, _maop), value=True, condition=up.And(land_on_b(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to), at_su(_maop, move_aside_occupied_su.l_to), frontmost_b_su(_maop)), forall=[_maop])
+    move_aside_occupied_su.add_effect(frontmost_b_su(move_aside_occupied_su.su), True, condition=land_on_b(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to))
+    move_aside_occupied_su.add_effect(frontmost_a_su(move_aside_occupied_su.su), False, condition=land_on_b(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to))
     problem.add_action(move_aside_occupied_su)
 
     move_bside_empty_su = up.InstantaneousAction('move_bside_empty_su', su=shunting_unit_type, l_from=track_part_type, l_to=track_part_type)
@@ -1153,11 +1197,18 @@ def create_instance_from_scenario(
     move_bside_occupied_su.add_precondition(frontmost_b_su(move_bside_occupied_su.su))
     move_bside_occupied_su.add_effect(fluent=frontmost_b_su(_mbov), value=True, condition=behind_su(move_bside_occupied_su.su, _mbov), forall=[_mbov])
     move_bside_occupied_su.add_effect(fluent=behind_su(move_bside_occupied_su.su, _mbov), value=False, condition=behind_su(move_bside_occupied_su.su, _mbov), forall=[_mbov])
-    move_bside_occupied_su.add_effect(fluent=frontmost_b_su(_mbop), value=False, condition=up.And(at_su(_mbop, move_bside_occupied_su.l_to), frontmost_b_su(_mbop)), forall=[_mbop])
-    # move_bside_occupied_su.add_effect(fluent=frontmost_a_su(_mbop), value=False, condition=up.And(at_su(_mbop, move_bside_occupied_su.l_to), frontmost_a_su(_mbop)), forall=[_mbop])
-    move_bside_occupied_su.add_effect(fluent=behind_su(move_bside_occupied_su.su, _mbop), value=True, condition=up.And(at_su(_mbop, move_bside_occupied_su.l_to), frontmost_b_su(_mbop)), forall=[_mbop])
-    move_bside_occupied_su.add_effect(frontmost_b_su(move_bside_occupied_su.su), True)
-    move_bside_occupied_su.add_effect(frontmost_a_su(move_bside_occupied_su.su), False)
+    # The mover leaves the source B-side but lands on whichever end of the
+    # target its connection plugs into. Entering a stub's throat (A-side) makes
+    # the mover the unit closest to the exit, blocking the units already there;
+    # entering the far end buries the mover behind them instead.
+    move_bside_occupied_su.add_effect(fluent=frontmost_b_su(_mbop), value=False, condition=up.And(land_on_b(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to), at_su(_mbop, move_bside_occupied_su.l_to), frontmost_b_su(_mbop)), forall=[_mbop])
+    move_bside_occupied_su.add_effect(fluent=behind_su(move_bside_occupied_su.su, _mbop), value=True, condition=up.And(land_on_b(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to), at_su(_mbop, move_bside_occupied_su.l_to), frontmost_b_su(_mbop)), forall=[_mbop])
+    move_bside_occupied_su.add_effect(frontmost_b_su(move_bside_occupied_su.su), True, condition=land_on_b(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to))
+    move_bside_occupied_su.add_effect(frontmost_a_su(move_bside_occupied_su.su), False, condition=land_on_b(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to))
+    move_bside_occupied_su.add_effect(fluent=frontmost_a_su(_mbop), value=False, condition=up.And(land_on_a(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to), at_su(_mbop, move_bside_occupied_su.l_to), frontmost_a_su(_mbop)), forall=[_mbop])
+    move_bside_occupied_su.add_effect(fluent=behind_su(_mbop, move_bside_occupied_su.su), value=True, condition=up.And(land_on_a(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to), at_su(_mbop, move_bside_occupied_su.l_to), frontmost_a_su(_mbop)), forall=[_mbop])
+    move_bside_occupied_su.add_effect(frontmost_a_su(move_bside_occupied_su.su), True, condition=land_on_a(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to))
+    move_bside_occupied_su.add_effect(frontmost_b_su(move_bside_occupied_su.su), False, condition=land_on_a(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to))
     problem.add_action(move_bside_occupied_su)
 
     depart_aside_su = up.InstantaneousAction('depart_aside_su', su=shunting_unit_type, l=track_part_type)
@@ -1726,6 +1777,26 @@ def create_instance_from_scenario(
         for target_id in _bfs_through_switches(b_adj, src_id, switch_like_track_ids, allowed_ids):
             if target_id != src_id and target_id in id_to_track_part:
                 problem.set_initial_value(connected_bside(id_to_track_part[src_id], id_to_track_part[target_id]), True)
+
+    for src_id in list(id_to_track_part):
+        for target_id, pred_id in _bfs_through_switches_with_predecessors(
+            a_adj, src_id, switch_like_track_ids, allowed_ids
+        ).items():
+            if target_id != src_id and target_id in id_to_track_part:
+                side = _entry_side_on_target(_track_part_by_id, target_id, pred_id)
+                if side == "a":
+                    problem.set_initial_value(land_on_a(id_to_track_part[src_id], id_to_track_part[target_id]), True)
+                else:
+                    problem.set_initial_value(land_on_b(id_to_track_part[src_id], id_to_track_part[target_id]), True)
+        for target_id, pred_id in _bfs_through_switches_with_predecessors(
+            b_adj, src_id, switch_like_track_ids, allowed_ids
+        ).items():
+            if target_id != src_id and target_id in id_to_track_part:
+                side = _entry_side_on_target(_track_part_by_id, target_id, pred_id)
+                if side == "a":
+                    problem.set_initial_value(land_on_a(id_to_track_part[src_id], id_to_track_part[target_id]), True)
+                else:
+                    problem.set_initial_value(land_on_b(id_to_track_part[src_id], id_to_track_part[target_id]), True)
 
     # --- Compute initial occupancies ---
     # Standing trains already occupy their tracks at time zero. Record their
