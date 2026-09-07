@@ -1106,6 +1106,7 @@ def create_instance_from_scenario(
     move_aside_occupied_su.add_effect(fluent=frontmost_a_su(_maov), value=True, condition=behind_su(_maov, move_aside_occupied_su.su), forall=[_maov])
     move_aside_occupied_su.add_effect(fluent=behind_su(_maov, move_aside_occupied_su.su), value=False, condition=behind_su(_maov, move_aside_occupied_su.su), forall=[_maov])
     move_aside_occupied_su.add_effect(fluent=frontmost_a_su(_maop), value=False, condition=up.And(at_su(_maop, move_aside_occupied_su.l_to), frontmost_a_su(_maop)), forall=[_maop])
+    # move_aside_occupied_su.add_effect(fluent=frontmost_b_su(_maop), value=False, condition=up.And(at_su(_maop, move_aside_occupied_su.l_to), frontmost_b_su(_maop)), forall=[_maop])
     move_aside_occupied_su.add_effect(fluent=behind_su(_maop, move_aside_occupied_su.su), value=True, condition=up.And(at_su(_maop, move_aside_occupied_su.l_to), frontmost_a_su(_maop)), forall=[_maop])
     move_aside_occupied_su.add_effect(frontmost_a_su(move_aside_occupied_su.su), True)
     move_aside_occupied_su.add_effect(frontmost_b_su(move_aside_occupied_su.su), False)
@@ -1153,6 +1154,7 @@ def create_instance_from_scenario(
     move_bside_occupied_su.add_effect(fluent=frontmost_b_su(_mbov), value=True, condition=behind_su(move_bside_occupied_su.su, _mbov), forall=[_mbov])
     move_bside_occupied_su.add_effect(fluent=behind_su(move_bside_occupied_su.su, _mbov), value=False, condition=behind_su(move_bside_occupied_su.su, _mbov), forall=[_mbov])
     move_bside_occupied_su.add_effect(fluent=frontmost_b_su(_mbop), value=False, condition=up.And(at_su(_mbop, move_bside_occupied_su.l_to), frontmost_b_su(_mbop)), forall=[_mbop])
+    # move_bside_occupied_su.add_effect(fluent=frontmost_a_su(_mbop), value=False, condition=up.And(at_su(_mbop, move_bside_occupied_su.l_to), frontmost_a_su(_mbop)), forall=[_mbop])
     move_bside_occupied_su.add_effect(fluent=behind_su(move_bside_occupied_su.su, _mbop), value=True, condition=up.And(at_su(_mbop, move_bside_occupied_su.l_to), frontmost_b_su(_mbop)), forall=[_mbop])
     move_bside_occupied_su.add_effect(frontmost_b_su(move_bside_occupied_su.su), True)
     move_bside_occupied_su.add_effect(frontmost_a_su(move_bside_occupied_su.su), False)
@@ -2022,13 +2024,17 @@ def create_instance_from_scenario(
                     problem.set_initial_value(compiled_whole_target(source_su, request_su), True)
                     problem.set_initial_value(compiled_must_stay_coupled(source_su), True)
                     departure_su_by_source[source_su] = request_su
-                    departure_event_records.append(
-                        (departure_event_time, request_su)
-                    )
                     if source_su in direct_departure_sources:
                         problem.set_initial_value(compiled_direct_departure(source_su), True)
                         problem.set_initial_value(compiled_direct_departure(request_su), True)
                     break
+            # The request SU is a departure event even when no arrival composition
+            # matches the request's unit order whole (e.g. a coupled departure that
+            # is re-assembled in a different order than it arrived). Only coupling
+            # into the matching composition short-circuits to the arrival SU.
+            departure_event_records.append(
+                (departure_event_time, request_su)
+            )
             for track in coupling_tracks:
                 problem.set_initial_value(compiled_coupling_track(request_su, track), True)
 
