@@ -26,7 +26,7 @@ class ScheduleInfeasibleError(Exception):
 
 # PDDL plan format: (action_name arg1 arg2 ...)
 # Interchange schema version this converter writes. Bumped together with the
-# generator, solver and evaluator; see SCHEMA_CHANGELOG.md there.
+# generator, solver and evaluator; see robust-rail-general's SCHEMA_CHANGELOG.md.
 SCHEMA_VERSION = 1
 
 
