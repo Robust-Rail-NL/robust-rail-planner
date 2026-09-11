@@ -46,6 +46,8 @@
 # same setup — a buildx builder isn't tied to a specific repo or Dockerfile.
 set -euo pipefail
 
+docker login ghcr.io
+
 IMAGE="ghcr.io/robust-rail-nl/planner"
 BUILDER_NAME="robust-rail-builder"
 PLATFORMS="linux/amd64,linux/arm64"
