@@ -31,6 +31,10 @@ LABEL org.opencontainers.image.source="https://github.com/Robust-Rail-NL/robust-
       org.opencontainers.image.description="Robust Rail PDDL planner" \
       org.opencontainers.image.version="${VERSION}"
 
+# Exposed at runtime (not just baked into the LABEL) so main.py can print it
+# at startup — see planner_version() there.
+ENV PLANNER_VERSION=${VERSION}
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 # --- System deps ---

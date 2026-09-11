@@ -72,7 +72,29 @@ def convert_plan_to_tors(plan_path, scenario_path, location_path):
     return convert_plan(plan_path, scenario_path, location_path)
 
 
+def planner_version():
+    """The version string to report at startup.
+
+    Reads PLANNER_VERSION, which the image sets from the Dockerfile's VERSION
+    build-arg — the same arg docker-push.sh and docker-push-edge.sh pass a
+    reviewed release or a computed edge version into, respectively. Outside
+    the image (a local checkout, or a test invoking main.py directly) there
+    is no build-time version to embed, so this falls back to the VERSION
+    file itself.
+    """
+    version = os.environ.get("PLANNER_VERSION")
+    if version:
+        return version
+    try:
+        with open(os.path.join(REPO_ROOT, "VERSION")) as f:
+            return f.read().strip() + "-local"
+    except OSError:
+        return "unknown"
+
+
 def main():
+    print(f"robust-rail-planner {planner_version()}", file=sys.stderr)
+
     parser = argparse.ArgumentParser(
         description="Planner step: scenario -> plan (TORS JSON)")
     parser.add_argument("--location", required=True,
