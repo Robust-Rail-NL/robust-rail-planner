@@ -1958,7 +1958,7 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
                 # the train physically occupies the adjacent gateway track, not
                 # the signal itself.  Resolve the resource to that track.
                 arrive_resource_loc = arrive_location
-                if arrive_location in track_parts_by_id:
+                if track_parts_by_id and arrive_location in track_parts_by_id:
                     _tp = track_parts_by_id[arrive_location]
                     if _tp.get("length", 0) == 0 and not _tp.get("parkingAllowed", False):
                         _neighbors = _tp.get("aSide", []) + _tp.get("bSide", [])
