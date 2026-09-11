@@ -41,7 +41,7 @@ def _sibling(name, env_var):
 
 @pytest.fixture(scope="session")
 def plan_schema():
-    schema_dir = _sibling("robust-rail-generator", "RRN_GENERATOR_DIR") / "schema"
+    schema_dir = _sibling("robust-rail-general", "RRN_INPUTS_DIR") / "schema"
     return json.loads((schema_dir / "schema_plan.json").read_text())
 
 

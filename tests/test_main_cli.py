@@ -58,7 +58,7 @@ def test_main_output_validates_against_the_plan_schema(tmp_path):
     result = _run_main(output_file)
     assert result.returncode == 0, result.stderr
 
-    schema_dir = _sibling("robust-rail-generator", "RRN_GENERATOR_DIR") / "schema"
+    schema_dir = _sibling("robust-rail-general", "RRN_INPUTS_DIR") / "schema"
     schema = json.loads((schema_dir / "schema_plan.json").read_text())
     plan = json.loads(output_file.read_text())
 
