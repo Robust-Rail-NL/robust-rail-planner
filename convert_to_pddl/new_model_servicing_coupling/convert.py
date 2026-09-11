@@ -946,7 +946,7 @@ def create_instance_from_scenario(
     matching_variant=0,
 ):
     precompute_matching = True
-    matching_strategy = "composition_preserving"
+    matching_strategy = "composition-preserving"
     compile_precomputed_actions = True
     # This used to fall back to a sibling scenario-planning-inputs checkout,
     # reached by counting directories up from __file__. That only ever resolved
@@ -1031,7 +1031,7 @@ def create_instance_from_scenario(
     su_has_arrived = problem.add_fluent(up.Fluent("su_has_arrived", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=True)
     su_previous_arrived = problem.add_fluent(up.Fluent("su_previous_arrived", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
     su_arrival_immediately_before = problem.add_fluent(up.Fluent("su_arrival_immediately_before", up.BoolType(), first=shunting_unit_type, second=shunting_unit_type), default_initial_value=False)
-    compiled_arrival_ready = problem.add_fluent(up.Fluent("compiled_arrival_ready", up.BoolType(), su=shunting_unit_type), default_initial_value=False)
+    # compiled_arrival_ready = problem.add_fluent(up.Fluent("compiled_arrival_ready", up.BoolType(), su=shunting_unit_type), default_initial_value=False)
     compiled_departure_unlocks = problem.add_fluent(up.Fluent("compiled_departure_unlocks", up.BoolType(), departing_su=shunting_unit_type, next_su=shunting_unit_type), default_initial_value=False)
 
     phantom_track = problem.add_object("phantom", track_part_type)
@@ -1432,7 +1432,7 @@ def create_instance_from_scenario(
             action.add_precondition(single_unit_su(action.child_su, action.unit))
             action.add_precondition(front_of(action.unit, action.parent_su) if front else back_of(action.unit, action.parent_su))
             action.add_precondition(at_su(action.parent_su, action.track))
-            action.add_precondition(serviced(action.parent_su)) # remove version 3
+            action.add_precondition(serviced(action.parent_su))
             ## Change in version 3 - back should only happen with more than 2 train units
             action.add_precondition(up.GE(su_unit_count(action.parent_su), 2 if front else 3))
             # action.add_precondition(up.GE(su_unit_count(action.parent_su), 2)) # old until version 3
@@ -1505,7 +1505,7 @@ def create_instance_from_scenario(
         compiled_start.add_precondition(up.Not(parked_su(compiled_start.source_su)))
         compiled_start.add_precondition(up.Not(active_su(compiled_start.request_su)))
         compiled_start.add_precondition(contains_su(compiled_start.source_su, compiled_start.unit))
-        compiled_start.add_precondition(single_unit_su(compiled_start.source_su, compiled_start.unit))
+        # compiled_start.add_precondition(single_unit_su(compiled_start.source_su, compiled_start.unit))
         compiled_start.add_precondition(compiled_target_request_su(compiled_start.unit, compiled_start.request_su))
         compiled_start.add_precondition(at_su(compiled_start.source_su, compiled_start.track))
         compiled_start.add_precondition(coupling_allowed(compiled_start.track))
@@ -1827,13 +1827,14 @@ def create_instance_from_scenario(
             if initial_track_id in id_to_track_part:
                 problem.set_initial_value(su_arrival_track(shunting_unit, id_to_track_part[initial_track_id]), True)
         elif initial_track_id in id_to_track_part:
+            # Instanding trains
             problem.set_initial_value(at_su(shunting_unit, id_to_track_part[initial_track_id]), True)
             track_initial_su_order.setdefault(initial_track_id, []).append(shunting_unit)
         composition_obj = None
+        problem.set_initial_value(su_may_move(shunting_unit), True)
         if len(train_members) > 1:
             composition_obj = problem.add_object("composition" + str(train["id"]), arrival_composition_type)
             problem.set_initial_value(composition_needs_uncoupling(composition_obj), True)
-            problem.set_initial_value(su_may_move(shunting_unit), True)
             if compile_precomputed_actions:
                 problem.set_initial_value(compiled_arrival_composition_su(shunting_unit), True)
                 if initial_track_id in id_to_track_part:
@@ -1841,9 +1842,6 @@ def create_instance_from_scenario(
                         compiled_uncouple_track(shunting_unit, id_to_track_part[initial_track_id]),
                         True,
                     )
-        else:
-            problem.set_initial_value(su_may_move(shunting_unit), True)
-
         if source == "in":
             problem.set_initial_value(su_has_arrived(shunting_unit), False)
             in_train_sus.append((int(train.get("arrival", 0)), shunting_unit))
@@ -2080,30 +2078,31 @@ def create_instance_from_scenario(
         # admit the next arrival only after the previous composition has departed.
         ordered_arrival_sus = [su for _, su in in_train_sus]
         if ordered_arrival_sus and all(su in departure_su_by_source for su in ordered_arrival_sus):
-            arrive_su.add_precondition(compiled_arrival_ready(arrive_su.su))
-            problem.set_initial_value(compiled_arrival_ready(ordered_arrival_sus[0]), True)
-            for current_su, next_arrival_su in zip(ordered_arrival_sus, ordered_arrival_sus[1:]):
-                departing_su = departure_su_by_source[current_su]
-                problem.set_initial_value(compiled_departure_unlocks(departing_su, next_arrival_su), True)
+            pass
+            # arrive_su.add_precondition(compiled_arrival_ready(arrive_su.su))
+            # problem.set_initial_value(compiled_arrival_ready(ordered_arrival_sus[0]), True)
+            # for current_su, next_arrival_su in zip(ordered_arrival_sus, ordered_arrival_sus[1:]):
+            #     departing_su = departure_su_by_source[current_su]
+            #     problem.set_initial_value(compiled_departure_unlocks(departing_su, next_arrival_su), True)
 
-            next_arrival = up.Variable("compiled_next_arrival", shunting_unit_type)
-            for departure_action in (
-                depart_aside_su,
-                depart_bside_su,
-                compiled_depart_aside,
-                compiled_depart_bside,
-            ):
-                departure_action.add_effect(
-                    fluent=compiled_arrival_ready(next_arrival),
-                    value=True,
-                    condition=compiled_departure_unlocks(departure_action.su, next_arrival),
-                    forall=[next_arrival],
-                )
+            # next_arrival = up.Variable("compiled_next_arrival", shunting_unit_type)
+            # for departure_action in (
+            #     depart_aside_su,
+            #     depart_bside_su,
+            #     compiled_depart_aside,
+            #     compiled_depart_bside,
+            # ):
+            #     departure_action.add_effect(
+            #         fluent=compiled_arrival_ready(next_arrival),
+            #         value=True,
+            #         condition=compiled_departure_unlocks(departure_action.su, next_arrival),
+            #         forall=[next_arrival],
+            #     )
         elif ordered_arrival_sus:
             # Requests connected through shared source compositions form independent
             # assembly components. Process one component at a time to avoid admitting
             # unrelated trains that can only congest the yard.
-            arrive_su.add_precondition(compiled_arrival_ready(arrive_su.su))
+            # arrive_su.add_precondition(compiled_arrival_ready(arrive_su.su)) # remove
             node_neighbors = {}
             request_completion = {}
             source_object_by_name = {
@@ -2152,10 +2151,10 @@ def create_instance_from_scenario(
             scheduled_source_names = set().union(
                 *request_sources_by_name.values()
             ) if request_sources_by_name else set()
-            for source_name in incoming_names - scheduled_source_names:
-                problem.set_initial_value(
-                    compiled_arrival_ready(source_object_by_name[source_name]), True
-                )
+            # for source_name in incoming_names - scheduled_source_names:
+            #     problem.set_initial_value(
+            #         compiled_arrival_ready(source_object_by_name[source_name]), True
+            #     )
             request_schedule = []
             for component in components:
                 remaining_requests = {
@@ -2183,34 +2182,35 @@ def create_instance_from_scenario(
                     current_sources = request_sources_by_name[selected]
                     remaining_requests.remove(selected)
 
-            enabled_sources = set()
-            for request_index, request_name in enumerate(request_schedule):
-                needed_sources = {
-                    source_name
-                    for source_name in request_sources_by_name[request_name]
-                    if source_name in incoming_names and source_name not in enabled_sources
-                }
-                if request_index == 0:
-                    for source_name in needed_sources:
-                        problem.set_initial_value(
-                            compiled_arrival_ready(source_object_by_name[source_name]), True
-                        )
-                elif needed_sources:
-                    previous_name = request_schedule[request_index - 1]
-                    previous_request, previous_su = request_completion[previous_name]
-                    advance = up.InstantaneousAction(
-                        f"compiled_advance_request_{request_index}"
-                    )
-                    if previous_su is None:
-                        advance.add_precondition(request_departed(previous_request))
-                    else:
-                        advance.add_precondition(departed_su(previous_su))
-                    for source_name in needed_sources:
-                        advance.add_effect(
-                            compiled_arrival_ready(source_object_by_name[source_name]), True
-                        )
-                    problem.add_action(advance)
-                enabled_sources.update(needed_sources)
+            # enabled_sources = set()
+            # for request_index, request_name in enumerate(request_schedule):
+            #     needed_sources = {
+            #         source_name
+            #         for source_name in request_sources_by_name[request_name]
+            #         if source_name in incoming_names and source_name not in enabled_sources
+            #     }
+            #     if request_index == 0: # remove this section to avoid the departure before arrival requirement
+            #         for source_name in needed_sources:
+            #             problem.set_initial_value(
+            #                 compiled_arrival_ready(source_object_by_name[source_name]), True
+            #             )
+            #     elif needed_sources:
+            #         previous_name = request_schedule[request_index - 1]
+            #         previous_request, previous_su = request_completion[previous_name]
+            #         # This currently creates domain constants
+            #         advance = up.InstantaneousAction(
+            #             f"compiled_advance_request_{request_index}"
+            #         )
+            #         if previous_su is None:
+            #             advance.add_precondition(request_departed(previous_request))
+            #         else:
+            #             advance.add_precondition(departed_su(previous_su))
+            #         for source_name in needed_sources:
+            #             advance.add_effect(
+            #                 compiled_arrival_ready(source_object_by_name[source_name]), True
+            #             )
+            #         problem.add_action(advance)
+            #     enabled_sources.update(needed_sources)
 
 
     if output_file is None:
@@ -2232,10 +2232,10 @@ if __name__ == "__main__":
     args = parser.parse_args()
     args.path_to_folder = "../robust-rail-general/Location_SimpleService/"
     args.scenario_file = "scenario_full_example.json"
-    args.output_file = "data/scenario_full_example.pddl"
+    args.output_file = "data/scenario_full_example_new.pddl"
     logging.basicConfig(level=args.log_level.upper())
 
-    args.domain_file = "domain.pddl" if args.domain_file is None else args.domain_file
+    args.domain_file = "domain-new.pddl" if args.domain_file is None else args.domain_file
 
     create_instance_from_scenario(
         domain_file=args.domain_file,
