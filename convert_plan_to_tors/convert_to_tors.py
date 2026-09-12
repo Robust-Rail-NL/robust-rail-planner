@@ -1592,6 +1592,13 @@ def convert_plan(plan_file, scenario_file, location_file):
         track_parts_by_id=track_parts_by_id,
     )
 
+    # Merge each unit's consecutive Move actions into a single Move over the net
+    # path (recomputed duration). Moves separated by any other action type are
+    # left untouched, so every departing unit's final exit-approach Move stays.
+    actions = consolidate_loops(
+        actions, a_adj, b_adj, switch_ids, switch_costs, track_parts_by_id,
+        track_id_lookup, zero_length_tracks)
+
     # Fill in missing members/parentIDs/childIDs for actions that reference
     # SUs by integer ID (e.g. Wait actions created by post_process_actions).
     su_fill = {}
@@ -1679,6 +1686,329 @@ def convert_plan(plan_file, scenario_file, location_file):
 # =====================================================
 # POST-PROCESS
 # =====================================================
+
+def _collapse_loops(seq):
+    """Collapse a traversed track sequence to its net non-backtracking path.
+
+    Whenever a track is revisited, the excursion since its previous occurrence
+    is dropped (the unit returns to where it already was), leaving the shortest
+    route from the run's start to its end -- exactly the net transit. A sequence
+    with no backtracking is returned unchanged (minus any duplicate at a move
+    boundary that is handled by the same rule).
+    """
+    stack = []
+    for t in seq:
+        if t in stack:
+            while stack[-1] != t:
+                stack.pop()
+            # t is now the top; the excursion has been removed and t stays.
+        else:
+            stack.append(t)
+    return stack
+
+
+def consolidate_loops(actions, a_adj, b_adj, switch_ids, switch_costs,
+                      track_parts_by_id, track_id_lookup,
+                      zero_length_tracks):
+    """Merge each maximal run of *consecutive* Move actions -- the same shunting
+    unit, with no other action type (Wait, Serve, Split, Combine) in between --
+    into a single Move over the run's net non-backtracking path.
+
+    The merged Move's duration is recomputed from that net path, so a pointless
+    park-and-return excursion (e.g. 906b -> track -> 906b) collapses to the
+    single net transit and the unit waits where its last Move leaves it.
+
+    Moves separated by any other action type are never merged, so a
+    move -> <other> -> move-back round trip is preserved and every departing
+    unit's final exit-approach Move stays in the plan.
+    """
+    # By scanning the SU-ordered indices we naturally form maximal runs of
+    # *consecutive* Moves: a Move run continues only while the next action of
+    # this SU is also a Move AND immediately follows the previous one (same
+    # driving maneuver). Any other action type — or a gap where the unit sits
+    # parked between moves — breaks the run: a long-idle unit that later steps
+    # aside to another track (e.g. a LIFO step-aside off a yard track) is a
+    # separate maneuver and must not be folded into the earlier drive.
+    by_su = {}
+    for i, a in enumerate(actions):
+        by_su.setdefault(a["shuntingUnit"]["id"], []).append(i)
+
+    replacement = {}  # old_idx -> representative idx of the merged run
+    keep = set()      # indices retained in the output
+    merged = {}       # representative idx -> merged Move action (or None)
+
+    for _sid, idxs in by_su.items():
+        i = 0
+        n = len(idxs)
+        while i < n:
+            if actions[idxs[i]]["taskType"].get("predefined") != "Move":
+                keep.add(idxs[i])
+                i += 1
+                continue
+            j = i
+            while (
+                j + 1 < n
+                and actions[idxs[j + 1]]["taskType"].get("predefined") == "Move"
+                and int(actions[idxs[j + 1]]["startTime"])
+                <= int(actions[idxs[j]]["endTime"]) + 1
+            ):
+                j += 1
+            run = idxs[i:j + 1]
+
+            if len(run) == 1:
+                keep.add(run[0])
+            else:
+                rest_track = _pick_rest_track(
+                    actions, run, a_adj, b_adj, switch_ids, zero_length_tracks)
+                rep = run[0]
+                keep.add(rep)
+                for k in run[1:]:
+                    replacement[k] = rep
+                merged[rep] = _merge_run(
+                    run, rest_track, actions, a_adj, b_adj, switch_ids,
+                    switch_costs, track_parts_by_id, track_id_lookup,
+                    zero_length_tracks)
+                _relocate_rest(actions, run, rest_track, a_adj, b_adj,
+                               switch_ids, switch_costs, track_parts_by_id,
+                               track_id_lookup, zero_length_tracks)
+            i = j + 1
+
+    result = []
+    for i, a in enumerate(actions):
+        if i in replacement:
+            continue  # absorbed into the merged run handed at its representative
+        if i in merged:
+            if merged[i] is not None:
+                result.append(merged[i])
+            continue
+        result.append(a)
+
+    return _tighten_waits(result)
+
+
+def _track_bfs_dist(start, a_adj, b_adj, switch_ids):
+    """Undirected hop-distance from `start` over the track graph. Switch nodes
+    are traversed freely (they add no parkable distance) so the deepest parkable
+    track reached by a run can be picked as the unit's resting place."""
+    from collections import deque
+    dist = {start: 0}
+    dq = deque([start])
+    while dq:
+        n = dq.popleft()
+        for nb in list(a_adj.get(n, [])) + list(b_adj.get(n, [])):
+            if nb in dist:
+                continue
+            dist[nb] = dist[n] + 1
+            dq.append(nb)
+    return dist
+
+
+def _run_track_set(actions, run0):
+    """All track-part ids touched by the moves in a run (location + resources)."""
+    seen = set()
+    for r in run0:
+        a = actions[r]
+        seen.add(int(a["location"]))
+        for res in a.get("resources", []):
+            try:
+                seen.add(int(res["id"]))
+            except (TypeError, ValueError):
+                seen.add(res["id"])
+    return seen
+
+
+def _pick_rest_track(actions, run0, a_adj, b_adj, switch_ids, zero_length_tracks):
+    """Choose the track where the unit actually rests at the end of a move run.
+
+    A run that drives to a new track and stays there is a net transit: the unit
+    rests where the run ends. A run that returns exactly to the track it
+    started from (e.g. 906b -> o_52 -> 906b) is a true cancelling detour: the
+    unit rests right back at 906b, which collapses the whole run away (see
+    _merge_run). Only when the run's last recorded position is neither a real
+    parkable track nor the start itself (e.g. it ends mid-excursion on a
+    switch) do we fall back to the deepest parkable track actually reached, as
+    the best stand-in for where the unit really rests.
+    """
+    tracks = _run_track_set(actions, run0)
+    start = int(actions[run0[0]]["location"])
+    dist = _track_bfs_dist(start, a_adj, b_adj, switch_ids)
+    parkable = [t for t in tracks if t not in zero_length_tracks and t != start]
+
+    last = actions[run0[-1]]
+    last_resources = last.get("resources", [])
+    end_track = int(last_resources[-1]["id"]) if last_resources else int(last["location"])
+
+    if end_track in parkable:
+        # Net transit: the drive ends somewhere new, so the unit rests there.
+        return end_track
+    if end_track == start:
+        # True cancel-out: the run drives back to exactly where it began.
+        return start
+    if not parkable:
+        return int(actions[run0[-1]]["location"])
+    # end_track is neither a real parkable track nor the start (e.g. it's a
+    # switch): fall back to the deepest parkable track reached en route.
+    return max(parkable, key=lambda t: dist.get(t, -1))
+
+
+def _merge_run(run0, rest_track, actions, a_adj, b_adj, switch_ids, switch_costs,
+               track_parts_by_id, track_id_lookup, zero_length_tracks):
+    """Build the single Move that replaces a run of consecutive Moves, ending at
+    `rest_track`.
+
+    Returns the merged Move over the run's net non-backtracking path to
+    `rest_track`, or None when the run cancels out (returns to its starting
+    track with no net transit) and should be dropped entirely.
+    """
+    seq = []
+    for r in run0:
+        a = actions[r]
+        seq.append(int(a["location"]))
+        for res in a.get("resources", []):
+            seq.append(int(res["id"]))
+
+    rest_track = int(rest_track)
+    start = int(actions[run0[0]]["startTime"])
+    if rest_track in seq:
+        # Rest at the deep excursion track: everything after the unit first
+        # reached it (the return-to-entrance leg) is dropped.
+        prefix = seq[:seq.index(rest_track) + 1]
+        net = _collapse_loops(prefix)
+    else:
+        net = _collapse_loops(seq)
+    if len(net) < 2:
+        # Pure no-op detour: cancels out. Drop the run's moves; the unit is
+        # considered to remain where it stood before the run.
+        return None
+
+    expanded = expand_path(net, a_adj, b_adj, switch_ids)
+    stripped = list(expanded)
+    while len(stripped) > 1 and stripped[-1] in zero_length_tracks:
+        stripped.pop()
+    duration = compute_move_duration(
+        stripped, a_adj, b_adj, switch_costs, 0, track_parts_by_id)
+    end = start + duration
+
+    new = dict(actions[run0[0]])
+    new["shuntingUnit"] = actions[run0[0]]["shuntingUnit"]
+    new["startTime"] = _as_time(start)
+    new["endTime"] = _as_time(end)
+    resources = [track_id_lookup.get(p, _track_resource(p)) for p in net]
+    new["location"] = resources[0]["id"]
+    new["resources"] = resources[1:]
+    return new
+
+
+def _relocate_rest(actions, run, rest_track, a_adj, b_adj, switch_ids,
+                   switch_costs, track_parts_by_id, track_id_lookup,
+                   zero_length_tracks):
+    """After a move run is merged to rest on `rest_track`, point the unit's
+    immediately following Wait and its departure-approach Move at that track.
+
+    A departing unit that did an out-and-back (906b -> o_52 -> 906b) must wait
+    and depart from the deep track (o_52) it actually rested on, not the 906b it
+    returned to. `run` uses actual indices into `actions`, so the Wait/depart are
+    found by scanning forward past the run's last index for the same unit.
+    """
+    sid = actions[run[0]]["shuntingUnit"]["id"]
+    last_idx = run[-1]
+    rest_resource = track_id_lookup.get(rest_track, _track_resource(rest_track))
+    rest_id = rest_resource["id"]
+    ordered = sorted(set(run) | {last_idx})
+    tail_start = ordered[-1] + 1
+
+    wait_idx = None
+    depart_idx = None
+    for k in range(tail_start, len(actions)):
+        a = actions[k]
+        if a["shuntingUnit"]["id"] != sid:
+            continue
+        tt = a["taskType"].get("predefined")
+        if tt == "Move" and wait_idx is None:
+            # The unit drove again before it rested (e.g. a LIFO step-aside
+            # toward its departure track): the run was not its final approach,
+            # so its Wait and departure correctly point where the PDDL put
+            # them and must not be relocated.
+            break
+        if tt == "Wait" and wait_idx is None:
+            wait_idx = k
+        elif tt == "Move" and depart_idx is None:
+            depart_idx = k
+        elif tt == "Exit":
+            break
+
+    if wait_idx is not None:
+        actions[wait_idx]["location"] = rest_id
+        actions[wait_idx]["resources"] = []
+
+    if depart_idx is not None:
+        _reshape_depart_to(
+            actions, depart_idx, rest_track, rest_id, a_adj, b_adj, switch_ids,
+            switch_costs, track_parts_by_id, track_id_lookup,
+            zero_length_tracks)
+
+
+def _reshape_depart_to(actions, depart_idx, rest_track, rest_id, a_adj, b_adj,
+                       switch_ids, switch_costs, track_parts_by_id,
+                       track_id_lookup, zero_length_tracks):
+    """Rebuild a departure-approach Move to start from `rest_track` instead of
+    the track the PDDL put it on. Keep the original arrival (end) track and
+    window, recompute the path/duration from the new start."""
+    a = actions[depart_idx]
+    end_path = []
+    end_path.append(int(a["location"]))
+    for res in a.get("resources", []):
+        try:
+            end_path.append(int(res["id"]))
+        except (TypeError, ValueError):
+            end_path.append(res["id"])
+    # The physical exit corridor track is the last real track-part of the
+    # original approach (e.g. 906a). Recompute the whole approach from the new
+    # start to that same end.
+    end_track = end_path[-1]
+
+    approach_end = int(a.get("endTime", a.get("startTime")))
+    net = [rest_track, end_track]
+    expanded = expand_path(net, a_adj, b_adj, switch_ids)
+    stripped = list(expanded)
+    while len(stripped) > 1 and stripped[-1] in zero_length_tracks:
+        stripped.pop()
+    duration = compute_move_duration(
+        stripped, a_adj, b_adj, switch_costs, 0, track_parts_by_id)
+    a["startTime"] = _as_time(approach_end - duration)
+    a["endTime"] = _as_time(approach_end)
+    resources = [track_id_lookup.get(p, _track_resource(p)) for p in stripped]
+    a["location"] = resources[0]["id"]
+    a["resources"] = resources[1:]
+
+
+def _tighten_waits(actions):
+    """Reset each Wait action's start to the end of the unit's previous action,
+    so a Wait always bridges immediately from the move that precedes it. Run
+    durations change when consecutive Moves are merged, so stale Wait starts
+    (computed against the pre-merge schedule) no longer line up with the unit's
+    actual position/time. The Wait's end and every other action are untouched;
+    TORS fills any residual gap with its own Wait mechanism.
+    """
+    by_su = {}
+    for i, a in enumerate(actions):
+        by_su.setdefault(a["shuntingUnit"]["id"], []).append(i)
+
+    for _sid, idxs in by_su.items():
+        prev_end = None
+        for idx in idxs:
+            a = actions[idx]
+            if a["taskType"].get("predefined") == "Wait":
+                if prev_end is not None and int(a["startTime"]) < prev_end:
+                    a["startTime"] = _as_time(prev_end)
+                prev_end = int(a.get("endTime", a.get("startTime")))
+            else:
+                prev_end = int(a.get("endTime", a.get("startTime")))
+
+    return actions
+
+
+
 
 def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
                          track_id_lookup, train_locations, train_arrival_times, scenario, su_id_fn=None,
