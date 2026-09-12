@@ -2153,19 +2153,18 @@ def _pick_rest_track(actions, run0, a_adj, b_adj, switch_ids, zero_length_tracks
     """Choose the track where the unit actually rests at the end of a move run.
 
     A run that drives to a new track and stays there is a net transit: the unit
-    rests where the run ends. Only a run that goes out and returns to the track
-    it started from (e.g. 906b -> o_52 -> 906b) is a behind-the-scenes
-    repositioning, where the deepest parkable track it reached (o_52) is the
-    real rest. Using the run's end track for net transits keeps a unit that
-    legitimately parked on 906b (after stepping aside) from being shoved back
-    onto 52.
+    rests where the run ends. A run that returns exactly to the track it
+    started from (e.g. 906b -> o_52 -> 906b) is a true cancelling detour: the
+    unit rests right back at 906b, which collapses the whole run away (see
+    _merge_run). Only when the run's last recorded position is neither a real
+    parkable track nor the start itself (e.g. it ends mid-excursion on a
+    switch) do we fall back to the deepest parkable track actually reached, as
+    the best stand-in for where the unit really rests.
     """
     tracks = _run_track_set(actions, run0)
     start = int(actions[run0[0]]["location"])
     dist = _track_bfs_dist(start, a_adj, b_adj, switch_ids)
     parkable = [t for t in tracks if t not in zero_length_tracks and t != start]
-    if not parkable:
-        return int(actions[run0[-1]]["location"])
 
     last = actions[run0[-1]]
     last_resources = last.get("resources", [])
@@ -2174,8 +2173,13 @@ def _pick_rest_track(actions, run0, a_adj, b_adj, switch_ids, zero_length_tracks
     if end_track in parkable:
         # Net transit: the drive ends somewhere new, so the unit rests there.
         return end_track
-    # Out-and-back (unit returned to its start): the true rest is the deepest
-    # parkable track reached during the excursion.
+    if end_track == start:
+        # True cancel-out: the run drives back to exactly where it began.
+        return start
+    if not parkable:
+        return int(actions[run0[-1]]["location"])
+    # end_track is neither a real parkable track nor the start (e.g. it's a
+    # switch): fall back to the deepest parkable track reached en route.
     return max(parkable, key=lambda t: dist.get(t, -1))
 
 
