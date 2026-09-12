@@ -27,13 +27,17 @@
 # unreviewed build.
 #
 # Requires the same buildx builder as docker-push.sh — see its header comment
-# for why (network=host, shared with sibling Robust-Rail-NL projects).
+# for why (network=host, shared with sibling Robust-Rail-NL projects), and for
+# why this also shares docker-push.sh's :buildcache ref — edge and release
+# builds hit the same apt/Julia/pip layers, so each warms the cache for the
+# other.
 set -euo pipefail
 cd "$(dirname "$0")"
 
 docker login ghcr.io
 
 IMAGE="ghcr.io/robust-rail-nl/planner"
+CACHE_REF="$IMAGE:buildcache"
 BUILDER_NAME="robust-rail-builder"
 PLATFORMS="linux/amd64,linux/arm64"
 
@@ -58,6 +62,8 @@ docker buildx build \
     --platform "$PLATFORMS" \
     --build-arg "VERSION=$EDGE_VERSION" \
     -t "$IMAGE:edge" \
+    --cache-to "type=registry,ref=$CACHE_REF,mode=max" \
+    --cache-from "type=registry,ref=$CACHE_REF" \
     --push \
     .
 

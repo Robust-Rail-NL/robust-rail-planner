@@ -26,15 +26,6 @@ FROM ubuntu:22.04
 
 ARG JULIA_VERSION=1.10.5
 
-ARG VERSION=0.0.0
-LABEL org.opencontainers.image.source="https://github.com/Robust-Rail-NL/robust-rail-planner" \
-      org.opencontainers.image.description="Robust Rail PDDL planner" \
-      org.opencontainers.image.version="${VERSION}"
-
-# Exposed at runtime (not just baked into the LABEL) so main.py can print it
-# at startup — see planner_version() there.
-ENV PLANNER_VERSION=${VERSION}
-
 ENV DEBIAN_FRONTEND=noninteractive
 
 # --- System deps ---
@@ -80,6 +71,25 @@ RUN julia --project=plan -e 'using Pkg; Pkg.instantiate()'
 # --- Python deps ---
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
+
+# --- VERSION-dependent metadata ---
+#
+# Deliberately placed after every dependency layer above (system packages,
+# Julia, Python), not near the top. VERSION changes on every release, and
+# Docker's layer cache invalidates everything *after* the first layer whose
+# resolved content differs from a previous build — even a metadata-only
+# ENV/LABEL step. Putting it here means a release that doesn't touch
+# Project.toml/Manifest.toml/requirements.txt can still reuse the expensive
+# apt/Julia/pip layers from the registry build cache (see docker-push.sh)
+# instead of paying for them again on every version bump.
+ARG VERSION=0.0.0
+LABEL org.opencontainers.image.source="https://github.com/Robust-Rail-NL/robust-rail-planner" \
+      org.opencontainers.image.description="Robust Rail PDDL planner" \
+      org.opencontainers.image.version="${VERSION}"
+
+# Exposed at runtime (not just baked into the LABEL) so main.py can print it
+# at startup — see planner_version() there.
+ENV PLANNER_VERSION=${VERSION}
 
 # --- App code ---
 COPY . .
