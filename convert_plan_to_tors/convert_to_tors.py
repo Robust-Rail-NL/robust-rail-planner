@@ -1824,18 +1824,184 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
         processed_actions.append(action)
 
     # The action list keeps the PDDL plan's emission order; it is NOT re-sorted
-    # by time (cross-train ordering mirrors the plan step by step). A monotonic
-    # story clock then guarantees no listed action starts before the previous
-    # one ended, so the list reads as one forward timeline. Durations are
-    # preserved; an action whose own time fell under the running clock slips
-    # late. Lateness is never a failure here — the converter mirrors the plan.
-    clock = 0
+    # by time. Each train's actions carry times from its own per-train clock
+    # (Arrive at its scenario time, Exit pinned to its request's departure), so
+    # different trains legitimately overlap: a train may rest while another
+    # moves.
+    #
+    # Cross-train constraints enforced here:
+    # 1) No two Move actions overlap (move line).
+    # 2) A Combine/Split event can only start after ALL member wagons have
+    #    finished any prior action that uses them (per-wagon chain).
+    # 3) A Combine/Split event cannot overlap any Move that moves one of its
+    #    member wagons — enforced by (2) because the Move finishes first and
+    #    updates wagon_end.
+    # 4) Waits fill the gap between the unit's last prior action and its
+    #    following approach Move.
+
+    def _kind(action, name):
+        return action["taskType"].get("predefined") == name
+
+    def _wagons(action):
+        return set(action["shuntingUnit"].get("memberIDs", []))
+
+    # --- Phase 1: group Combine/Split halves into events ---
+    # Halves of the same event share identical (predefined, location,
+    # startTime, endTime).  We union their memberIDs into one event set
+    # and process the group atomically.
+    _event_groups = {}          # key -> list of action dicts
+    _event_members = {}         # key -> union of memberIDs
+    _consumed = set()           # id() of actions already grouped
     for action in processed_actions:
-        duration = int(action["endTime"]) - int(action["startTime"])
-        start = max(int(action["startTime"]), clock)
+        k = _kind(action, "Combine") or _kind(action, "Split")
+        if k:
+            key = (action["taskType"].get("predefined"),
+                   action.get("location"),
+                   int(action["startTime"]),
+                   int(action["endTime"]))
+            _event_groups.setdefault(key, []).append(action)
+            _event_members.setdefault(key, set()).update(_wagons(action))
+    # Only treat groups with >1 action as multi-half events; single-action
+    # groups are processed inline (still need wagon chaining). Members are NOT
+    # marked consumed here — the whole group is processed (and then consumed)
+    # at its first member's position in the ordered pass below.
+    _event_keys = {k for k, v in _event_groups.items() if len(v) > 1}
+
+    # --- Phase 2: single ordered pass (move line + wagon chain) ---
+    move_line_end = 0
+    wagon_end = {}  # memberID -> end time of last action using that wagon
+
+    for action in processed_actions:
+        if id(action) in _consumed:
+            continue  # already processed as part of a multi-half event
+
+        if _kind(action, "Combine") or _kind(action, "Split"):
+            key = (action["taskType"].get("predefined"),
+                   action.get("location"),
+                   int(action["startTime"]),
+                   int(action["endTime"]))
+            if key in _event_keys:
+                group = _event_groups[key]
+                all_wag = _event_members[key]
+                dur = int(group[0]["endTime"]) - int(group[0]["startTime"])
+                busy = max((wagon_end.get(w, 0) for w in all_wag), default=0)
+                start = max(int(group[0]["startTime"]), busy)
+                for half in group:
+                    _consumed.add(id(half))
+                    half["startTime"] = _as_time(start)
+                    half["endTime"] = _as_time(start + dur)
+                for w in all_wag:
+                    wagon_end[w] = start + dur
+                continue
+            # single Split/Combine, no halves to unify
+            dur = int(action["endTime"]) - int(action["startTime"])
+            wag = _wagons(action)
+            busy = max((wagon_end.get(w, 0) for w in wag), default=0)
+            start = max(int(action["startTime"]), busy)
+            action["startTime"] = _as_time(start)
+            action["endTime"] = _as_time(start + dur)
+            for w in wag:
+                wagon_end[w] = start + dur
+            continue
+
+        if _kind(action, "Move"):
+            dur = int(action["endTime"]) - int(action["startTime"])
+            wag = _wagons(action)
+            busy = max((wagon_end.get(w, 0) for w in wag), default=0)
+            start = max(int(action["startTime"]), move_line_end, busy)
+            action["startTime"] = _as_time(start)
+            action["endTime"] = _as_time(start + dur)
+            move_line_end = start + dur
+            for w in wag:
+                wagon_end[w] = start + dur
+            continue
+
+        if _kind(action, "Wait"):
+            wag = _wagons(action)
+            busy = max((wagon_end.get(w, 0) for w in wag), default=0)
+            start = max(int(action["startTime"]), busy)
+            action["startTime"] = _as_time(start)
+            # end stays as-is for now; refined in Phase 3. wagon_end must be
+            # monotonic: a later action never un-busies a wagon.
+            for w in wag:
+                wagon_end[w] = max(int(action["endTime"]), start,
+                                   wagon_end.get(w, 0))
+            continue
+
+        # Arrive / Exit / StandOut — pinned to scenario times; record their
+        # end so anything after them chains (monotonic).
+        wag = _wagons(action)
+        if wag:
+            for w in wag:
+                wagon_end[w] = max(int(action["endTime"]),
+                                   wagon_end.get(w, 0))
+            continue
+
+        # Service and any other occupancy — chain behind prior wagon use.
+        dur = int(action["endTime"]) - int(action["startTime"])
+        busy = max((wagon_end.get(w, 0) for w in wag), default=0)
+        start = max(int(action["startTime"]), busy)
         action["startTime"] = _as_time(start)
-        action["endTime"] = _as_time(start + duration)
-        clock = start + duration
+        action["endTime"] = _as_time(start + dur)
+        for w in wag:
+            wagon_end[w] = start + dur
+
+    # --- Phase 3: relocate Waits and refine their times ---
+    # Anchor each Wait to the unit's own last Move listed before it: start when
+    # that Move ends, end when the unit's approach Move starts. Relocate the
+    # Wait to sit directly after that Move so the list reads the stop, the rest,
+    # the drive to the exit.
+    waits = [a for a in processed_actions if _kind(a, "Wait")]
+    anchors = {}
+    for wait in waits:
+        su_id = wait["shuntingUnit"]["id"]
+        wait_index = processed_actions.index(wait)
+        anchor = None
+        for i, action in enumerate(processed_actions):
+            if i < wait_index and _kind(action, "Move") and action["shuntingUnit"]["id"] == su_id:
+                anchor = action
+        anchors[id(wait)] = anchor
+
+    rebuilt = []
+    for action in processed_actions:
+        if _kind(action, "Wait"):
+            if anchors[id(action)] is None:
+                rebuilt.append(action)
+            continue
+        rebuilt.append(action)
+        rebuilt.extend(
+            wait for wait in waits if anchors[id(wait)] is action
+        )
+    processed_actions[:] = rebuilt
+
+    for wait in waits:
+        anchor = anchors[id(wait)]
+        if anchor is not None:
+            wait["startTime"] = _as_time(max(
+                int(anchor["endTime"]) + 1, int(wait["startTime"])
+            ))
+        su_id = wait["shuntingUnit"]["id"]
+        approach = next(
+            (a for a in processed_actions
+             if _kind(a, "Move") and a["shuntingUnit"]["id"] == su_id
+             and processed_actions.index(a) > processed_actions.index(wait)),
+            None,
+        )
+        if approach is not None:
+            wait["endTime"] = _as_time(int(approach["startTime"]))
+        # Ensure start <= end after chaining adjustments.
+        if int(wait["startTime"]) > int(wait["endTime"]):
+            wait["endTime"] = wait["startTime"]
+
+    # --- Phase 4: align Exits to their approach Move ---
+    for i, action in enumerate(processed_actions):
+        if _kind(action, "Exit") and i > 0:
+            preceding = processed_actions[i - 1]
+            if preceding["shuntingUnit"]["id"] == action["shuntingUnit"]["id"] \
+                    and _kind(preceding, "Move"):
+                end = int(preceding["endTime"])
+                action["startTime"] = _as_time(end)
+                action["endTime"] = _as_time(end)
 
     return processed_actions
 

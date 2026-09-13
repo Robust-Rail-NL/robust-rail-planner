@@ -107,10 +107,11 @@ def test_schedule_is_feasible_for_fixture_plan(tmp_path):
 
 
 # The 4-train KleineBinckhorst plan is the golden pipeline output the user
-# reported against. The converter keeps the PDDL plan's own order and then runs
-# a monotonic story clock over the list: no action starts before the previous
-# one ended, so the list reads as one forward timeline. Arrivals stay at their
-# scenario times; exits slip late when the serialized story has passed them.
+# reported against. The converter keeps the PDDL plan's own order but lets
+# trains run concurrently: Waits are anchored to the unit's own last Move and
+# may overlap other trains, while a move line guarantees no two Moves overlap.
+# Arrivals stay at their scenario times and Exits land on the request's
+# departure time.
 KLEINEBINCKHORST_PLAN = os.path.join(
     os.path.dirname(os.path.abspath(__file__)),
     "fixtures", "kleinebinckhorst", "plan.plan",
@@ -140,12 +141,14 @@ def _kleinebinckhorst_inputs():
     )
 
 
-def test_list_order_and_story_clock_mirror_the_pddl_plan(tmp_path):
+def test_list_order_waits_and_moves_follow_the_concurrent_plan(tmp_path):
     """The action list appears in the PDDL plan's own order (not by start
-    time), arrivals are forced at their scenario times, and no action may start
-    before the end of the action listed before it — a monotonic story clock.
-    Exits keep the plan's departure order but slip late where the serialized
-    story has already passed the request's departure time."""
+    time), arrivals are forced at their scenario times, and each train's Exit
+    lands on its request's departure time. Trains run concurrently — a train
+    may rest while another moves. The one cross-train constraint is the
+    railway: no two Move actions may overlap. Each departure Wait is anchored
+    to the unit's own last Move: it starts the moment that Move ends and runs
+    until the unit drives to the exit."""
     scenario_file, location_file = _kleinebinckhorst_inputs()
     plan = convert_plan(KLEINEBINCKHORST_PLAN, scenario_file, location_file)
 
@@ -153,17 +156,27 @@ def test_list_order_and_story_clock_mirror_the_pddl_plan(tmp_path):
     assert actions, "expected a non-empty plan"
     assert actions[0]["taskType"]["predefined"] == "Arrive"
 
-    # Monotonic story clock across the whole list.
-    prev_end = 0
-    for a in actions:
-        assert int(a["startTime"]) >= prev_end, a
-        prev_end = int(a["endTime"])
-
     def members(a):
         return frozenset(a["shuntingUnit"]["memberIDs"])
 
-    arrivals = [a for a in actions if a["taskType"].get("predefined") == "Arrive"]
-    exits = [a for a in actions if a["taskType"].get("predefined") == "Exit"]
+    def predefined(a):
+        return a["taskType"].get("predefined")
+
+    # No two Moves may overlap (the shared railway).
+    moves = [a for a in actions if predefined(a) == "Move"]
+    for i, a in enumerate(moves):
+        for b in moves[i + 1:]:
+            if members(a) == members(b):
+                continue
+            a_end = int(a["endTime"])
+            b_start = int(b["startTime"])
+            b_end = int(b["endTime"])
+            assert not (b_start < a_end and b_end > int(a["startTime"])), (
+                "overlapping Moves:", a, b
+            )
+
+    arrivals = [a for a in actions if predefined(a) == "Arrive"]
+    exits = [a for a in actions if predefined(a) == "Exit"]
     assert len(arrivals) == len(exits) == 4
 
     # First appearance in the PDDL: train2, train1, train3, train0; each
@@ -188,8 +201,8 @@ def test_list_order_and_story_clock_mirror_the_pddl_plan(tmp_path):
         first_index[m] for m, _ in arrival_order
     )
 
-    # Exits follow the plan's departure order and land no earlier than the
-    # request's departure time (the serialized story may push them later).
+    # Exits follow the plan's departure order and land exactly on their
+    # request's departure time (the deadline pin; moves never collide here).
     exit_deadlines = {
         frozenset({0}): 5400,     # request4 (train0)
         frozenset({4}): 7200,     # request7 (train3)
@@ -197,6 +210,114 @@ def test_list_order_and_story_clock_mirror_the_pddl_plan(tmp_path):
         frozenset({1}): 9900,     # request5 (train1)
     }
     got_exits = [(members(a), int(a["startTime"])) for a in exits]
-    assert [m for m, _ in got_exits] == list(exit_deadlines), got_exits
-    for members_, start in got_exits:
-        assert start >= exit_deadlines[members_], (members_, start)
+    assert got_exits == list(exit_deadlines.items()), got_exits
+
+    # Each departure Wait sits directly after the unit's last Move and runs
+    # until that unit's approach Move starts.
+    waits = [a for a in actions if predefined(a) == "Wait"]
+    assert len(waits) == 4
+    for i, wait in enumerate(actions):
+        if predefined(wait) != "Wait":
+            continue
+        cluster = members(wait)
+        anchor = actions[i - 1]
+        assert members(anchor) == cluster and predefined(anchor) == "Move", (
+            "Wait must follow the unit's own last Move", wait, anchor
+        )
+        assert int(wait["startTime"]) == int(anchor["endTime"]) + 1, wait
+        approach = next(
+            a for a in actions[i + 1:] if predefined(a) == "Move" and members(a) == cluster
+        )
+        assert int(wait["endTime"]) == int(approach["startTime"]), wait
+
+
+# ── combine-split chaining regression ──────────────────────────────────────
+# The s07 feasible_small plan exercises combine/split with member trains that
+# must not be left moving when the combine fires.  The fixture lives next to
+# this file; the scenario lives in the sibling robust-rail-general repo.
+
+COMBINE_SPLIT_PLAN = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    "fixtures", "combine_split", "plan.plan",
+)
+
+
+def _resolve_feasible_scenario(stem="scenario_feasible_small_s07"):
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidates = [
+        os.environ.get("RRN_INPUTS_DIR"),
+        os.path.join(repo_root, "robust-rail-general"),
+        os.path.abspath(os.path.join(repo_root, "..", "robust-rail-general")),
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        scn = os.path.join(
+            candidate, "Location_KleineBinckhorst", "fixtures", "feasible",
+            stem + ".json",
+        )
+        loc = os.path.join(candidate, "Location_KleineBinckhorst", "location.json")
+        if os.path.isfile(scn) and os.path.isfile(loc):
+            return scn, loc
+    raise RuntimeError("cannot find feasible_small scenario; set RRN_INPUTS_DIR")
+
+
+def _members(a):
+    return frozenset(a["shuntingUnit"].get("memberIDs", []))
+
+
+def _predefined(a):
+    return a["taskType"].get("predefined")
+
+
+def test_combine_split_does_not_overlap_member_moves(tmp_path):
+    """After the combine-split chaining pass, a Combine/Split event may not
+    overlap any Move (or other occupancy) that touches one of its member
+    wagons.  This was the root cause of 'SU already active' in TORS."""
+    scenario_file, location_file = _resolve_feasible_scenario()
+    plan = convert_plan(COMBINE_SPLIT_PLAN, scenario_file, location_file)
+    actions = plan["actions"]
+
+    # Collect Combine/Split groups: events sharing identical
+    # (predefined, location, startTime, endTime).
+    _groups = {}
+    for a in actions:
+        k = _predefined(a)
+        if k in ("Combine", "Split"):
+            key = (k, a.get("location"), a["startTime"], a["endTime"])
+            _groups.setdefault(key, set()).update(_members(a))
+
+    for a in actions:
+        k = _predefined(a)
+        if k in ("Combine", "Split"):
+            continue
+        # Skip non-occupancy actions.
+        if k in ("Arrive", "Exit", "StandOut", "Wait"):
+            continue
+        wagon_set = _members(a)
+        for key, group_wagons in _groups.items():
+            if not wagon_set & group_wagons:
+                continue
+            start, end = a["startTime"], a["endTime"]
+            gs, ge = key[2], key[3]
+            # Temporal overlap: s1 < e2 and s2 < e1.
+            assert not (gs < end and start < ge), (
+                f"{k} {sorted(wagon_set)} [{start},{end}] overlaps "
+                f"{key[0]} group {sorted(group_wagons)} [{gs},{ge}]",
+            )
+
+
+def test_no_two_moves_overlap(tmp_path):
+    scenario_file, location_file = _resolve_feasible_scenario()
+    plan = convert_plan(COMBINE_SPLIT_PLAN, scenario_file, location_file)
+    actions = plan["actions"]
+
+    moves = [a for a in actions if _predefined(a) == "Move"]
+    for i, a in enumerate(moves):
+        for b in moves[i + 1:]:
+            if _members(a) == _members(b):
+                continue
+            assert not (b["startTime"] < a["endTime"]
+                        and b["endTime"] > a["startTime"]), (
+                "overlapping Moves:", a, b,
+            )
