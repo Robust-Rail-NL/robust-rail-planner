@@ -15,7 +15,9 @@
 # prerelease never shadows the current stable image.
 #
 # ARCHITECTURE: amd64 + arm64, like the other three. Measured 2026-08-11 on this
-# builder: ~7m for arm64, ~2m for amd64.
+# builder: ~7m for arm64, ~2m for amd64. That was a cold build; with the
+# registry build cache below, a release that doesn't touch Julia/Python deps
+# should be well under that, since apt/Julia/pip all become cache hits.
 #
 # No host setup is needed for the arm64 half — no qemu-user-static, no
 # `tonistiigi/binfmt --install`. The docker-container driver runs BuildKit inside
@@ -44,9 +46,24 @@
 #
 # BUILDER_NAME is shared with the sibling Robust-Rail-NL projects that need the
 # same setup — a buildx builder isn't tied to a specific repo or Dockerfile.
+#
+# --cache-to/--cache-from push and pull the build cache through a dedicated
+# ":buildcache" tag on the same image, so a release that doesn't touch
+# Project.toml/Manifest.toml/requirements.txt can reuse the apt/Julia/pip
+# layers from the *previous* build instead of redoing them — this only pays
+# off because the Dockerfile deliberately keeps the VERSION-dependent
+# LABEL/ENV after those layers (see the comment there). ghcr.io/robust-rail-nl
+# is public, so this costs no storage/bandwidth quota; each push replaces the
+# :buildcache tag, so only one cache generation stays tagged at a time (the
+# prior generation's layers become untagged and are cleaned up by GHCR's
+# retention settings, not by this script).
 set -euo pipefail
+cd "$(dirname "$0")"
+
+docker login ghcr.io
 
 IMAGE="ghcr.io/robust-rail-nl/planner"
+CACHE_REF="$IMAGE:buildcache"
 BUILDER_NAME="robust-rail-builder"
 PLATFORMS="linux/amd64,linux/arm64"
 
@@ -66,5 +83,7 @@ docker buildx build \
     --platform "$PLATFORMS" \
     --build-arg "VERSION=$VERSION" \
     "${TAGS[@]}" \
+    --cache-to "type=registry,ref=$CACHE_REF,mode=max" \
+    --cache-from "type=registry,ref=$CACHE_REF" \
     --push \
     .

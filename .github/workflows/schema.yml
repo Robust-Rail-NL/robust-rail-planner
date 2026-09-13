@@ -1,12 +1,13 @@
 name: Schema
 
-# release/2.0.0 is the shared integration branch across the five repos in this
-# release; main is the stable one.
+# edge is the fast/unvetted image channel (see CONTRIBUTING.md) — it only
+# ever gains work via direct `git merge --no-ff`, never a GitHub PR targeting
+# it, so it's only listed under push, not pull_request.
 on:
   push:
-    branches: [ "main", "release/2.0.0" ]
+    branches: [ "main", "edge" ]
   pull_request:
-    branches: [ "main", "release/2.0.0" ]
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -17,35 +18,32 @@ jobs:
     steps:
     - uses: actions/checkout@v5
 
-    # The schemas live in the generator, and the fixtures these tests read live
-    # in robust-rail-general. Both are taken from the branch of the same
-    # name, so a coordinated schema change is validated against its own schema
-    # rather than the base branch's. That works because every repo in this
-    # release shares one branch name — see roadmap "Branch naming".
-    - name: Check out the sibling repos
+    # The schemas and the fixtures these tests read both live in
+    # robust-rail-general. Taken from the branch of the same name when one
+    # exists there, so a coordinated cross-repo schema change is validated
+    # against its own schema rather than main's — falling back to main
+    # otherwise, since most branches here have no counterpart over there.
+    - name: Check out robust-rail-general
       run: |
         ref="${{ github.head_ref || github.ref_name }}"
-        for name in robust-rail-generator robust-rail-general; do
-          repo="https://github.com/Robust-Rail-NL/$name"
-          use="$ref"
-          if ! git ls-remote --exit-code --heads "$repo" "$use" >/dev/null 2>&1; then
-            use=release/2.0.0
-          fi
-          echo "Using $name@$use"
-          git clone --quiet --depth 1 --branch "$use" "$repo" "$name"
-        done
+        repo="https://github.com/Robust-Rail-NL/robust-rail-general"
+        use="$ref"
+        if ! git ls-remote --exit-code --heads "$repo" "$use" >/dev/null 2>&1; then
+          use=main
+        fi
+        echo "Using robust-rail-general@$use"
+        git clone --quiet --depth 1 --branch "$use" "$repo" robust-rail-general
 
-    # Gating, and for the same reason as in robust-rail-general: validating
-    # against a schema that no longer matches its models does not fail, it
-    # passes, having checked the wrong contract.
-    - name: Check the generator's schemas are not stale
-      working-directory: robust-rail-generator
+    # Gating: validating against a schema that no longer matches its models
+    # does not fail, it passes, having checked the wrong contract.
+    - name: Check robust-rail-general's schemas are not stale
+      working-directory: robust-rail-general
       run: |
         pipx install uv >/dev/null 2>&1 || pip install uv
         uv sync --frozen
         uv run --frozen python scripts/export_schema.py
         git diff --exit-code schema/ \
-          || { echo "::error::the generator's schema/ is stale — re-export and commit it there"; exit 1; }
+          || { echo "::error::robust-rail-general's schema/ is stale — re-export and commit it there"; exit 1; }
 
     - uses: docker/setup-buildx-action@v3
 
@@ -79,9 +77,7 @@ jobs:
     - name: Test inside the image
       run: |
         docker run --rm \
-          -e RRN_GENERATOR_DIR=/siblings/robust-rail-generator \
           -e RRN_INPUTS_DIR=/siblings/robust-rail-general \
-          -v "$PWD/robust-rail-generator:/siblings/robust-rail-generator:ro" \
           -v "$PWD/robust-rail-general:/siblings/robust-rail-general:ro" \
           --entrypoint sh planner:ci -c '
             pip install --quiet --no-cache-dir -r requirements-test.txt jsonschema &&

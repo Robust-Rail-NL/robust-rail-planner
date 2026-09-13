@@ -33,7 +33,7 @@ class ScheduleInfeasibleError(Exception):
 # =====================================================
 
 # Interchange schema version this converter writes. Bumped together with the
-# generator, solver and evaluator; see SCHEMA_CHANGELOG.md there.
+# generator, solver and evaluator; see robust-rail-general's SCHEMA_CHANGELOG.md.
 SCHEMA_VERSION = 1
 
 SINGLE_ARG = r"\(([\w_]+) ([^)]+)\)"
