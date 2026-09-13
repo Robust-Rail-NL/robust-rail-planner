@@ -559,31 +559,9 @@ def bfs_through_switches(a_adj, b_adj, start, goal, switch_ids):
     return a_path or b_path or [start, goal]
 
 
-def remove_loops(path):
-    """Remove loops from a raw move path (e.g. A->B->A->C becomes A->C).
-
-    Direction-flip excursions added by the planner are redundant for a Move:
-    TORS only needs the net displacement, and re-entering a track the train
-    already stands on (like 906a) makes the Move invalid."""
-    if not path:
-        return path
-    result = []
-    seen = set()
-    for track in path:
-        if track in seen:
-            idx = result.index(track)
-            result = result[:idx + 1]
-            seen = set(result)
-        else:
-            seen.add(track)
-            result.append(track)
-    return result
-
-
 def expand_path(path, a_adj, b_adj, switch_ids):
     if not path:
         return path
-    path = remove_loops(path)
     expanded = [path[0]]
     for i in range(len(path) - 1):
         segment = bfs_through_switches(a_adj, b_adj, path[i], path[i + 1], switch_ids)
