@@ -1983,12 +1983,15 @@ def _reshape_depart_to(actions, depart_idx, rest_track, rest_id, a_adj, b_adj,
 
 
 def _tighten_waits(actions):
-    """Reset each Wait action's start to the end of the unit's previous action,
-    so a Wait always bridges immediately from the move that precedes it. Run
-    durations change when consecutive Moves are merged, so stale Wait starts
-    (computed against the pre-merge schedule) no longer line up with the unit's
-    actual position/time. The Wait's end and every other action are untouched;
-    TORS fills any residual gap with its own Wait mechanism.
+    """Reset each Wait action's start to immediately after the unit's previous
+    action (end + 1, the same convention su_clock uses throughout this
+    converter), so a Wait always bridges immediately from the move that
+    precedes it. Run durations change when consecutive Moves are merged, so a
+    stale Wait start (computed against the pre-merge schedule) can drift in
+    either direction from the unit's actual post-merge position/time: a
+    shortened run leaves a gap, a lengthened one leaves an overlap. Both are
+    corrected the same way. The Wait's end and every other action are
+    untouched.
     """
     by_su = {}
     for i, a in enumerate(actions):
@@ -1999,8 +2002,8 @@ def _tighten_waits(actions):
         for idx in idxs:
             a = actions[idx]
             if a["taskType"].get("predefined") == "Wait":
-                if prev_end is not None and int(a["startTime"]) < prev_end:
-                    a["startTime"] = _as_time(prev_end)
+                if prev_end is not None:
+                    a["startTime"] = _as_time(prev_end + 1)
                 prev_end = int(a.get("endTime", a.get("startTime")))
             else:
                 prev_end = int(a.get("endTime", a.get("startTime")))
