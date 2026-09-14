@@ -1886,6 +1886,26 @@ def consolidate_loops(actions, a_adj, b_adj, switch_ids, switch_costs,
     merged = {}       # representative idx -> merged Move action (or None)
 
     for _sid, idxs in by_su.items():
+        # A Split/Combine action reads this SU's own clock (su_clock[sid], set
+        # by the last close_run/move before it) to seed a *different* SU's
+        # identity - the compiled_uncouple/compiled_couple handlers bake that
+        # exact value into the resulting child/combined SU's own su_clock
+        # before consolidate_loops ever runs. If a run merge here later
+        # changes (or drops entirely) the endTime that was already read and
+        # relied upon that way, the other SU's schedule silently goes stale -
+        # confirmed on a real KleineBinckhorst scenario: a merge collapsing a
+        # cancelling out-and-back right before a split desynced the split's
+        # already-seeded children from the merged plan. Nothing under this id
+        # continues past its own Split/Combine (identity moves to the new
+        # id), so there is nothing left to gain by merging here - skip this
+        # SU's runs entirely rather than risk retroactively invalidating a
+        # timestamp another SU has already built on.
+        if any(
+            actions[idx]["taskType"].get("predefined") in ("Split", "Combine")
+            for idx in idxs
+        ):
+            keep.update(idxs)
+            continue
         i = 0
         n = len(idxs)
         while i < n:
