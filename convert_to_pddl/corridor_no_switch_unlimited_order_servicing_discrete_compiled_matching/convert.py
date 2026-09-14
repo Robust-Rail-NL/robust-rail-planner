@@ -1921,6 +1921,7 @@ def create_instance_from_scenario(
         preferred_track_keys = ["firstParkingTrackPart", "entryTrackPart"] if source == "inStanding" else ["entryTrackPart", "firstParkingTrackPart"]
         initial_track_id = _train_initial_track_id(train, preferred_track_keys)
         first_parking_track_id = train.get("firstParkingTrackPart")
+        train_total_length = _train_total_length(train_unit_types, train)
 
         # The scenario's firstParkingTrackPart is often the non-parkable arrival
         # corridor (906a). Such a track is not a legal resting place for an
@@ -1932,15 +1933,19 @@ def create_instance_from_scenario(
         if source == "in" and first_parking_track_id is not None:
             _tid = first_parking_track_id
             _tp = _track_part_by_id.get(_tid)
-            if _tp is None or not _tp.get("parkingAllowed", False):
+            _fits = _tp is not None and Fraction(str(_tp.get("length", 0))) >= train_total_length
+            if _tp is None or not _tp.get("parkingAllowed", False) or not _fits:
                 _candidates = [
                     pid for pid in parking_ids
                     if pid in bfs_dist and pid in id_to_track_part
+                    and Fraction(str(_track_part_by_id[pid].get("length", 0))) >= train_total_length
                 ]
                 if _candidates:
                     first_parking_track_id = min(
                         _candidates, key=lambda pid: bfs_dist[pid]
                     )
+                else:
+                    raise ValueError(f"No parkable track fits incoming train {train['id']}")
 
         train_members = train["members"]
 
@@ -1955,7 +1960,6 @@ def create_instance_from_scenario(
         if needs_service:
             problem.set_initial_value(serviced(shunting_unit), False)
 
-        train_total_length = _train_total_length(train_unit_types, train)
         problem.set_initial_value(su_length(shunting_unit), up.Real(train_total_length))
         problem.set_initial_value(su_unit_count(shunting_unit), up.Int(len(train_members)))
         if source == "in":
