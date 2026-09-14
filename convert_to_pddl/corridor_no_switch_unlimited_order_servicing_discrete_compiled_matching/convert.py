@@ -158,12 +158,32 @@ def _train_task_types(train):
     }
 
 
-def _unit_source_positions(scenario_object):
+def _unit_source_positions(scenario_object, location_object=None):
     positions = {}
-    for _, _, train in all_trains_with_source(scenario_object):
+    tracks = {
+        track["id"]: track for track in location_object.get("trackParts", [])
+    } if location_object else {}
+    exits_a, exits_b = _departure_exit_ids(
+        scenario_object, location_object
+    ) if location_object else (set(), set())
+    for source, _, train in all_trains_with_source(scenario_object):
         members = train.get("members", [])
         for index, member in enumerate(members):
             positions[member["id"]] = (index, len(members))
+        if source != "in" or not members or not tracks:
+            continue
+        entry_track = tracks.get(train.get("entryTrackPart"), {})
+        arrival_side = "b" if entry_track.get("bSide") else "a"
+        for request in scenario_object.get("out", []):
+            leave_track = request.get("leaveTrackPart")
+            departure_side = "a" if leave_track in exits_a else "b" if leave_track in exits_b else None
+            if departure_side is None:
+                continue
+            reverse = arrival_side != departure_side
+            request_name = f"request{request['id']}"
+            for index, member in enumerate(members):
+                rank = len(members) - 1 - index if reverse else index
+                positions[(member["id"], request_name)] = (rank, len(members))
     return positions
 
 
@@ -184,8 +204,11 @@ def _has_order_sensitive_matching(scenario_object):
 
 
 def _matching_order_cost(unit_id, slot_index, slot_records, unit_positions):
-    source_index, source_size = unit_positions.get(unit_id, (0, 1))
-    _, _, target_index, target_size = slot_records[slot_index]
+    slot_name, _, target_index, target_size = slot_records[slot_index]
+    request_name = slot_name.rsplit("_slot", 1)[0]
+    source_index, source_size = unit_positions.get(
+        (unit_id, request_name), unit_positions.get(unit_id, (0, 1))
+    )
     if source_size <= 1 or target_size <= 1:
         return Fraction(0)
     source_position = Fraction(source_index, source_size - 1)
@@ -313,7 +336,7 @@ def _select_order_preserving_matching(
 
 
 def _optimize_composition_preserving_matching(
-    unit_type_by_id, slot_records, source_groups
+    unit_type_by_id, slot_records, source_groups, unit_positions
 ):
     if np is None:
         return None
@@ -384,9 +407,9 @@ def _optimize_composition_preserving_matching(
     }
     for pair, column in x_index.items():
         unit_id, slot_index = pair
-        objective[column] = 1e-5 * abs(
-            chronological_position.get(unit_id, slot_index) - slot_index
-        )
+        objective[column] = 1e-5 * float(
+            _matching_order_cost(unit_id, slot_index, slot_records, unit_positions)
+        ) + 1e-8 * abs(chronological_position.get(unit_id, slot_index) - slot_index)
     for column in y_index.values():
         objective[column] = 1.0
 
@@ -430,7 +453,7 @@ def _select_composition_preserving_matching(
             )
 
     optimized_assignment = _optimize_composition_preserving_matching(
-        unit_type_by_id, slot_records, source_groups
+        unit_type_by_id, slot_records, source_groups, unit_positions
     )
     if optimized_assignment is not None:
         return optimized_assignment
@@ -447,9 +470,17 @@ def _select_composition_preserving_matching(
         request_slots = list(range(slot_offset, slot_offset + len(requested_types)))
         slot_offset += len(requested_types)
         for group_index, (unit_ids, source_types) in enumerate(source_groups):
-            if group_index in used_groups or source_types != requested_types:
+            request_name = f"request{request['id']}"
+            ordered_units = sorted(
+                unit_ids,
+                key=lambda unit_id: unit_positions.get(
+                    (unit_id, request_name), unit_positions.get(unit_id, (0, 1))
+                )[0],
+            )
+            ordered_types = [unit_type_by_id[unit_id] for unit_id in ordered_units]
+            if group_index in used_groups or ordered_types != requested_types:
                 continue
-            assignments.extend(zip(unit_ids, request_slots))
+            assignments.extend(zip(ordered_units, request_slots))
             assigned_units.update(unit_ids)
             assigned_slots.update(request_slots)
             used_groups.add(group_index)
@@ -2036,7 +2067,7 @@ def create_instance_from_scenario(
             departure_slot_records,
             matching_variant,
             matching_strategy=matching_strategy,
-            unit_positions=_unit_source_positions(scenario_object),
+            unit_positions=_unit_source_positions(scenario_object, location_object),
             scenario_object=scenario_object,
         )
         for unit_id, slot_index in assignment:
