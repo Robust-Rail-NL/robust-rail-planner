@@ -370,6 +370,128 @@ def create_move_action(train_id, start, end, path,
     }
 
 
+def create_reverse_action(train_id, start, end, track, train_lookup, track_id_lookup, unit_lookup=None):
+    """Create a Reverse action: an in-place reversal, reserving no path of
+    its own (mirroring the solver's own reversal handling, which reserves no
+    tracks - see robust-rail-solver's PlanGraph.BuildMoveActionsWithReverses)."""
+    resource = track_id_lookup.get(track, _track_resource(track))
+    shunting_unit = make_shunting_unit(train_id, train_lookup, unit_lookup)
+
+    return {
+        "startTime": _as_time(start),
+        "endTime": _as_time(end),
+        "taskType": {
+            "predefined": "Reverse"
+        },
+        "shuntingUnit": shunting_unit,
+        "location": resource["id"],
+        "resources": []
+    }
+
+
+def _segment_cost_weight(segment_path, switch_costs, track_parts_by_id):
+    """Weight for a non-reversal segment, same formula as
+    compute_move_duration's whole-route version, applied to just this
+    segment so segments can be compared against each other and against a
+    reversal's own weight (TRACK_CROSSING_TIME + reversal_duration - see
+    create_move_and_reverse_actions)."""
+    if track_parts_by_id:
+        nonzero_tracks = sum(1 for tid in segment_path
+                             if track_parts_by_id.get(tid, {}).get("length", 0) > 0)
+    else:
+        nonzero_tracks = len(segment_path)
+    total_switches = sum(switch_costs.get(tid, 0) for tid in segment_path)
+    return nonzero_tracks * TRACK_CROSSING_TIME + total_switches * SWITCH_CROSSING_TIME
+
+
+def create_move_and_reverse_actions(train_id, start, end, expanded_path, a_adj, b_adj,
+                                    switch_costs, reversal_duration, track_parts_by_id,
+                                    train_lookup, track_id_lookup, unit_lookup=None):
+    """Build the Move action(s) for a route, splitting into an alternating
+    Move/Reverse/Move/... sequence at each in-place reversal instead of
+    folding it into a single Move's resource path - mirrors the same fix in
+    robust-rail-solver's PlanGraph.BuildMoveActionsWithReverses (see
+    SCHEMA_CHANGELOG.md in robust-rail-general for why: a saw movement needs
+    an explicit step, not one Move that happens to revisit a track).
+
+    Each piece's duration is computed independently, matching how
+    robust-rail-evaluator prices a replayed plan: a Move's duration is
+    _segment_cost_weight summed over its own resource walk (which already
+    includes the shared reversal track at each end it touches), and a
+    Reverse's is `reversal_duration` alone, with no track-crossing
+    component of its own - so a shared reversal track ends up billed once
+    in each adjacent Move, never inside the Reverse. This matches
+    compute_move_duration's own whole-route formula term for term (see
+    robust-rail-solver's `2da7eab`/issue #52 for the derivation and the
+    real-scenario verification this mirrors), so these pieces are expected
+    to sum to exactly `end - start`, not merely close to it - the earlier
+    version of this function scaled each piece proportionally against a
+    total that didn't actually match, which is what issue #52 found on the
+    solver side.
+
+    `end` is always preserved exactly regardless: the last piece is
+    anchored to it rather than to its own computed weight, a safety net for
+    integer rounding rather than a rescale. Unlike the solver, this
+    function's `expanded_path` never has a leading reversal to special-case
+    (find_reversal_indices only ever flags an *interior* index, so
+    `pieces[0]`/`pieces[-1]` are always Move, never Reverse, by
+    construction) - a `Reverse -> Move -> ...` shape is architecturally
+    possible for the solver's routing graph, which tracks a train's facing
+    side as part of its search state; this converter has no such state and
+    only ever sees a reversal as a turn-around fully contained within one
+    already-known hop sequence.
+    """
+    reversal_indices = set(find_reversal_indices(expanded_path, a_adj, b_adj))
+    if not reversal_indices:
+        return [create_move_action(train_id, start, end, expanded_path,
+                                   train_lookup, track_id_lookup, unit_lookup)]
+
+    # Alternating (is_reversal, sub_path) pieces. Each reversal track is the
+    # shared endpoint of the Move segments on either side of it, same
+    # convention create_move_action already relies on (its own first
+    # resource - equal to `location` - is stripped as redundant).
+    pieces = []
+    segment = [expanded_path[0]]
+    for i in range(1, len(expanded_path)):
+        if i in reversal_indices:
+            segment.append(expanded_path[i])
+            pieces.append((False, segment))
+            pieces.append((True, [expanded_path[i]]))
+            segment = [expanded_path[i]]
+        else:
+            segment.append(expanded_path[i])
+    pieces.append((False, segment))
+    # Drop degenerate zero-displacement Move segments (a reversal at the
+    # very start/end of the path leaves nothing before/after it) - mirrors
+    # the `len(expanded_path) > 1` guard every call site already applies
+    # before deciding to emit a Move at all.
+    pieces = [(is_rev, seg) for is_rev, seg in pieces if is_rev or len(seg) > 1]
+
+    weights = [
+        reversal_duration if is_rev
+        else _segment_cost_weight(seg, switch_costs, track_parts_by_id)
+        for is_rev, seg in pieces
+    ]
+
+    actions = []
+    t = start
+    for idx, (is_reversal, seg_path) in enumerate(pieces):
+        if idx == len(pieces) - 1:
+            piece_end = end
+        else:
+            piece_end = t + weights[idx]
+
+        if is_reversal:
+            actions.append(create_reverse_action(train_id, t, piece_end, seg_path[0],
+                                                 train_lookup, track_id_lookup, unit_lookup))
+        else:
+            actions.append(create_move_action(train_id, t, piece_end, seg_path,
+                                              train_lookup, track_id_lookup, unit_lookup))
+        t = piece_end
+
+    return actions
+
+
 def create_arrive_action(train_id, time, track,
                          train_lookup, track_lookup, unit_lookup=None,
                          standing_type="", track_id_lookup=None):
@@ -581,14 +703,17 @@ def switch_cost_map(location):
     return costs
 
 
-def compute_reversals(expanded_path, a_adj, b_adj):
-    """Count direction reversals along the path (the solver's Reverse arcs).
+def find_reversal_indices(expanded_path, a_adj, b_adj):
+    """Indices into expanded_path of interior tracks where the path reverses
+    direction (the solver's Reverse arcs).
 
     A reversal occurs on an interior track when the path enters and leaves it
     through the same side (a turn-around), matching ArcType.Reverse in the
-    solver's routing graph.
+    solver's routing graph. Split out from compute_reversals (now a thin
+    wrapper) so create_move_and_reverse_actions can split a path at these
+    positions, not just count them.
     """
-    reversals = 0
+    indices = []
     for i in range(1, len(expanded_path) - 1):
         track = expanded_path[i]
         prev, nxt = expanded_path[i - 1], expanded_path[i + 1]
@@ -605,8 +730,13 @@ def compute_reversals(expanded_path, a_adj, b_adj):
         else:
             exit_side = None
         if entry_side is not None and entry_side == exit_side:
-            reversals += 1
-    return reversals
+            indices.append(i)
+    return indices
+
+
+def compute_reversals(expanded_path, a_adj, b_adj):
+    """Count direction reversals along the path - see find_reversal_indices."""
+    return len(find_reversal_indices(expanded_path, a_adj, b_adj))
 
 
 def compute_move_duration(expanded_path, a_adj, b_adj, switch_costs=None, reversal_duration=0, track_parts_by_id=None):
@@ -831,13 +961,16 @@ def convert_plan(plan_file, scenario_file, location_file):
         return None
 
     def _close_run(train, pin_end=None):
-        """Build the Move for the open run, ending on the track the plan's last
-        move leg designated (does not append it). When `pin_end` is set the Move
-        ends there where possible (a departing train's exit approach); if the
-        train is not ready in time the Move simply ends when it realistically
-        can — the converter is not asked to make plans feasible, only to convert
-        them accurately. Returns (start, end, move_action), or (None, None,
-        None) when there is nothing to emit."""
+        """Build the Move/Reverse action(s) for the open run, ending on the
+        track the plan's last move leg designated (does not append them).
+        When `pin_end` is set the run ends there where possible (a departing
+        train's exit approach); if the train is not ready in time the run
+        simply ends when it realistically can — the converter is not asked
+        to make plans feasible, only to convert them accurately. A run that
+        reverses in place is split into an alternating Move/Reverse/Move/...
+        sequence (see create_move_and_reverse_actions) rather than folded
+        into one Move that happens to revisit a track. Returns (start, end,
+        move_actions), or (None, None, None) when there is nothing to emit."""
         run = runs.pop(train, None)
         if not run:
             return None, None, None
@@ -849,9 +982,10 @@ def convert_plan(plan_file, scenario_file, location_file):
         )
         if len(expanded) < 2:
             return None, None, None
+        reversal_duration = get_reversal_duration(train, train_lookup)
         duration = compute_move_duration(
             expanded, a_adj, b_adj, switch_costs,
-            get_reversal_duration(train, train_lookup), track_parts_by_id
+            reversal_duration, track_parts_by_id
         )
         ready = max(su_clock.get(train, 0), su_arrival.get(train, 0))
         if pin_end is not None:
@@ -860,20 +994,21 @@ def convert_plan(plan_file, scenario_file, location_file):
         else:
             start = ready
             end = start + duration
-        move_action = create_move_action(
-            train, start, end, expanded,
+        move_actions = create_move_and_reverse_actions(
+            train, start, end, expanded, a_adj, b_adj, switch_costs,
+            reversal_duration, track_parts_by_id,
             train_lookup, track_id_lookup, unit_lookup
         )
         su_clock[train] = end + 1
         su_loc[train] = expanded[-1]
-        return start, end, move_action
+        return start, end, move_actions
 
     def _emit_close_run(train, pin_end=None):
-        """Close an open run by appending its Move. Returns (start, end), or
-        (None, None) when there is nothing to emit."""
-        start, end, move_action = _close_run(train, pin_end=pin_end)
-        if move_action is not None:
-            _append_su_action(move_action, train)
+        """Close an open run by appending its Move/Reverse action(s). Returns
+        (start, end), or (None, None) when there is nothing to emit."""
+        start, end, move_actions = _close_run(train, pin_end=pin_end)
+        for action in move_actions or []:
+            _append_su_action(action, train)
         return start, end
 
     def _close_run_onto(train, track_id):
@@ -894,8 +1029,9 @@ def convert_plan(plan_file, scenario_file, location_file):
         rested[train] = su_loc.get(train, track_id)
 
     def _move(train, from_id, target_id):
-        """Emit a single-hop Move driving a train onto its plan target track
-        (the enter-yard drive). A no-op when already on the target."""
+        """Emit the single-hop Move/Reverse action(s) driving a train onto its
+        plan target track (the enter-yard drive). A no-op when already on the
+        target."""
         _ensure_position(train)
         ready = max(su_clock.get(train, 0), su_arrival.get(train, 0))
         expanded = _strip_trailing_zero_length(
@@ -905,19 +1041,19 @@ def convert_plan(plan_file, scenario_file, location_file):
             su_loc[train] = target_id
             su_clock[train] = ready
             return
+        reversal_duration = get_reversal_duration(train, train_lookup)
         duration = compute_move_duration(
             expanded, a_adj, b_adj, switch_costs,
-            get_reversal_duration(train, train_lookup), track_parts_by_id
+            reversal_duration, track_parts_by_id
         )
         start = ready
         end = start + duration
-        _append_su_action(
-            create_move_action(
-                train, start, end, expanded,
-                train_lookup, track_id_lookup, unit_lookup
-            ),
-            train,
-        )
+        for action in create_move_and_reverse_actions(
+            train, start, end, expanded, a_adj, b_adj, switch_costs,
+            reversal_duration, track_parts_by_id,
+            train_lookup, track_id_lookup, unit_lookup
+        ):
+            _append_su_action(action, train)
         su_clock[train] = end + 1
         su_loc[train] = expanded[-1]
 
@@ -1165,9 +1301,9 @@ def convert_plan(plan_file, scenario_file, location_file):
             # An open run is the plan's exit approach; pin it to the deadline.
             had_run = run is not None
             ready_time = max(su_clock.get(train, 0), su_arrival.get(train, 0))
-            app_start, app_end, move_action = None, None, None
+            app_start, app_end, move_actions = None, None, None
             if had_run:
-                app_start, app_end, move_action = _close_run(train, pin_end=dep)
+                app_start, app_end, move_actions = _close_run(train, pin_end=dep)
                 if app_start is None:
                     had_run = False
 
@@ -1192,8 +1328,8 @@ def convert_plan(plan_file, scenario_file, location_file):
                     train,
                 )
             rested[train] = parked_track
-            if move_action is not None:
-                _append_su_action(move_action, train)
+            for action in move_actions or []:
+                _append_su_action(action, train)
 
             exit_action = create_exit_action(
                 train,
