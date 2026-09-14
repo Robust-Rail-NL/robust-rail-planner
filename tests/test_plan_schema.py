@@ -205,3 +205,86 @@ def test_no_fabricated_arrive_for_non_scenario_su():
     assert len(arrivals) == 1, f"expected exactly one Arrive, got {len(arrivals)}"
     assert arrivals[0]["shuntingUnit"]["id"] == real_train_id
     assert arrivals[0]["startTime"] == 600
+
+
+def _reversing_adjacency():
+    """Two dead-end branches (1, 2) sharing a switch (3) on its b-side, plus
+    a bumper capping each branch (0, 5). Going from branch 1 to branch 2
+    enters and leaves the switch through the same (b) side - a genuine
+    in-place reversal, not a redundant loop remove_loops would strip (that
+    only touches immediate repeats in the *pre-expansion* waypoint list, not
+    a reversal introduced by bfs_through_switches expanding a single hop).
+    """
+    location = {
+        "trackParts": [
+            {"id": "0", "aSide": [], "bSide": ["1"]},
+            {"id": "1", "aSide": ["0"], "bSide": ["3"]},
+            {"id": "3", "aSide": [], "bSide": ["1", "2"]},
+            {"id": "2", "aSide": ["5"], "bSide": ["3"]},
+            {"id": "5", "aSide": ["2"], "bSide": []},
+        ]
+    }
+    a_adj = C.build_directed_adj(location, "aSide")
+    b_adj = C.build_directed_adj(location, "bSide")
+    return a_adj, b_adj
+
+
+def test_find_reversal_indices_detects_a_genuine_reversal():
+    a_adj, b_adj = _reversing_adjacency()
+    expanded_path = C.expand_path(["1", "2"], a_adj, b_adj, switch_ids=set())
+
+    assert expanded_path == ["1", "3", "2"]
+    assert C.find_reversal_indices(expanded_path, a_adj, b_adj) == [1]
+    assert C.compute_reversals(expanded_path, a_adj, b_adj) == 1
+
+
+def test_create_move_and_setback_actions_splits_at_the_reversal():
+    """Mirrors robust-rail-solver's equivalent test: a route containing one
+    reversal must come out as Move/Setback/Move, not one Move whose
+    resources embed the same track twice."""
+    a_adj, b_adj = _reversing_adjacency()
+    expanded_path = C.expand_path(["1", "2"], a_adj, b_adj, switch_ids=set())
+    train_lookup = {"train0": {"members": ["u1"]}}
+
+    actions = C.create_move_and_setback_actions(
+        "train0", 1000, 1300, expanded_path, a_adj, b_adj,
+        switch_costs={}, reversal_duration=136, track_parts_by_id=None,
+        train_lookup=train_lookup, track_id_lookup={},
+    )
+
+    kinds = [a["taskType"]["predefined"] for a in actions]
+    assert kinds == ["Move", "Setback", "Move"], kinds
+
+    setback = actions[1]
+    assert setback["location"] == 3, "Setback should be located at the switch, not either branch"
+    assert setback["resources"] == []
+    assert setback["endTime"] > setback["startTime"], (
+        "a real reversal_duration must give the Setback a non-zero duration"
+    )
+
+    # No Move should still embed the reversal itself.
+    for move in (actions[0], actions[2]):
+        ids = [r["id"] for r in move["resources"]]
+        for i in range(len(ids) - 2):
+            assert ids[i] != ids[i + 2], f"Move still embeds a saw: {ids}"
+
+    # The overall span must match exactly what was scheduled - only the
+    # internal Move/Setback boundary is approximate, never the total (see
+    # create_move_and_setback_actions's own comment).
+    assert actions[0]["startTime"] == 1000
+    assert actions[-1]["endTime"] == 1300
+
+
+def test_create_move_and_setback_actions_falls_back_to_one_move_without_a_reversal():
+    a_adj, b_adj = _reversing_adjacency()
+    expanded_path = C.expand_path(["0", "1"], a_adj, b_adj, switch_ids=set())
+    train_lookup = {"train0": {"members": ["u1"]}}
+
+    actions = C.create_move_and_setback_actions(
+        "train0", 1000, 1060, expanded_path, a_adj, b_adj,
+        switch_costs={}, reversal_duration=136, track_parts_by_id=None,
+        train_lookup=train_lookup, track_id_lookup={},
+    )
+
+    assert len(actions) == 1
+    assert actions[0]["taskType"]["predefined"] == "Move"
