@@ -659,10 +659,13 @@ def _build_service_track_ids(location_object):
     for facility in location_object.get("facilities", []):
         if facility.get("taskTypes"):
             for tp_id in facility.get("relatedTrackPartIDs", []):
-                service_tracks[str(tp_id)] = {
-                    "type": facility["type"],
-                    "capacity": facility.get("simultaneousUsageCount", 1),
-                }
+                info = service_tracks.setdefault(str(tp_id), {"types": set(), "capacity": 1})
+                info["types"].update(
+                    task["other"] for task in facility["taskTypes"] if task.get("other")
+                )
+                info["capacity"] = max(
+                    info["capacity"], facility.get("simultaneousUsageCount", 1)
+                )
     return service_tracks
 
 
@@ -699,7 +702,7 @@ def _relevant_corridor_nodes(scenario_object, location_object,
             service_ids = [
                 track_id
                 for track_id, info in service_track_ids.items()
-                if info["type"] in _train_task_types(train)
+                if info["types"] & _train_task_types(train)
             ]
             for coupling_id in coupling_ids:
                 add_path(start_id, coupling_id)
@@ -720,7 +723,7 @@ def _relevant_corridor_nodes(scenario_object, location_object,
             service_ids = [
                 track_id
                 for track_id, info in service_track_ids.items()
-                if info["type"] in _train_task_types(train)
+                if info["types"] & _train_task_types(train)
             ]
             add_path(start_id, str(target_id))
             for service_id in service_ids:
@@ -1052,7 +1055,6 @@ def create_instance_from_scenario(
     facility_type_type = up.UserType("facilitytype")
     service_allowed   = problem.add_fluent(up.Fluent("service_allowed", up.BoolType(), trackpart=track_part_type), default_initial_value=False)
     facility_type     = problem.add_fluent(up.Fluent("facility_type", up.BoolType(), trackpart=track_part_type, ftype=facility_type_type), default_initial_value=False)
-    requires_facility = problem.add_fluent(up.Fluent("requires_facility", up.BoolType(), shunting_unit=shunting_unit_type, ftype=facility_type_type), default_initial_value=False)
     serviced          = problem.add_fluent(up.Fluent("serviced", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=True)
 
 
@@ -1063,7 +1065,7 @@ def create_instance_from_scenario(
     request_size = problem.add_fluent(up.Fluent("request_size", up.IntType(), request=departure_request_type), default_initial_value=up.Int(0))
 
     id_to_facility_type = {ftype_str: problem.add_object(ftype_str.lower(), facility_type_type)
-                           for ftype_str in {info["type"] for info in service_track_ids.values()}}
+                           for ftype_str in sorted({task for info in service_track_ids.values() for task in info["types"]})}
 
     startMoveSu = up.InstantaneousAction('start_move_su', su=shunting_unit_type)
     startMoveSu.add_precondition(active_su(startMoveSu.su))
@@ -1308,12 +1310,45 @@ def create_instance_from_scenario(
 
     service_su = up.InstantaneousAction('service_su', su=shunting_unit_type, l=track_part_type, f=facility_type_type)
     service_su.add_precondition(active_su(service_su.su))
+    service_su.add_precondition(su_has_arrived(service_su.su))
+    service_su.add_precondition(up.Not(allowed_to_move_su(service_su.su)))
     service_su.add_precondition(at_su(service_su.su, service_su.l))
     service_su.add_precondition(up.Not(serviced(service_su.su)))
     service_su.add_precondition(service_allowed(service_su.l))
     service_su.add_precondition(facility_type(service_su.l, service_su.f))
-    service_su.add_precondition(requires_facility(service_su.su, service_su.f))
-    service_su.add_effect(serviced(service_su.su), True)
+    pending_service = problem.add_fluent(
+        up.Fluent("pending_service", up.BoolType(), unit=train_unit_type, facility=facility_type_type),
+        default_initial_value=False,
+    )
+    service_unit = up.Variable("service_unit", train_unit_type)
+    service_type = up.Variable("service_type", facility_type_type)
+
+    def all_members_serviced(su, excluding=None):
+        member = contains_su(su, service_unit)
+        if excluding is not None:
+            member = up.And(member, up.Not(up.Equals(service_unit, excluding)))
+        return up.Forall(
+            up.Implies(member, up.Not(pending_service(service_unit, service_type))),
+            service_unit,
+            service_type,
+        )
+
+    service_su.add_precondition(up.Exists(
+        up.And(contains_su(service_su.su, service_unit), pending_service(service_unit, service_su.f)),
+        service_unit,
+    ))
+    service_su.add_effect(
+        pending_service(service_unit, service_su.f), False,
+        condition=contains_su(service_su.su, service_unit), forall=[service_unit],
+    )
+    service_su.add_effect(serviced(service_su.su), True, condition=up.Forall(
+        up.Implies(
+            up.And(contains_su(service_su.su, service_unit), pending_service(service_unit, service_type)),
+            up.Equals(service_type, service_su.f),
+        ),
+        service_unit,
+        service_type,
+    ))
     problem.add_action(service_su)
 
     depart_aside_su.add_precondition(serviced(depart_aside_su.su))
@@ -1400,7 +1435,8 @@ def create_instance_from_scenario(
         adopt_composition.add_precondition(up.Not(active_su(adopt_composition.request_su)))
         adopt_composition.add_precondition(compiled_whole_target(adopt_composition.source_su, adopt_composition.request_su))
         adopt_composition.add_precondition(at_su(adopt_composition.source_su, adopt_composition.track))
-        adopt_composition.add_precondition(serviced(adopt_composition.source_su))
+        adopt_composition.add_effect(serviced(adopt_composition.request_su), True, condition=serviced(adopt_composition.source_su))
+        adopt_composition.add_effect(serviced(adopt_composition.request_su), False, condition=up.Not(serviced(adopt_composition.source_su)))
         adopt_composition.add_effect(active_su(adopt_composition.source_su), False)
         adopt_composition.add_effect(active_su(adopt_composition.request_su), True)
         adopt_composition.add_effect(at_su(adopt_composition.source_su, adopt_composition.track), False)
@@ -1466,7 +1502,18 @@ def create_instance_from_scenario(
             action.add_precondition(single_unit_su(action.child_su, action.unit))
             action.add_precondition(front_of(action.unit, action.parent_su) if front else back_of(action.unit, action.parent_su))
             action.add_precondition(at_su(action.parent_su, action.track))
-            action.add_precondition(serviced(action.parent_su))
+            action.add_effect(
+                serviced(action.parent_su), True,
+                condition=all_members_serviced(action.parent_su, excluding=action.unit),
+            )
+            action.add_effect(
+                serviced(action.child_su), True,
+                condition=up.Forall(up.Not(pending_service(action.unit, service_type)), service_type),
+            )
+            action.add_effect(
+                serviced(action.child_su), False,
+                condition=up.Exists(pending_service(action.unit, service_type), service_type),
+            )
             action.add_precondition(
                 up.GE(su_unit_count(action.parent_su), 2 if front else 3)
             )
@@ -1544,7 +1591,8 @@ def create_instance_from_scenario(
         compiled_start.add_precondition(at_su(compiled_start.source_su, compiled_start.track))
         compiled_start.add_precondition(coupling_allowed(compiled_start.track))
         compiled_start.add_precondition(compiled_coupling_track(compiled_start.request_su, compiled_start.track))
-        compiled_start.add_precondition(serviced(compiled_start.source_su))
+        compiled_start.add_effect(serviced(compiled_start.request_su), True, condition=serviced(compiled_start.source_su))
+        compiled_start.add_effect(serviced(compiled_start.request_su), False, condition=up.Not(serviced(compiled_start.source_su)))
         compiled_start.add_effect(active_su(compiled_start.source_su), False)
         compiled_start.add_effect(active_su(compiled_start.request_su), True)
         compiled_start.add_effect(at_su(compiled_start.source_su, compiled_start.track), False)
@@ -1590,8 +1638,7 @@ def create_instance_from_scenario(
             action.add_precondition(at_su(action.request_su, action.track))
             action.add_precondition(coupling_allowed(action.track))
             action.add_precondition(compiled_coupling_track(action.request_su, action.track))
-            action.add_precondition(serviced(action.source_su))
-            action.add_precondition(serviced(action.request_su))
+            action.add_effect(serviced(action.request_su), False, condition=up.Not(serviced(action.source_su)))
             if front:
                 action.add_precondition(up.Equals(compiled_target_rank(action.unit) + 1, compiled_front_rank(action.request_su)))
                 action.add_precondition(behind_su(action.request_su, action.source_su))
@@ -1764,7 +1811,7 @@ def create_instance_from_scenario(
                     if ftype:
                         needed_facility_types.add(ftype)
         for ftid_str, finfo in service_track_ids.items():
-            if finfo["type"] in needed_facility_types and ftid_str not in switch_like_track_ids:
+            if finfo["types"] & needed_facility_types and ftid_str not in switch_like_track_ids:
                 required_track_ids.add(ftid_str)
                 corridor_or_required.add(ftid_str)
 
@@ -1797,7 +1844,8 @@ def create_instance_from_scenario(
         if str(track_part["id"]) in service_track_ids:
             info = service_track_ids[str(track_part["id"])]
             problem.set_initial_value(service_allowed(obj), True)
-            problem.set_initial_value(facility_type(obj, id_to_facility_type[info["type"]]), True)
+            for task_type in sorted(info["types"]):
+                problem.set_initial_value(facility_type(obj, id_to_facility_type[task_type]), True)
 
         if float(track_part.get("length", 0.0)) <= 0.0:
             problem.set_initial_value(track_length(obj), up.Real(Fraction(10**9)))
@@ -1906,11 +1954,6 @@ def create_instance_from_scenario(
             raise ValueError(f"Incoming train {train['id']} has no firstParkingTrackPart")
         if needs_service:
             problem.set_initial_value(serviced(shunting_unit), False)
-            for member in train.get("members", []):
-                for task in member.get("tasks", []):
-                    task_type_str = task.get("type", {}).get("other")
-                    if task_type_str and task_type_str in id_to_facility_type:
-                        problem.set_initial_value(requires_facility(shunting_unit, id_to_facility_type[task_type_str]), True)
 
         train_total_length = _train_total_length(train_unit_types, train)
         problem.set_initial_value(su_length(shunting_unit), up.Real(train_total_length))
@@ -1953,6 +1996,11 @@ def create_instance_from_scenario(
             unit_type_by_id[unit["id"]] = train_unit_type_key(unit)
             member_unit_objs.append(unit_obj)
             problem.set_initial_value(contains_su(shunting_unit, unit_obj), True)
+            for task in unit.get("tasks", []) or []:
+                task_type = task.get("type", {}).get("other")
+                if task_type not in id_to_facility_type:
+                    raise ValueError(f"No service facility for task {task_type!r} on unit {unit['id']}")
+                problem.set_initial_value(pending_service(unit_obj, id_to_facility_type[task_type]), True)
             if len(train_members) == 1:
                 problem.set_initial_value(single_unit_su(shunting_unit, unit_obj), True)
             else:
