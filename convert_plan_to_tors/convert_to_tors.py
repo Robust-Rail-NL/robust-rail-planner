@@ -841,6 +841,9 @@ def convert_plan(plan_file, scenario_file, location_file):
     su_arrival = {}                    # SU -> scenario arrival time
     su_identity = {}                   # request-alias SU name -> physical SU name
     runs = {}                          # SU -> {"seq": [...]} of an open move run
+    sibling_of = {}                    # split child -> its sibling (one-shot: consumed
+                                        # by whichever's own first run/move closes first,
+                                        # see _close_run/_move's ready computation)
     rested = {}                        # SU -> track id the plan parks it on
     waiting_on_messages = {}           # parked-out SU name -> parking slot id
     _scenario_exit_tracks = {}         # SU -> the track its Exit must sit on
@@ -960,6 +963,29 @@ def convert_plan(plan_file, scenario_file, location_file):
                 return su_loc.get(train)
         return None
 
+    def _sibling_floor(train, ready):
+        """Bump `ready` past a still-pending split sibling's own clock, once.
+
+        Right after a split, both resulting SUs are seeded to the same clock
+        (they really do coexist there at that instant) - but the two are
+        independent dict keys, so whichever one's own run/move closes second
+        never learns that the first already spent time driving the shared
+        corridor away from the split point. Without this, both can compute
+        the same ready/start/end window and end up scheduled onto the same
+        track at the same time (a real double-booking TORS's evaluator
+        rejects once it's expressed as separate Move/Reverse events, even
+        though the same collision was already there - just silently
+        tolerated - when folded into one embedded-reversal Move).
+
+        One-shot: consumed on whichever of the two calls this first, so it
+        only guards the immediate post-split departure, not the sibling's
+        entire remaining lifetime.
+        """
+        sibling = sibling_of.pop(train, None)
+        if sibling is not None:
+            ready = max(ready, su_clock.get(sibling, 0))
+        return ready
+
     def _close_run(train, pin_end=None):
         """Build the Move/Reverse action(s) for the open run, ending on the
         track the plan's last move leg designated (does not append them).
@@ -987,7 +1013,7 @@ def convert_plan(plan_file, scenario_file, location_file):
             expanded, a_adj, b_adj, switch_costs,
             reversal_duration, track_parts_by_id
         )
-        ready = max(su_clock.get(train, 0), su_arrival.get(train, 0))
+        ready = _sibling_floor(train, max(su_clock.get(train, 0), su_arrival.get(train, 0)))
         if pin_end is not None:
             end = max(int(pin_end), ready + duration)
             start = end - duration
@@ -1033,7 +1059,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         plan target track (the enter-yard drive). A no-op when already on the
         target."""
         _ensure_position(train)
-        ready = max(su_clock.get(train, 0), su_arrival.get(train, 0))
+        ready = _sibling_floor(train, max(su_clock.get(train, 0), su_arrival.get(train, 0)))
         expanded = _strip_trailing_zero_length(
             expand_path([from_id, target_id], a_adj, b_adj, switch_ids)
         )
@@ -1381,6 +1407,13 @@ def convert_plan(plan_file, scenario_file, location_file):
             )
             detached_su = _generated_su([unit_id], [parent_su])
             remaining_su = _generated_su(remaining_members, [parent_su])
+            if remaining_members:
+                # Only when there's a real remaining_su to collide with -
+                # remaining_members can be empty (a 2-unit parent splitting
+                # its last member off), in which case remaining_su never
+                # gets its own run and the floor would never be consumed.
+                sibling_of[detached_su] = remaining_su
+                sibling_of[remaining_su] = detached_su
             child_ids = (
                 [detached_su, remaining_su]
                 if side == "front"
