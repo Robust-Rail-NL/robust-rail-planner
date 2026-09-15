@@ -2114,12 +2114,14 @@ def create_instance_from_scenario(
         departure_candidates = _departure_matching_candidates(
             scenario_object, unit_type_by_id
         )
+        # Use the same direction-adjusted positions throughout request compilation.
+        unit_positions = _unit_source_positions(scenario_object, location_object)
         assignment = _select_precomputed_matching(
             departure_candidates,
             departure_slot_records,
             matching_variant,
             matching_strategy=matching_strategy,
-            unit_positions=_unit_source_positions(scenario_object, location_object),
+            unit_positions=unit_positions,
             scenario_object=scenario_object,
         )
         for unit_id, slot_index in assignment:
@@ -2142,6 +2144,10 @@ def create_instance_from_scenario(
             unit.name: source_su
             for source_su, source_units in source_composition_records
             for unit in source_units
+        }
+        # Direction data uses scenario IDs while compositions contain PDDL objects.
+        unit_id_by_name = {
+            unit.name: unit_id for unit_id, unit in id_to_unit.items()
         }
         assigned_unit_names = {unit.name for unit in assigned_unit_by_slot.values()}
         for unit_name in assigned_unit_names:
@@ -2181,7 +2187,15 @@ def create_instance_from_scenario(
                 problem.set_initial_value(compiled_target_request_su(unit, request_su), True)
                 problem.set_initial_value(compiled_target_rank(unit), up.Int(rank))
             for source_su, source_units in source_composition_records:
-                if source_units == slot_units:
+                # Compare each composition in its effective departure direction.
+                effective_source_units = sorted(
+                    source_units,
+                    key=lambda unit: unit_positions.get(
+                        (unit_id_by_name[unit.name], request_obj.name),
+                        unit_positions.get(unit_id_by_name[unit.name], (0, 1)),
+                    )[0],
+                )
+                if effective_source_units == slot_units:
                     problem.set_initial_value(compiled_whole_target(source_su, request_su), True)
                     problem.set_initial_value(compiled_must_stay_coupled(source_su), True)
                     departure_su_by_source[source_su] = request_su
