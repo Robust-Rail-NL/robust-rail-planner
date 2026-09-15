@@ -715,6 +715,7 @@ def convert_plan(plan_file, scenario_file, location_file):
     rested = {}                        # SU -> track id the plan parks it on
     waiting_on_messages = {}           # parked-out SU name -> parking slot id
     _scenario_exit_tracks = {}         # SU -> the track its Exit must sit on
+    completed_service_tasks = set()
     actions = []
 
     scenario_arrival_times = {}
@@ -1447,6 +1448,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         m = SERVICE_RE.match(line)
         if m:
             su_id, track, pddl_facility = m.groups()
+            su_id = _resolve_su(su_id)
             track_id = convert_track(track, track_lookup, track_id_lookup)["id"]
             _ensure_position(su_id)
             run = runs.get(su_id)
@@ -1463,44 +1465,50 @@ def convert_plan(plan_file, scenario_file, location_file):
             facility_type_task = pddl_facility
             facility_id = ""
             for fac in location.get("facilities", []):
-                fac_type_lower = fac["type"].lower()
-                is_type_match = fac_type_lower == pddl_facility_lower
-                is_track_match = track_id in [str(tp) for tp in fac.get("relatedTrackPartIDs", [])]
-                if is_type_match or is_track_match:
-                    if fac.get("taskTypes"):
-                        facility_type_task = fac["taskTypes"][0].get("other", pddl_facility)
+                task_names = [task.get("other", "") for task in fac.get("taskTypes", [])]
+                is_type_match = pddl_facility_lower in [name.lower() for name in task_names]
+                is_track_match = str(track_id) in [str(tp) for tp in fac.get("relatedTrackPartIDs", [])]
+                if is_type_match and is_track_match:
+                    facility_type_task = next(
+                        name for name in task_names if name.lower() == pddl_facility_lower
+                    )
                     facility_id = fac["id"]
                     break
 
-            service_duration = 600
-            task_match = None
-            su_entry = train_lookup.get(su_id, {})
-            task_lower = facility_type_task.lower()
-            for member in su_entry.get("members", []):
-                for task in member.get("tasks", []):
-                    task_type = str(task.get("type", {}).get("other", "")).lower()
-                    if task_type and (task_type == task_lower or task_type == pddl_facility_lower):
-                        task_match = task
-                        break
-                if task_match:
-                    break
-            if task_match:
-                service_duration = int(task_match["duration"])
+            if facility_id == "":
+                raise ValueError(f"No {pddl_facility} facility on track {track_id}")
+            pending_tasks = [
+                (member_id, task_index, task)
+                for member_id in _members_for(su_id)
+                for task_index, task in enumerate(
+                    unit_lookup[f"unit{member_id}"].get("tasks", []) or []
+                )
+                if task.get("type", {}).get("other", "").lower() == pddl_facility_lower
+                and (member_id, task_index) not in completed_service_tasks
+            ]
+            if not pending_tasks:
+                raise ValueError(f"No pending {pddl_facility} task for {su_id}")
 
-            start_time = max(su_clock.get(su_id, 0), su_arrival.get(su_id, 0))
-            end_time = start_time + service_duration
-            service_action = create_service_action(
-                su_id,
-                start_time,
-                end_time,
-                track_id,
-                facility_id,
-                facility_type_task,
-                train_lookup,
-                unit_lookup
-            )
-            actions.append(service_action)
-            su_clock[su_id] = end_time + 1
+            for member_id, task_index, task in pending_tasks:
+                start_time = max(su_clock.get(su_id, 0), su_arrival.get(su_id, 0))
+                end_time = start_time + int(task["duration"])
+                service_action = create_service_action(
+                    su_id,
+                    start_time,
+                    end_time,
+                    track_id,
+                    facility_id,
+                    facility_type_task,
+                    train_lookup,
+                    unit_lookup,
+                )
+                members = _members_for(su_id)
+                service_action["shuntingUnit"]["memberIDs"] = [member_id] + [
+                    member for member in members if member != member_id
+                ]
+                actions.append(service_action)
+                completed_service_tasks.add((member_id, task_index))
+                su_clock[su_id] = end_time + 1
             continue
 
         # Nothing matched. An action the converter does not know would be
