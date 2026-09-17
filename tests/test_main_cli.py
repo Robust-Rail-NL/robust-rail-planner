@@ -168,14 +168,15 @@ def test_main_rejects_an_unsolvable_scenario(tmp_path):
 
 
 @requires_julia
-def test_main_writes_the_infeasible_plan_before_failing(tmp_path):
-    """A plan that misses a departure deadline must still leave its partial
-    TORS output behind for inspection, while exiting non-zero so the pipeline
-    still treats the run as failed."""
+def test_a_late_departure_is_converted_not_failed(tmp_path):
+    """A train that cannot physically meet its departure deadline must still be
+    converted and written out. The converter mirrors the plan; it is not asked
+    to make plans feasible, so the Exit simply happens late."""
     scenario = json.loads(open(SCENARIO_FILE).read())
     # Impossible deadline: the train cannot be cleaned, moved and exited by
     # second 10. The discrete PDDL model has no temporal deadline, so the
-    # planner still finds a plan; only the converter's deadline check trips.
+    # planner still finds a plan; the converter then emits the Exit whenever
+    # the work realistically finishes (late).
     scenario["out"][0]["arrival"] = 10
     scenario["out"][0]["departure"] = 10
     scenario_path = tmp_path / "scenario_deadline.json"
@@ -184,12 +185,20 @@ def test_main_writes_the_infeasible_plan_before_failing(tmp_path):
     output_file = tmp_path / "plan.json"
     result = _run_main(output_file, scenario=str(scenario_path))
 
-    assert result.returncode != 0
-    assert "INFEASIBLE" in result.stderr
-    assert "wrote the infeasible plan" in result.stderr
+    assert result.returncode == 0, result.stderr
     assert output_file.exists()
 
     plan = json.loads(output_file.read_text())
     assert plan["schemaVersion"] == 1
-    assert plan["actions"], "expected the partial plan to carry its actions"
+    assert plan["actions"], "expected the plan to carry its actions"
     assert plan["actions"][0]["taskType"]["predefined"] == "Arrive"
+
+    exits = [
+        a for a in plan["actions"]
+        if a["taskType"].get("predefined") == "Exit"
+    ]
+    assert exits, "expected the departing train to be emitted"
+    assert int(exits[0]["startTime"]) > 10, (
+        "the exit is scheduled whenever the work finishes, which is after the "
+        f"deadline of 10 (got {exits[0]['startTime']})"
+    )

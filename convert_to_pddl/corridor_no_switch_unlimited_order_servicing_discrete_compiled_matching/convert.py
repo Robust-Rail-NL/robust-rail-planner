@@ -795,6 +795,35 @@ def _bfs_through_switches(adj, start, switch_ids, allowed_ids):
     return reachable
 
 
+def _bfs_through_switches_with_predecessors(adj, start, switch_ids, allowed_ids):
+    """Same reachability as _bfs_through_switches, but also records one
+    predecessor per reached non-switch target (the node that leads into it)."""
+    visited = {start}
+    queue = deque([start])
+    pred = {}
+    while queue:
+        node = queue.popleft()
+        for neighbor in adj.get(node, []):
+            if neighbor in allowed_ids and neighbor != start:
+                if neighbor not in pred:
+                    pred[neighbor] = node
+            elif neighbor in switch_ids and neighbor not in visited:
+                visited.add(neighbor)
+                queue.append(neighbor)
+    return pred
+
+
+def _entry_side_on_target(track_part_by_id, target_id, pred_id):
+    """Which end of `target_id` its neighbour `pred_id` plugs into: "a" or "b".
+
+    The predecessor is either the source track or a switch, and it is listed
+    in exactly one of the target's side lists."""
+    target = track_part_by_id.get(target_id, {})
+    if pred_id in target.get("aSide", []):
+        return "a"
+    return "b"
+
+
 def _build_side_aware_track_graph(location_object, allowed_track_ids=None):
     """Build the exact no-switch movement graph while retaining A/B edge labels."""
     switch_ids = {
@@ -917,6 +946,14 @@ def create_instance_from_scenario(
     turning_allowed = problem.add_fluent(up.Fluent("turning_allowed", up.BoolType(), trackpart=track_part_type),                         default_initial_value=False)
     connected_aside = problem.add_fluent(up.Fluent("connected_aside", up.BoolType(), from_=track_part_type, to=track_part_type),           default_initial_value=False)
     connected_bside = problem.add_fluent(up.Fluent("connected_bside", up.BoolType(), from_=track_part_type, to=track_part_type),           default_initial_value=False)
+    # Which end of the target track a movement from a given source arrives at.
+    # A mover leaving the source via its A-side or B-side does not always enter
+    # the same-named end of the target: for instance 906a's B-side plugs into
+    # the A-side (throat) of the 906b stub. Knowing the arrival end is what
+    # lets the movement actions place the mover at the physically correct end
+    # of the target and deny an older unit the exit it now blocks.
+    land_on_a = problem.add_fluent(up.Fluent("land_on_a", up.BoolType(), from_=track_part_type, to=track_part_type),                       default_initial_value=False)
+    land_on_b = problem.add_fluent(up.Fluent("land_on_b", up.BoolType(), from_=track_part_type, to=track_part_type),                       default_initial_value=False)
     departure_exit_a = problem.add_fluent(up.Fluent("departure_exit_a", up.BoolType(), trackpart=track_part_type),                          default_initial_value=False)
     departure_exit_b = problem.add_fluent(up.Fluent("departure_exit_b", up.BoolType(), trackpart=track_part_type),                          default_initial_value=False)
     entry_distance = problem.add_fluent(up.Fluent("entry_distance", up.IntType(),  trackpart=track_part_type),                          default_initial_value=up.Int(0))
@@ -949,7 +986,26 @@ def create_instance_from_scenario(
     su_previous_arrived = problem.add_fluent(up.Fluent("su_previous_arrived", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
     su_arrival_immediately_before = problem.add_fluent(up.Fluent("su_arrival_immediately_before", up.BoolType(), first=shunting_unit_type, second=shunting_unit_type), default_initial_value=False)
     compiled_arrival_ready = problem.add_fluent(up.Fluent("compiled_arrival_ready", up.BoolType(), su=shunting_unit_type), default_initial_value=False)
-    compiled_departure_unlocks = problem.add_fluent(up.Fluent("compiled_departure_unlocks", up.BoolType(), departing_su=shunting_unit_type, next_su=shunting_unit_type), default_initial_value=False)
+    # Time-derived global order over every arrival and departure in the
+    # scenario. Each event gets its own ready flag (arrival events use
+    # compiled_arrival_ready keyed by the arriving SU; departure events use
+    # compiled_departure_ready keyed by the SU that performs the departure).
+    # The completion of an event unlocks the next event through the four
+    # next_* link fluents below, so the scenario's in[]/out[] times become a
+    # hard ordering: if all arrivals precede the earliest departure, every
+    # train must arrive before any departs; where a departure time falls
+    # between two arrivals, that departure is forced between them.
+    #
+    # A shunting unit can be both an arriving train and a departing train, so
+    # the link fluent is disambiguated on both the kind of the event that is
+    # completing (after an arrival vs. after a departure) and the kind of the
+    # event that is unlocked next. enter_yard_su completes an arrival; the
+    # depart actions complete a departure.
+    compiled_departure_ready = problem.add_fluent(up.Fluent("compiled_departure_ready", up.BoolType(), su=shunting_unit_type), default_initial_value=False)
+    next_after_arrival_to_arrival = problem.add_fluent(up.Fluent("next_after_arrival_to_arrival", up.BoolType(), after_su=shunting_unit_type, next_su=shunting_unit_type), default_initial_value=False)
+    next_after_arrival_to_departure = problem.add_fluent(up.Fluent("next_after_arrival_to_departure", up.BoolType(), after_su=shunting_unit_type, next_su=shunting_unit_type), default_initial_value=False)
+    next_after_departure_to_arrival = problem.add_fluent(up.Fluent("next_after_departure_to_arrival", up.BoolType(), after_su=shunting_unit_type, next_su=shunting_unit_type), default_initial_value=False)
+    next_after_departure_to_departure = problem.add_fluent(up.Fluent("next_after_departure_to_departure", up.BoolType(), after_su=shunting_unit_type, next_su=shunting_unit_type), default_initial_value=False)
 
     phantom_track = problem.add_object("phantom", track_part_type)
     su_arrival_track = problem.add_fluent(up.Fluent("su_arrival_track", up.BoolType(), su=shunting_unit_type, track=track_part_type), default_initial_value=False)
@@ -1007,6 +1063,7 @@ def create_instance_from_scenario(
     enter_yard_su.add_precondition(at_su(enter_yard_su.su, enter_yard_su.entry))
     enter_yard_su.add_precondition(su_arrival_track(enter_yard_su.su, enter_yard_su.entry))
     enter_yard_su.add_precondition(su_first_parking_track(enter_yard_su.su, enter_yard_su.target))
+    enter_yard_su.add_precondition(parking_allowed(enter_yard_su.target))
     enter_yard_su.add_precondition(up.Equals(number_of_trains_on_track(enter_yard_su.target), 0))
     enter_yard_su.add_precondition(occupied_length(enter_yard_su.target) + su_length(enter_yard_su.su) <= track_length(enter_yard_su.target))
     enter_yard_su.add_effect(at_su(enter_yard_su.su, enter_yard_su.entry), False)
@@ -1073,6 +1130,7 @@ def create_instance_from_scenario(
     move_aside_occupied_su.add_precondition(connected_aside(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to))
     move_aside_occupied_su.add_precondition(occupied_length(move_aside_occupied_su.l_to) + su_length(move_aside_occupied_su.su) <= track_length(move_aside_occupied_su.l_to))
     move_aside_occupied_su.add_precondition(number_of_trains_on_track(move_aside_occupied_su.l_to) > 0)
+    move_aside_occupied_su.add_precondition(parking_allowed(move_aside_occupied_su.l_to))
     move_aside_occupied_su.add_effect(number_of_trains_on_track(move_aside_occupied_su.l_from), number_of_trains_on_track(move_aside_occupied_su.l_from) - 1)
     move_aside_occupied_su.add_effect(number_of_trains_on_track(move_aside_occupied_su.l_to), number_of_trains_on_track(move_aside_occupied_su.l_to) + 1)
     move_aside_occupied_su.add_effect(occupied_length(move_aside_occupied_su.l_from), occupied_length(move_aside_occupied_su.l_from) - su_length(move_aside_occupied_su.su))
@@ -1084,10 +1142,18 @@ def create_instance_from_scenario(
     move_aside_occupied_su.add_precondition(frontmost_a_su(move_aside_occupied_su.su))
     move_aside_occupied_su.add_effect(fluent=frontmost_a_su(_maov), value=True, condition=behind_su(_maov, move_aside_occupied_su.su), forall=[_maov])
     move_aside_occupied_su.add_effect(fluent=behind_su(_maov, move_aside_occupied_su.su), value=False, condition=behind_su(_maov, move_aside_occupied_su.su), forall=[_maov])
-    move_aside_occupied_su.add_effect(fluent=frontmost_a_su(_maop), value=False, condition=up.And(at_su(_maop, move_aside_occupied_su.l_to), frontmost_a_su(_maop)), forall=[_maop])
-    move_aside_occupied_su.add_effect(fluent=behind_su(_maop, move_aside_occupied_su.su), value=True, condition=up.And(at_su(_maop, move_aside_occupied_su.l_to), frontmost_a_su(_maop)), forall=[_maop])
-    move_aside_occupied_su.add_effect(frontmost_a_su(move_aside_occupied_su.su), True)
-    move_aside_occupied_su.add_effect(frontmost_b_su(move_aside_occupied_su.su), False)
+    # The mover leaves the source A-side but lands on whichever end of the
+    # target its connection plugs into. On an A-side landing it becomes the
+    # unit closest to the exit and drives the previous A-side unit to its rear;
+    # on a B-side landing it buries itself at the far end instead.
+    move_aside_occupied_su.add_effect(fluent=frontmost_a_su(_maop), value=False, condition=up.And(land_on_a(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to), at_su(_maop, move_aside_occupied_su.l_to), frontmost_a_su(_maop)), forall=[_maop])
+    move_aside_occupied_su.add_effect(fluent=behind_su(_maop, move_aside_occupied_su.su), value=True, condition=up.And(land_on_a(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to), at_su(_maop, move_aside_occupied_su.l_to), frontmost_a_su(_maop)), forall=[_maop])
+    move_aside_occupied_su.add_effect(frontmost_a_su(move_aside_occupied_su.su), True, condition=land_on_a(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to))
+    move_aside_occupied_su.add_effect(frontmost_b_su(move_aside_occupied_su.su), False, condition=land_on_a(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to))
+    move_aside_occupied_su.add_effect(fluent=frontmost_b_su(_maop), value=False, condition=up.And(land_on_b(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to), at_su(_maop, move_aside_occupied_su.l_to), frontmost_b_su(_maop)), forall=[_maop])
+    move_aside_occupied_su.add_effect(fluent=behind_su(move_aside_occupied_su.su, _maop), value=True, condition=up.And(land_on_b(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to), at_su(_maop, move_aside_occupied_su.l_to), frontmost_b_su(_maop)), forall=[_maop])
+    move_aside_occupied_su.add_effect(frontmost_b_su(move_aside_occupied_su.su), True, condition=land_on_b(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to))
+    move_aside_occupied_su.add_effect(frontmost_a_su(move_aside_occupied_su.su), False, condition=land_on_b(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to))
     problem.add_action(move_aside_occupied_su)
 
     move_bside_empty_su = up.InstantaneousAction('move_bside_empty_su', su=shunting_unit_type, l_from=track_part_type, l_to=track_part_type)
@@ -1119,6 +1185,7 @@ def create_instance_from_scenario(
     move_bside_occupied_su.add_precondition(connected_bside(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to))
     move_bside_occupied_su.add_precondition(occupied_length(move_bside_occupied_su.l_to) + su_length(move_bside_occupied_su.su) <= track_length(move_bside_occupied_su.l_to))
     move_bside_occupied_su.add_precondition(number_of_trains_on_track(move_bside_occupied_su.l_to) > 0)
+    move_bside_occupied_su.add_precondition(parking_allowed(move_bside_occupied_su.l_to))
     move_bside_occupied_su.add_effect(number_of_trains_on_track(move_bside_occupied_su.l_from), number_of_trains_on_track(move_bside_occupied_su.l_from) - 1)
     move_bside_occupied_su.add_effect(number_of_trains_on_track(move_bside_occupied_su.l_to), number_of_trains_on_track(move_bside_occupied_su.l_to) + 1)
     move_bside_occupied_su.add_effect(occupied_length(move_bside_occupied_su.l_from), occupied_length(move_bside_occupied_su.l_from) - su_length(move_bside_occupied_su.su))
@@ -1130,10 +1197,18 @@ def create_instance_from_scenario(
     move_bside_occupied_su.add_precondition(frontmost_b_su(move_bside_occupied_su.su))
     move_bside_occupied_su.add_effect(fluent=frontmost_b_su(_mbov), value=True, condition=behind_su(move_bside_occupied_su.su, _mbov), forall=[_mbov])
     move_bside_occupied_su.add_effect(fluent=behind_su(move_bside_occupied_su.su, _mbov), value=False, condition=behind_su(move_bside_occupied_su.su, _mbov), forall=[_mbov])
-    move_bside_occupied_su.add_effect(fluent=frontmost_b_su(_mbop), value=False, condition=up.And(at_su(_mbop, move_bside_occupied_su.l_to), frontmost_b_su(_mbop)), forall=[_mbop])
-    move_bside_occupied_su.add_effect(fluent=behind_su(move_bside_occupied_su.su, _mbop), value=True, condition=up.And(at_su(_mbop, move_bside_occupied_su.l_to), frontmost_b_su(_mbop)), forall=[_mbop])
-    move_bside_occupied_su.add_effect(frontmost_b_su(move_bside_occupied_su.su), True)
-    move_bside_occupied_su.add_effect(frontmost_a_su(move_bside_occupied_su.su), False)
+    # The mover leaves the source B-side but lands on whichever end of the
+    # target its connection plugs into. Entering a stub's throat (A-side) makes
+    # the mover the unit closest to the exit, blocking the units already there;
+    # entering the far end buries the mover behind them instead.
+    move_bside_occupied_su.add_effect(fluent=frontmost_b_su(_mbop), value=False, condition=up.And(land_on_b(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to), at_su(_mbop, move_bside_occupied_su.l_to), frontmost_b_su(_mbop)), forall=[_mbop])
+    move_bside_occupied_su.add_effect(fluent=behind_su(move_bside_occupied_su.su, _mbop), value=True, condition=up.And(land_on_b(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to), at_su(_mbop, move_bside_occupied_su.l_to), frontmost_b_su(_mbop)), forall=[_mbop])
+    move_bside_occupied_su.add_effect(frontmost_b_su(move_bside_occupied_su.su), True, condition=land_on_b(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to))
+    move_bside_occupied_su.add_effect(frontmost_a_su(move_bside_occupied_su.su), False, condition=land_on_b(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to))
+    move_bside_occupied_su.add_effect(fluent=frontmost_a_su(_mbop), value=False, condition=up.And(land_on_a(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to), at_su(_mbop, move_bside_occupied_su.l_to), frontmost_a_su(_mbop)), forall=[_mbop])
+    move_bside_occupied_su.add_effect(fluent=behind_su(_mbop, move_bside_occupied_su.su), value=True, condition=up.And(land_on_a(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to), at_su(_mbop, move_bside_occupied_su.l_to), frontmost_a_su(_mbop)), forall=[_mbop])
+    move_bside_occupied_su.add_effect(frontmost_a_su(move_bside_occupied_su.su), True, condition=land_on_a(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to))
+    move_bside_occupied_su.add_effect(frontmost_b_su(move_bside_occupied_su.su), False, condition=land_on_a(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to))
     problem.add_action(move_bside_occupied_su)
 
     depart_aside_su = up.InstantaneousAction('depart_aside_su', su=shunting_unit_type, l=track_part_type)
@@ -1224,6 +1299,13 @@ def create_instance_from_scenario(
     )
     compiled_direct_departure = problem.add_fluent(
         up.Fluent("compiled_direct_departure", up.BoolType(), su=shunting_unit_type),
+        default_initial_value=False,
+    )
+    # A source composition whose units match a multi-unit request's slots
+    # exactly must depart as-is (whole adopt); it must not be split and
+    # re-assembled, which would leave a required unit unaccounted for.
+    compiled_must_stay_coupled = problem.add_fluent(
+        up.Fluent("compiled_must_stay_coupled", up.BoolType(), su=shunting_unit_type),
         default_initial_value=False,
     )
     compiled_departure_material = problem.add_fluent(
@@ -1342,6 +1424,7 @@ def create_instance_from_scenario(
             action.add_precondition(active_su(action.parent_su))
             action.add_precondition(compiled_arrival_composition_su(action.parent_su))
             action.add_precondition(up.Not(compiled_direct_departure(action.parent_su)))
+            action.add_precondition(up.Not(compiled_must_stay_coupled(action.parent_su)))
             action.add_precondition(compiled_uncouple_track(action.parent_su, action.track))
             action.add_precondition(allowed_to_move_su(action.parent_su))
             action.add_precondition(up.Not(active_su(action.child_su)))
@@ -1574,6 +1657,7 @@ def create_instance_from_scenario(
     bfs_dist = _bfs_from(adjacency, exit_ids)
 
     parking_ids = {tp["id"] for tp in location_object["trackParts"] if tp.get("parkingAllowed")}
+    _track_part_by_id = {tp["id"]: tp for tp in location_object["trackParts"]}
     parking_bfs_values = sorted({bfs_dist[pid] for pid in parking_ids if pid in bfs_dist})
     bfs_to_entry_dist = {d: i + 1 for i, d in enumerate(parking_bfs_values)}
 
@@ -1694,6 +1778,26 @@ def create_instance_from_scenario(
             if target_id != src_id and target_id in id_to_track_part:
                 problem.set_initial_value(connected_bside(id_to_track_part[src_id], id_to_track_part[target_id]), True)
 
+    for src_id in list(id_to_track_part):
+        for target_id, pred_id in _bfs_through_switches_with_predecessors(
+            a_adj, src_id, switch_like_track_ids, allowed_ids
+        ).items():
+            if target_id != src_id and target_id in id_to_track_part:
+                side = _entry_side_on_target(_track_part_by_id, target_id, pred_id)
+                if side == "a":
+                    problem.set_initial_value(land_on_a(id_to_track_part[src_id], id_to_track_part[target_id]), True)
+                else:
+                    problem.set_initial_value(land_on_b(id_to_track_part[src_id], id_to_track_part[target_id]), True)
+        for target_id, pred_id in _bfs_through_switches_with_predecessors(
+            b_adj, src_id, switch_like_track_ids, allowed_ids
+        ).items():
+            if target_id != src_id and target_id in id_to_track_part:
+                side = _entry_side_on_target(_track_part_by_id, target_id, pred_id)
+                if side == "a":
+                    problem.set_initial_value(land_on_a(id_to_track_part[src_id], id_to_track_part[target_id]), True)
+                else:
+                    problem.set_initial_value(land_on_b(id_to_track_part[src_id], id_to_track_part[target_id]), True)
+
     # --- Compute initial occupancies ---
     # Standing trains already occupy their tracks at time zero. Record their
     # position and update the track's occupied length / train count.
@@ -1731,6 +1835,27 @@ def create_instance_from_scenario(
         preferred_track_keys = ["firstParkingTrackPart", "entryTrackPart"] if source == "inStanding" else ["entryTrackPart", "firstParkingTrackPart"]
         initial_track_id = _train_initial_track_id(train, preferred_track_keys)
         first_parking_track_id = train.get("firstParkingTrackPart")
+
+        # The scenario's firstParkingTrackPart is often the non-parkable arrival
+        # corridor (906a). Such a track is not a legal resting place for an
+        # arrived train (parking_allowed is False, and enter_yard_su now demands
+        # a parkable target), so redirect the arrival onto the nearest parkable
+        # deep-yard track that is actually modelled in this problem instance.
+        # Trains may still share a track; the only hard rule is that the resting
+        # track must permit parking, matching the human reference plans.
+        if source == "in" and first_parking_track_id is not None:
+            _tid = first_parking_track_id
+            _tp = _track_part_by_id.get(_tid)
+            if _tp is None or not _tp.get("parkingAllowed", False):
+                _candidates = [
+                    pid for pid in parking_ids
+                    if pid in bfs_dist and pid in id_to_track_part
+                ]
+                if _candidates:
+                    first_parking_track_id = min(
+                        _candidates, key=lambda pid: bfs_dist[pid]
+                    )
+
         train_members = train["members"]
 
         shunting_unit = problem.add_object("su_" + _train_object_name(source, index, train), shunting_unit_type)
@@ -1939,8 +2064,10 @@ def create_instance_from_scenario(
                     compiled_departure_material(single_unit_su_obj), True
                 )
         compiled_request_sources = []
+        departure_event_records = []
 
-        for _, request_obj, request_su, slot_objects, coupling_tracks in request_action_records:
+        for request, request_obj, request_su, slot_objects, coupling_tracks in request_action_records:
+            departure_event_time = int(request.get("arrival", 0))
             slot_units = [assigned_unit_by_slot[slot_name] for slot_name in slot_objects]
             compiled_request_sources.append(
                 (
@@ -1954,6 +2081,9 @@ def create_instance_from_scenario(
                 source_su = source_su_by_unit_sequence.get((slot_units[0].name,))
                 if source_su is not None:
                     departure_su_by_source[source_su] = source_su
+                    departure_event_records.append(
+                        (departure_event_time, source_su)
+                    )
                     if source_su in direct_departure_sources:
                         problem.set_initial_value(compiled_direct_departure(source_su), True)
                 continue
@@ -1963,11 +2093,19 @@ def create_instance_from_scenario(
             for source_su, source_units in source_composition_records:
                 if source_units == slot_units:
                     problem.set_initial_value(compiled_whole_target(source_su, request_su), True)
+                    problem.set_initial_value(compiled_must_stay_coupled(source_su), True)
                     departure_su_by_source[source_su] = request_su
                     if source_su in direct_departure_sources:
                         problem.set_initial_value(compiled_direct_departure(source_su), True)
                         problem.set_initial_value(compiled_direct_departure(request_su), True)
                     break
+            # The request SU is a departure event even when no arrival composition
+            # matches the request's unit order whole (e.g. a coupled departure that
+            # is re-assembled in a different order than it arrived). Only coupling
+            # into the matching composition short-circuits to the arrival SU.
+            departure_event_records.append(
+                (departure_event_time, request_su)
+            )
             for track in coupling_tracks:
                 problem.set_initial_value(compiled_coupling_track(request_su, track), True)
 
@@ -2016,141 +2154,84 @@ def create_instance_from_scenario(
                     True,
                 )
 
-        # When every arriving composition already exactly matches one departure request,
-        # admit the next arrival only after the previous composition has departed.
-        ordered_arrival_sus = [su for _, su in in_train_sus]
-        if ordered_arrival_sus and all(su in departure_su_by_source for su in ordered_arrival_sus):
-            arrive_su.add_precondition(compiled_arrival_ready(arrive_su.su))
-            problem.set_initial_value(compiled_arrival_ready(ordered_arrival_sus[0]), True)
-            for current_su, next_arrival_su in zip(ordered_arrival_sus, ordered_arrival_sus[1:]):
-                departing_su = departure_su_by_source[current_su]
-                problem.set_initial_value(compiled_departure_unlocks(departing_su, next_arrival_su), True)
+        # Build a single time-derived total order over every arrival and departure
+        # event in the scenario and encode it as the hard ordering the planner must
+        # respect. Arrivals and departures are sorted by their scenario times
+        # (arrivals before departures on a tie), and each event's completion
+        # unlocks only the next event. This makes the PDDL model reflect the
+        # in[]/out[] times directly: if all arrivals precede the earliest
+        # departure, every train must arrive before any departs; where a
+        # departure time falls between two arrivals, that departure is forced in
+        # between them.
+        events = [(time, "arrival", su) for time, su in in_train_sus]
+        events += [(time, "departure", su) for time, su in departure_event_records]
+        events.sort(key=lambda event: (event[0], 0 if event[1] == "arrival" else 1))
 
-            next_arrival = up.Variable("compiled_next_arrival", shunting_unit_type)
-            for departure_action in (
-                depart_aside_su,
-                depart_bside_su,
-                compiled_depart_aside,
-                compiled_depart_bside,
-            ):
-                departure_action.add_effect(
-                    fluent=compiled_arrival_ready(next_arrival),
-                    value=True,
-                    condition=compiled_departure_unlocks(departure_action.su, next_arrival),
-                    forall=[next_arrival],
-                )
-        elif ordered_arrival_sus:
-            # Requests connected through shared source compositions form independent
-            # assembly components. Process one component at a time to avoid admitting
-            # unrelated trains that can only congest the yard.
-            arrive_su.add_precondition(compiled_arrival_ready(arrive_su.su))
-            node_neighbors = {}
-            request_completion = {}
-            source_object_by_name = {
-                source_su.name: source_su for source_su, _ in source_composition_records
-            }
-            for request_obj, request_su, source_sus in compiled_request_sources:
-                request_node = ("request", request_obj.name)
-                node_neighbors.setdefault(request_node, set())
-                request_completion[request_obj.name] = (request_obj, request_su)
-                for source_su in source_sus:
-                    source_node = ("source", source_su.name)
-                    node_neighbors.setdefault(source_node, set()).add(request_node)
-                    node_neighbors[request_node].add(source_node)
+        if events:
+            _, first_kind, first_su = events[0]
+            if first_kind == "arrival":
+                problem.set_initial_value(compiled_arrival_ready(first_su), True)
+            else:
+                problem.set_initial_value(compiled_departure_ready(first_su), True)
 
-            components = []
-            unseen = set(node_neighbors)
-            while unseen:
-                start = min(unseen)
-                component = set()
-                queue = deque([start])
-                unseen.remove(start)
-                while queue:
-                    node = queue.popleft()
-                    component.add(node)
-                    for neighbor in node_neighbors[node]:
-                        if neighbor in unseen:
-                            unseen.remove(neighbor)
-                            queue.append(neighbor)
-                components.append(component)
+        for (_, after_kind, after_su), (_, next_kind, next_su) in zip(events, events[1:]):
+            if after_kind == "arrival" and next_kind == "arrival":
+                link = next_after_arrival_to_arrival
+            elif after_kind == "arrival" and next_kind == "departure":
+                link = next_after_arrival_to_departure
+            elif after_kind == "departure" and next_kind == "arrival":
+                link = next_after_departure_to_arrival
+            else:
+                link = next_after_departure_to_departure
+            problem.set_initial_value(link(after_su, next_su), True)
 
-            arrival_rank = {su.name: rank for rank, su in enumerate(ordered_arrival_sus)}
-            components.sort(
-                key=lambda component: min(
-                    (arrival_rank.get(name, -1) for kind, name in component if kind == "source"),
-                    default=-1,
-                )
+        # Every arrival is gated by its position in the global event chain.
+        arrive_su.add_precondition(compiled_arrival_ready(arrive_su.su))
+
+        # Completing an event unlocks whichever event follows it. enter_yard_su
+        # completes an arrival event, so it advances the chain from the four
+        # next_after_arrival_* links; each depart action completes a departure
+        # event, so it advances from the next_after_departure_* links.
+        advance_next = up.Variable("compiled_next_event", shunting_unit_type)
+        enter_yard_su.add_effect(
+            fluent=compiled_arrival_ready(advance_next),
+            value=True,
+            condition=next_after_arrival_to_arrival(enter_yard_su.su, advance_next),
+            forall=[advance_next],
+        )
+        enter_yard_su.add_effect(
+            fluent=compiled_departure_ready(advance_next),
+            value=True,
+            condition=next_after_arrival_to_departure(enter_yard_su.su, advance_next),
+            forall=[advance_next],
+        )
+        for depart_action in (
+            depart_aside_su,
+            depart_bside_su,
+            compiled_depart_aside,
+            compiled_depart_bside,
+        ):
+            depart_action.add_effect(
+                fluent=compiled_arrival_ready(advance_next),
+                value=True,
+                condition=next_after_departure_to_arrival(depart_action.su, advance_next),
+                forall=[advance_next],
             )
-            incoming_names = set(arrival_rank)
-            for su in ordered_arrival_sus:
-                problem.set_initial_value(su_previous_arrived(su), True)
+            depart_action.add_effect(
+                fluent=compiled_departure_ready(advance_next),
+                value=True,
+                condition=next_after_departure_to_departure(depart_action.su, advance_next),
+                forall=[advance_next],
+            )
 
-            request_sources_by_name = {
-                request_obj.name: {source_su.name for source_su in source_sus}
-                for request_obj, _, source_sus in compiled_request_sources
-            }
-            scheduled_source_names = set().union(
-                *request_sources_by_name.values()
-            ) if request_sources_by_name else set()
-            for source_name in incoming_names - scheduled_source_names:
-                problem.set_initial_value(
-                    compiled_arrival_ready(source_object_by_name[source_name]), True
-                )
-            request_schedule = []
-            for component in components:
-                remaining_requests = {
-                    name for kind, name in component if kind == "request"
-                }
-                current_sources = set()
-                while remaining_requests:
-                    sharing = [
-                        name
-                        for name in remaining_requests
-                        if request_sources_by_name[name] & current_sources
-                    ]
-                    candidates = sharing or list(remaining_requests)
-                    selected = min(
-                        candidates,
-                        key=lambda name: min(
-                            (
-                                arrival_rank.get(source_name, -1)
-                                for source_name in request_sources_by_name[name]
-                            ),
-                            default=-1,
-                        ),
-                    )
-                    request_schedule.append(selected)
-                    current_sources = request_sources_by_name[selected]
-                    remaining_requests.remove(selected)
-
-            enabled_sources = set()
-            for request_index, request_name in enumerate(request_schedule):
-                needed_sources = {
-                    source_name
-                    for source_name in request_sources_by_name[request_name]
-                    if source_name in incoming_names and source_name not in enabled_sources
-                }
-                if request_index == 0:
-                    for source_name in needed_sources:
-                        problem.set_initial_value(
-                            compiled_arrival_ready(source_object_by_name[source_name]), True
-                        )
-                elif needed_sources:
-                    previous_name = request_schedule[request_index - 1]
-                    previous_request, previous_su = request_completion[previous_name]
-                    advance = up.InstantaneousAction(
-                        f"compiled_advance_request_{request_index}"
-                    )
-                    if previous_su is None:
-                        advance.add_precondition(request_departed(previous_request))
-                    else:
-                        advance.add_precondition(departed_su(previous_su))
-                    for source_name in needed_sources:
-                        advance.add_effect(
-                            compiled_arrival_ready(source_object_by_name[source_name]), True
-                        )
-                    problem.add_action(advance)
-                enabled_sources.update(needed_sources)
+        # Every departure is gated by its position in the global event chain.
+        for depart_action in (
+            depart_aside_su,
+            depart_bside_su,
+            compiled_depart_aside,
+            compiled_depart_bside,
+        ):
+            depart_action.add_precondition(compiled_departure_ready(depart_action.su))
 
 
     if output_file is None:
