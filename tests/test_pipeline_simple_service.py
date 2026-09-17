@@ -18,7 +18,7 @@ def test_plan_visits_arrive_service_and_departs(raw_plan_file):
 
     assert "arrive_su(su_train9001, bumper_in)" in plan_text
     assert "service_su(su_train9001, rail_service, cleaning)" in plan_text
-    assert "depart_bside_su_for_request(su_train9001, unit9101, request1_slot0, request1, bumper_out)" in plan_text
+    assert "compiled_depart_bside_for_request(su_train9001, unit9101, request1, bumper_out)" in plan_text
 
 
 @requires_julia
@@ -27,7 +27,7 @@ def test_service_action_happens_before_departure(raw_plan_file):
         lines = [line.strip() for line in f if line.strip()]
 
     service_index = next(i for i, line in enumerate(lines) if line.startswith("service_su"))
-    depart_index = next(i for i, line in enumerate(lines) if line.startswith("depart_"))
+    depart_index = next(i for i, line in enumerate(lines) if "depart_" in line)
     assert service_index < depart_index
 
 

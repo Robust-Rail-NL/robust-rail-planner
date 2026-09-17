@@ -24,7 +24,7 @@ from unified_planning.engines.sequential_simulator import UPSequentialSimulator
 from unified_planning.io import PDDLReader
 from unified_planning.plans import ActionInstance
 
-from convert_to_pddl.corridor_no_switch_unlimited_order_servicing_discrete_compiled_matching import convert
+from convert_to_pddl import convert
 
 REPO = Path(__file__).resolve().parent.parent
 

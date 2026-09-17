@@ -35,10 +35,10 @@ PLANNER_SCRIPTS = {
 # model; everything else in the pipeline is variant-agnostic.
 CONVERTER_MODULES = {
     "compiled_matching": (
-        "convert_to_pddl.corridor_no_switch_unlimited_order_servicing_discrete_compiled_matching.convert"
+        "convert_to_pddl.convert"
     ),
     "compiled_matching_no_bumpers": (
-        "convert_to_pddl."
+        "convert_to_pddl.archive."
         "corridor_no_switch_unlimited_order_servicing_discrete_compiled_matching_no_bumpers.convert"
     ),
 }
