@@ -21,8 +21,7 @@ RAIL_PARK = 3
 BUMPER_OUT = 4
 
 PARK_THEN_DEPART_PLAN = [
-    "(arrive_su su_train9001 bumper_in)",
-    "(enter_yard_su su_train9001 bumper_in rail_park)",
+    "(arrive_su su_train9001 rail_park)",
     "(start_move_su su_train9001)",
     "(move_aside_occupied_su su_train9001 rail_park rail_service)",
     "(service_su su_train9001 rail_service cleaning)",
@@ -147,8 +146,7 @@ def test_list_order_waits_and_moves_follow_the_concurrent_plan(tmp_path):
     lands on its request's departure time. Trains run concurrently — a train
     may rest while another moves. The one cross-train constraint is the
     railway: no two Move actions may overlap. Each departure Wait is anchored
-    to the unit's own last Move: it starts the moment that Move ends and runs
-    until the unit drives to the exit."""
+    to the unit's last arrival or Move and runs until it drives to the exit."""
     scenario_file, location_file = _kleinebinckhorst_inputs()
     plan = convert_plan(KLEINEBINCKHORST_PLAN, scenario_file, location_file)
 
@@ -212,8 +210,8 @@ def test_list_order_waits_and_moves_follow_the_concurrent_plan(tmp_path):
     got_exits = [(members(a), int(a["startTime"])) for a in exits]
     assert got_exits == list(exit_deadlines.items()), got_exits
 
-    # Each departure Wait sits directly after the unit's last Move and runs
-    # until that unit's approach Move starts.
+    # Each departure Wait sits directly after the unit's last position-setting
+    # action and runs until that unit's approach Move starts.
     waits = [a for a in actions if predefined(a) == "Wait"]
     assert len(waits) == 4
     for i, wait in enumerate(actions):
@@ -221,10 +219,11 @@ def test_list_order_waits_and_moves_follow_the_concurrent_plan(tmp_path):
             continue
         cluster = members(wait)
         anchor = actions[i - 1]
-        assert members(anchor) == cluster and predefined(anchor) == "Move", (
-            "Wait must follow the unit's own last Move", wait, anchor
+        assert members(anchor) == cluster and predefined(anchor) in ("Arrive", "Move"), (
+            "Wait must follow the unit's own arrival or last Move", wait, anchor
         )
-        assert int(wait["startTime"]) == int(anchor["endTime"]) + 1, wait
+        expected_start = int(anchor["endTime"]) + (1 if predefined(anchor) == "Move" else 0)
+        assert int(wait["startTime"]) == expected_start, wait
         approach = next(
             a for a in actions[i + 1:] if predefined(a) == "Move" and members(a) == cluster
         )

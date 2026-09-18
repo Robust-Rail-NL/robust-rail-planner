@@ -71,7 +71,6 @@ SPLIT_THREE_RE = re.compile(
 SERVICE_RE = re.compile(r"\(service_su ([^ ]+) ([^ ]+) ([^)]+)\)")
 MATCH_RE = re.compile(r"\(match ([^ ]+) ([^)]+)\)")
 ARRIVE_SU_RE = re.compile(r"\(arrive_su ([^ ]+) ([^)]+)\)")
-ENTER_YARD_SU_RE = re.compile(r"\(enter_yard_su ([^ ]+) ([^ ]+) ([^)]+)\)")
 UNCOUPLE_RE = re.compile(r"\(uncouple ([^ ]+) ([^)]+)\)")
 PARKING_FULFILL_RE = re.compile(
     r"\(parking_fulfill ([^ ]+) ([^ ]+) ([^ ]+) ([^)]+)\)"
@@ -719,32 +718,29 @@ def convert_plan(plan_file, scenario_file, location_file):
     actions = []
 
     scenario_arrival_times = {}
-    scenario_materialized = {}
+    scenario_arrival_tracks = {}
 
-    def _materialized_arrival_track(train):
-        """Track where an arriving train physically appears: the scenario's
-        entry/parking track, resolved off zero-length signals onto the real
-        track beside them."""
+    def _scenario_arrival_track(train):
         for key in ("entryTrackPart", "firstParkingTrackPart"):
-            raw = train.get(key)
-            if raw is None:
+            raw_track = train.get(key)
+            if raw_track is None:
                 continue
-            tid = convert_track(raw, track_lookup, track_id_lookup)["id"]
-            tp = track_parts_by_id.get(tid)
-            if tp and tp.get("length", 0) == 0 and not tp.get("parkingAllowed", False):
-                for nb in tp.get("aSide", []) + tp.get("bSide", []):
-                    ntp = track_parts_by_id.get(nb)
-                    if ntp and (ntp.get("length", 0) > 0 or ntp.get("parkingAllowed", False)):
-                        return nb
-            return tid
+            track_id = convert_track(raw_track, track_lookup, track_id_lookup)["id"]
+            track_part = track_parts_by_id.get(track_id)
+            if track_part and track_part.get("length", 0) == 0:
+                for neighbor in track_part.get("aSide", []) + track_part.get("bSide", []):
+                    neighbor_part = track_parts_by_id.get(neighbor)
+                    if neighbor_part and neighbor_part.get("length", 0) > 0:
+                        return neighbor
+            return track_id
         return None
 
     for train in scenario.get("in", []):
         arrival = int(train.get("arrival", 0))
-        materialized = _materialized_arrival_track(train)
+        arrival_track = _scenario_arrival_track(train)
         for name in (f"train{train['id']}", f"su_train{train['id']}"):
             scenario_arrival_times[name] = arrival
-            scenario_materialized[name] = materialized
+            scenario_arrival_tracks[name] = arrival_track
 
     def _resolve_su(name):
         """Return the physical SU represented by a PDDL request alias."""
@@ -767,6 +763,7 @@ def convert_plan(plan_file, scenario_file, location_file):
     su_departure_deadline = {}         # departing SU -> requested departure time
     departing_sus = set()
     train_arrival_times = {}           # SU name -> arrival time (for post-processing)
+    train_arrival_positions = {}       # SU name -> physical arrival track from the PDDL plan
 
     def _members_for(su_id):
         """Return the train-unit IDs currently contained in an SU."""
@@ -939,28 +936,16 @@ def convert_plan(plan_file, scenario_file, location_file):
             arrival = scenario_arrival_times.get(su_id, 0)
             train_arrival_times[su_id] = arrival
             su_arrival[su_id] = arrival
-            materialized = scenario_materialized.get(su_id)
-            if materialized is not None:
-                su_loc[su_id] = materialized
-            else:
-                su_loc[su_id] = convert_track(
-                    m.group(2), track_lookup, track_id_lookup
-                )["id"]
+            target_id = convert_track(
+                m.group(2), track_lookup, track_id_lookup
+            )["id"]
+            arrival_track = scenario_arrival_tracks.get(su_id)
+            su_loc[su_id] = arrival_track if arrival_track is not None else target_id
+            train_arrival_positions[su_id] = su_loc[su_id]
             su_clock[su_id] = max(su_clock.get(su_id, 0), arrival)
-            continue
-
-        # --------------------------------
-        # ENTER YARD (drive the materialized arrival onto the plan's target)
-        # --------------------------------
-        m = ENTER_YARD_SU_RE.match(line)
-        if m:
-            su_id, _entry, target = m.groups()
-            target_id = convert_track(target, track_lookup, track_id_lookup)["id"]
-            from_id = su_loc.get(su_id)
-            if from_id is None:
-                from_id = convert_track(_entry, track_lookup, track_id_lookup)["id"]
-            _move(su_id, from_id, target_id)
-            rested[su_id] = su_loc.get(su_id, target_id)
+            if su_loc[su_id] != target_id:
+                _move(su_id, su_loc[su_id], target_id)
+                rested[su_id] = target_id
             continue
 
         # --------------------------------
@@ -1580,6 +1565,10 @@ def convert_plan(plan_file, scenario_file, location_file):
     for k, v in train_arrival_times.items():
         train_arrival_times_int[get_su_id(_as_id(k))] = v
 
+    train_arrival_positions_int = {}
+    for k, v in train_arrival_positions.items():
+        train_arrival_positions_int[get_su_id(_as_id(k))] = v
+
     train_locations_int = {}
     for k, v in su_loc.items():
         train_locations_int[get_su_id(_as_id(k))] = v
@@ -1590,6 +1579,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         train_locations_int, train_arrival_times_int, scenario, get_su_id,
         parkable_tracks={tp["id"] for tp in location["trackParts"] if tp.get("parkingAllowed")},
         track_parts_by_id=track_parts_by_id,
+        train_arrival_positions=train_arrival_positions_int,
     )
 
     # Fill in missing members/parentIDs/childIDs for actions that reference
@@ -1682,7 +1672,8 @@ def convert_plan(plan_file, scenario_file, location_file):
 
 def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
                          track_id_lookup, train_locations, train_arrival_times, scenario, su_id_fn=None,
-                         parkable_tracks=None, track_parts_by_id=None):
+                         parkable_tracks=None, track_parts_by_id=None,
+                         train_arrival_positions=None):
     """Add Arrive actions and order the plan chronologically."""
 
     su_first_action = {}
@@ -1691,13 +1682,17 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
     processed_actions = []
 
     initial_positions = {}
+    train_arrival_positions = train_arrival_positions or {}
     if su_id_fn:
         for train in scenario.get("in", []):
             for name in [f"train{train['id']}", f"su_train{train['id']}"]:
-                if "entryTrackPart" in train:
-                    initial_positions[su_id_fn(_as_id(name))] = train["entryTrackPart"]
+                su_id = su_id_fn(_as_id(name))
+                if su_id in train_arrival_positions:
+                    initial_positions[su_id] = train_arrival_positions[su_id]
                 elif "firstParkingTrackPart" in train:
-                    initial_positions[su_id_fn(_as_id(name))] = train["firstParkingTrackPart"]
+                    initial_positions[su_id] = train["firstParkingTrackPart"]
+                elif "entryTrackPart" in train:
+                    initial_positions[su_id] = train["entryTrackPart"]
 
         for i, train in enumerate(scenario.get("inStanding", [])):
             for name in [f"train_in_standing_{i}", f"su_train_in_standing_{i}"]:
