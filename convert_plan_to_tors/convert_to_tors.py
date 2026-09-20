@@ -876,6 +876,23 @@ def convert_plan(plan_file, scenario_file, location_file):
             _append_su_action(move_action, train)
         return start, end
 
+    def _close_run_onto(train, track_id):
+        """Close the open run onto `track_id` (park, service, split, or depart
+        rest target), or record the position directly when there is no open
+        run, and keep `rested` in sync. Every run-closing handler uses this so
+        the "close run / set su_loc / update rested" pattern lives in one place
+        and cannot diverge between copies."""
+        run = runs.get(train)
+        if run and run.get("seq") and any(s is not None for s in run["seq"]):
+            if run["seq"][-1] != track_id:
+                run["seq"].append(track_id)
+            start_t, _end_t = _emit_close_run(train)
+            if start_t is None:
+                su_loc[train] = track_id
+        else:
+            su_loc[train] = track_id
+        rested[train] = su_loc.get(train, track_id)
+
     def _move(train, from_id, target_id):
         """Emit a single-hop Move driving a train onto its plan target track
         (the enter-yard drive). A no-op when already on the target."""
@@ -905,6 +922,9 @@ def convert_plan(plan_file, scenario_file, location_file):
         su_loc[train] = expanded[-1]
 
     problems = []
+    parkable_track_ids = {
+        tp["id"] for tp in location["trackParts"] if tp.get("parkingAllowed")
+    }
 
     with open(plan_file) as f:
         lines = [line.strip() for line in f if line.strip()]
@@ -1023,16 +1043,7 @@ def convert_plan(plan_file, scenario_file, location_file):
             train, track = m.groups()
             train = _resolve_su(train)
             end_id = convert_track(track, track_lookup, track_id_lookup)["id"]
-            run = runs.get(train)
-            if run and run.get("seq") and any(s is not None for s in run["seq"]):
-                if run["seq"][-1] != end_id:
-                    run["seq"].append(end_id)
-                start_t, _end_t = _emit_close_run(train)
-                if start_t is None:
-                    su_loc[train] = end_id
-            else:
-                su_loc[train] = end_id
-            rested[train] = su_loc.get(train, end_id)
+            _close_run_onto(train, end_id)
             continue
 
         # --------------------------------
@@ -1044,16 +1055,7 @@ def convert_plan(plan_file, scenario_file, location_file):
             train = _resolve_su(train)
             track_id = convert_track(track, track_lookup, track_id_lookup)["id"]
             _ensure_position(train)
-            run = runs.get(train)
-            if run and run.get("seq") and any(s is not None for s in run["seq"]):
-                if run["seq"][-1] != track_id:
-                    run["seq"].append(track_id)
-                start_t, _end_t = _emit_close_run(train)
-                if start_t is None:
-                    su_loc[train] = track_id
-            else:
-                su_loc[train] = track_id
-            rested[train] = su_loc.get(train, track_id)
+            _close_run_onto(train, track_id)
 
             # no_bumpers 4-arg park_su parks a unit in a slot; the unit waits
             # on this track until the scenario ends, then leaves as OutStanding.
@@ -1083,16 +1085,7 @@ def convert_plan(plan_file, scenario_file, location_file):
             su_id = _resolve_su(su_id)
             track_id = convert_track(track, track_lookup, track_id_lookup)["id"]
             _ensure_position(su_id)
-            run = runs.get(su_id)
-            if run and run.get("seq") and any(s is not None for s in run["seq"]):
-                if run["seq"][-1] != track_id:
-                    run["seq"].append(track_id)
-                start_t, _end_t = _emit_close_run(su_id)
-                if start_t is None:
-                    su_loc[su_id] = track_id
-            else:
-                su_loc[su_id] = track_id
-            rested[su_id] = su_loc.get(su_id, track_id)
+            _close_run_onto(su_id, track_id)
             waiting_on_messages[su_id] = parking_slot
 
             exit_time = max(su_clock.get(su_id, 0), scenario_end_time)
@@ -1161,6 +1154,12 @@ def convert_plan(plan_file, scenario_file, location_file):
                 problems.append(
                     f"INFEASIBLE: SU {train} has no recorded park track to "
                     f"depart from."
+                )
+
+            if parked_track not in parkable_track_ids:
+                problems.append(
+                    f"INFEASIBLE: SU {train} departs from non-parkable track "
+                    f"{parked_track} (the plan rests it there before exit)."
                 )
 
             # An open run is the plan's exit approach; pin it to the deadline.
@@ -1253,13 +1252,7 @@ def convert_plan(plan_file, scenario_file, location_file):
             )
 
             split_track_id = convert_track(track, track_lookup, track_id_lookup)["id"]
-            run = runs.get(parent_su)
-            if run and run.get("seq") and any(s is not None for s in run["seq"]):
-                if run["seq"][-1] != split_track_id:
-                    run["seq"].append(split_track_id)
-                _emit_close_run(parent_su)
-            elif parent_su not in su_loc:
-                su_loc[parent_su] = split_track_id
+            _close_run_onto(parent_su, split_track_id)
             split_track_id = su_loc.get(parent_su) or split_track_id
 
             split_duration = get_train_duration(
@@ -1436,15 +1429,7 @@ def convert_plan(plan_file, scenario_file, location_file):
             su_id = _resolve_su(su_id)
             track_id = convert_track(track, track_lookup, track_id_lookup)["id"]
             _ensure_position(su_id)
-            run = runs.get(su_id)
-            if run and run.get("seq") and any(s is not None for s in run["seq"]):
-                if run["seq"][-1] != track_id:
-                    run["seq"].append(track_id)
-                start_t, _end_t = _emit_close_run(su_id)
-                if start_t is None:
-                    su_loc[su_id] = track_id
-            else:
-                su_loc[su_id] = track_id
+            _close_run_onto(su_id, track_id)
 
             pddl_facility_lower = pddl_facility.lower()
             facility_type_task = pddl_facility
@@ -1556,7 +1541,11 @@ def convert_plan(plan_file, scenario_file, location_file):
         int_id = _as_id(old_id)
         if int_id in shunting_unit_composition:
             comp = shunting_unit_composition[int_id]
-            if comp["memberIDs"]:
+            # A Service action lists the serviced member first on purpose; the
+            # composition's stored memberIDs would silently discard that and
+            # mis-attribute the service to memberIDs[0].
+            is_service = action.get("taskType", {}).get("other") is not None
+            if comp["memberIDs"] and not is_service:
                 su["memberIDs"] = comp["memberIDs"]
             su["parentIDs"] = [get_su_id(_as_id(p)) for p in comp.get("parentIDs", [])]
 
@@ -1912,13 +1901,15 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
         # Arrive / Exit / StandOut — pinned to scenario times; record their
         # end so anything after them chains (monotonic).
         wag = _wagons(action)
-        if wag:
+        if wag and "other" not in action["taskType"]:
             for w in wag:
                 wagon_end[w] = max(int(action["endTime"]),
                                    wagon_end.get(w, 0))
             continue
 
-        # Service and any other occupancy — chain behind prior wagon use.
+        # Service (taskType "other") and any other occupancy — chain behind
+        # prior wagon use so a service never overlaps another action moving
+        # the same wagon.
         dur = int(action["endTime"]) - int(action["startTime"])
         busy = max((wagon_end.get(w, 0) for w in wag), default=0)
         start = max(int(action["startTime"]), busy)
@@ -1934,9 +1925,12 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
     # the drive to the exit.
     waits = [a for a in processed_actions if _kind(a, "Wait")]
     anchors = {}
+    # Identity-based indexing: action dicts compare by value, so .index() could
+    # return a structurally identical sibling action; positions must key on id().
+    index_of = {id(a): i for i, a in enumerate(processed_actions)}
     for wait in waits:
         su_id = wait["shuntingUnit"]["id"]
-        wait_index = processed_actions.index(wait)
+        wait_index = index_of[id(wait)]
         anchor = None
         for i, action in enumerate(processed_actions):
             if i < wait_index and _kind(action, "Move") and action["shuntingUnit"]["id"] == su_id:
@@ -1955,6 +1949,7 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
         )
     processed_actions[:] = rebuilt
 
+    index_of = {id(a): i for i, a in enumerate(processed_actions)}
     for wait in waits:
         anchor = anchors[id(wait)]
         if anchor is not None:
@@ -1965,7 +1960,7 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
         approach = next(
             (a for a in processed_actions
              if _kind(a, "Move") and a["shuntingUnit"]["id"] == su_id
-             and processed_actions.index(a) > processed_actions.index(wait)),
+             and index_of[id(a)] > index_of[id(wait)]),
             None,
         )
         if approach is not None:
