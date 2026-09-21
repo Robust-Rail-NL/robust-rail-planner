@@ -129,7 +129,7 @@ def _kleinebinckhorst_inputs():
             continue
         scenario = os.path.join(
             candidate, "Location_KleineBinckhorst", "scenarios",
-            "scenario_KleineBinckhorst_4t_random_1s_feasible_small.json",
+            "scenario_feasible_small.json",
         )
         location = os.path.join(candidate, "Location_KleineBinckhorst", "location.json")
         if os.path.isfile(scenario) and os.path.isfile(location):
