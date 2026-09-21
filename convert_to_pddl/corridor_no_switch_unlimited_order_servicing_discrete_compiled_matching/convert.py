@@ -56,16 +56,66 @@ def _bfs_from(adjacency, start_ids):
     return dist
 
 
+def _resolve_boundary_track_sides(track_ids, location_object):
+    # Boundary signals define direction but trains occupy the adjacent physical track.
+    adjacency = {
+        str(track_id): {str(neighbor) for neighbor in neighbors}
+        for track_id, neighbors in _build_adjacency(location_object).items()
+    }
+    track_parts = {
+        str(track_part["id"]): track_part
+        for track_part in location_object.get("trackParts", [])
+    }
+    sides_by_track = {}
+    for track_id in track_ids:
+        boundary_id = str(track_id)
+        boundary = track_parts.get(boundary_id)
+        if boundary is None:
+            continue
+        if not _is_switch_like_track_part(boundary):
+            sides = sides_by_track.setdefault(boundary["id"], set())
+            if boundary.get("bSide"):
+                sides.add("a")
+            if boundary.get("aSide"):
+                sides.add("b")
+            continue
+
+        visited = {boundary_id}
+        queue = deque([boundary_id])
+        while queue:
+            current = queue.popleft()
+            for neighbor in adjacency.get(current, ()):
+                if neighbor in visited:
+                    continue
+                visited.add(neighbor)
+                neighbor_track = track_parts.get(neighbor)
+                if neighbor_track is None:
+                    continue
+                if _is_switch_like_track_part(neighbor_track):
+                    queue.append(neighbor)
+                    continue
+                sides = sides_by_track.setdefault(neighbor_track["id"], set())
+                if current in {str(value) for value in neighbor_track.get("aSide", [])}:
+                    sides.add("a")
+                if current in {str(value) for value in neighbor_track.get("bSide", [])}:
+                    sides.add("b")
+    return sides_by_track
+
+
+def _resolve_boundary_track_ids(track_ids, location_object):
+    return set(_resolve_boundary_track_sides(track_ids, location_object))
+
+
 def _departure_exit_ids(scenario_object, location_object):
     # The departure track is where outbound trains leave the yard — the BFS root for entry_distance.
-    # Falls back to inbound entry tracks if no outbound requests are present in the scenario.
+    # Falls back to inbound first parking tracks if no outbound requests are present.
     ids = [req["leaveTrackPart"] for req in scenario_object.get("out", []) if "leaveTrackPart" in req]
     if not ids:
-        ids = [t["entryTrackPart"] for t in scenario_object.get("in", []) if "entryTrackPart" in t]
+        ids = [t["firstParkingTrackPart"] for t in scenario_object.get("in", []) if "firstParkingTrackPart" in t]
 
-    track_parts = location_object["trackParts"]
-    ids_aside = {tp["id"] for tp in track_parts if tp["id"] in ids and tp.get("bSide")}
-    ids_bside = {tp["id"] for tp in track_parts if tp["id"] in ids and tp.get("aSide")}
+    sides_by_track = _resolve_boundary_track_sides(ids, location_object)
+    ids_aside = {track_id for track_id, sides in sides_by_track.items() if "a" in sides}
+    ids_bside = {track_id for track_id, sides in sides_by_track.items() if "b" in sides}
 
     return ids_aside, ids_bside
 
@@ -108,8 +158,11 @@ def _coupling_track_ids_for_request(request, location_object,
         return preferred_ids[:1]
 
     leave_track_id = request.get("leaveTrackPart")
+    resolved_leave_ids = _resolve_boundary_track_ids(
+        [leave_track_id] if leave_track_id is not None else [], location_object
+    )
     adjacency = _build_adjacency(location_object)
-    distances = _bfs_from(adjacency, [leave_track_id] if leave_track_id else [])
+    distances = _bfs_from(adjacency, resolved_leave_ids)
     reachable_candidates = [
         (distances[track_id], track_id)
         for track_id in candidate_track_ids
@@ -158,12 +211,34 @@ def _train_task_types(train):
     }
 
 
-def _unit_source_positions(scenario_object):
+def _unit_source_positions(scenario_object, location_object=None):
     positions = {}
-    for _, _, train in all_trains_with_source(scenario_object):
+    tracks = {
+        track["id"]: track for track in location_object.get("trackParts", [])
+    } if location_object else {}
+    for source, _, train in all_trains_with_source(scenario_object):
         members = train.get("members", [])
         for index, member in enumerate(members):
             positions[member["id"]] = (index, len(members))
+        if source != "in" or not members or not tracks:
+            continue
+        entry_track = tracks.get(train.get("entryTrackPart"), {})
+        arrival_side = "b" if entry_track.get("bSide") else "a"
+        for request in scenario_object.get("out", []):
+            leave_track = request.get("leaveTrackPart")
+            leave_track_part = tracks.get(leave_track, {})
+            departure_side = (
+                "a" if leave_track_part.get("bSide")
+                else "b" if leave_track_part.get("aSide")
+                else None
+            )
+            if departure_side is None:
+                continue
+            reverse = arrival_side != departure_side
+            request_name = f"request{request['id']}"
+            for index, member in enumerate(members):
+                rank = len(members) - 1 - index if reverse else index
+                positions[(member["id"], request_name)] = (rank, len(members))
     return positions
 
 
@@ -184,8 +259,11 @@ def _has_order_sensitive_matching(scenario_object):
 
 
 def _matching_order_cost(unit_id, slot_index, slot_records, unit_positions):
-    source_index, source_size = unit_positions.get(unit_id, (0, 1))
-    _, _, target_index, target_size = slot_records[slot_index]
+    slot_name, _, target_index, target_size = slot_records[slot_index]
+    request_name = slot_name.rsplit("_slot", 1)[0]
+    source_index, source_size = unit_positions.get(
+        (unit_id, request_name), unit_positions.get(unit_id, (0, 1))
+    )
     if source_size <= 1 or target_size <= 1:
         return Fraction(0)
     source_position = Fraction(source_index, source_size - 1)
@@ -313,7 +391,7 @@ def _select_order_preserving_matching(
 
 
 def _optimize_composition_preserving_matching(
-    unit_type_by_id, slot_records, source_groups
+    unit_type_by_id, slot_records, source_groups, unit_positions
 ):
     if np is None:
         return None
@@ -384,9 +462,9 @@ def _optimize_composition_preserving_matching(
     }
     for pair, column in x_index.items():
         unit_id, slot_index = pair
-        objective[column] = 1e-5 * abs(
-            chronological_position.get(unit_id, slot_index) - slot_index
-        )
+        objective[column] = 1e-5 * float(
+            _matching_order_cost(unit_id, slot_index, slot_records, unit_positions)
+        ) + 1e-8 * abs(chronological_position.get(unit_id, slot_index) - slot_index)
     for column in y_index.values():
         objective[column] = 1.0
 
@@ -430,7 +508,7 @@ def _select_composition_preserving_matching(
             )
 
     optimized_assignment = _optimize_composition_preserving_matching(
-        unit_type_by_id, slot_records, source_groups
+        unit_type_by_id, slot_records, source_groups, unit_positions
     )
     if optimized_assignment is not None:
         return optimized_assignment
@@ -447,9 +525,17 @@ def _select_composition_preserving_matching(
         request_slots = list(range(slot_offset, slot_offset + len(requested_types)))
         slot_offset += len(requested_types)
         for group_index, (unit_ids, source_types) in enumerate(source_groups):
-            if group_index in used_groups or source_types != requested_types:
+            request_name = f"request{request['id']}"
+            ordered_units = sorted(
+                unit_ids,
+                key=lambda unit_id: unit_positions.get(
+                    (unit_id, request_name), unit_positions.get(unit_id, (0, 1))
+                )[0],
+            )
+            ordered_types = [unit_type_by_id[unit_id] for unit_id in ordered_units]
+            if group_index in used_groups or ordered_types != requested_types:
                 continue
-            assignments.extend(zip(unit_ids, request_slots))
+            assignments.extend(zip(ordered_units, request_slots))
             assigned_units.update(unit_ids)
             assigned_slots.update(request_slots)
             used_groups.add(group_index)
@@ -628,10 +714,13 @@ def _build_service_track_ids(location_object):
     for facility in location_object.get("facilities", []):
         if facility.get("taskTypes"):
             for tp_id in facility.get("relatedTrackPartIDs", []):
-                service_tracks[str(tp_id)] = {
-                    "type": facility["type"],
-                    "capacity": facility.get("simultaneousUsageCount", 1),
-                }
+                info = service_tracks.setdefault(str(tp_id), {"types": set(), "capacity": 1})
+                info["types"].update(
+                    task["other"] for task in facility["taskTypes"] if task.get("other")
+                )
+                info["capacity"] = max(
+                    info["capacity"], facility.get("simultaneousUsageCount", 1)
+                )
     return service_tracks
 
 
@@ -651,8 +740,8 @@ def _relevant_corridor_nodes(scenario_object, location_object,
         path_nodes.update(_shortest_path(adjacency, a, b))
 
     trains_with_starts = []
-    for source, _, train in all_trains_with_source(scenario_object):
-        preferred_keys = ["firstParkingTrackPart", "entryTrackPart"] if source == "inStanding" else ["entryTrackPart", "firstParkingTrackPart"]
+    for _, _, train in all_trains_with_source(scenario_object):
+        preferred_keys = ["firstParkingTrackPart"]
         start_id = _train_initial_track_id(train, preferred_keys)
         if start_id is not None:
             trains_with_starts.append((train, str(start_id)))
@@ -661,14 +750,22 @@ def _relevant_corridor_nodes(scenario_object, location_object,
         request_keys = _request_type_keys(request)
         coupling_ids = [str(c) for c in
                         _coupling_track_ids_for_request(request, location_object, coupling_candidate_track_ids, train_unit_types)]
-        route_targets = [str(t) for t in [request.get("leaveTrackPart"), request.get("lastParkingTrackPart")] if t is not None]
+        route_targets = {
+            str(track_id)
+            for track_id in _resolve_boundary_track_ids(
+                [request["leaveTrackPart"]] if request.get("leaveTrackPart") is not None else [],
+                location_object,
+            )
+        }
+        if request.get("lastParkingTrackPart") is not None:
+            route_targets.add(str(request["lastParkingTrackPart"]))
         for train, start_id in trains_with_starts:
             if _train_unit_type_keys(train).isdisjoint(request_keys):
                 continue
             service_ids = [
                 track_id
                 for track_id, info in service_track_ids.items()
-                if info["type"] in _train_task_types(train)
+                if info["types"] & _train_task_types(train)
             ]
             for coupling_id in coupling_ids:
                 add_path(start_id, coupling_id)
@@ -689,7 +786,7 @@ def _relevant_corridor_nodes(scenario_object, location_object,
             service_ids = [
                 track_id
                 for track_id, info in service_track_ids.items()
-                if info["type"] in _train_task_types(train)
+                if info["types"] & _train_task_types(train)
             ]
             add_path(start_id, str(target_id))
             for service_id in service_ids:
@@ -761,14 +858,14 @@ def _track_part_neighbors(track_part):
 
 
 def _is_switch_like_track_part(track_part):
-    # No-switch modelling removes zero-length connector nodes and reconnects their boundaries.
+    # Zero-length switches and boundary signals only connect physical tracks.
     if track_part.get("parkingAllowed", False):
         return False
     try:
         length = Fraction(str(track_part.get("length", 0)))
     except Exception:
         length = Fraction(0)
-    return length == 0 and len(_track_part_neighbors(track_part)) >= 2
+    return length == 0
 
 
 def _build_directed_adj(location_object, side_key):
@@ -999,7 +1096,7 @@ def create_instance_from_scenario(
     # A shunting unit can be both an arriving train and a departing train, so
     # the link fluent is disambiguated on both the kind of the event that is
     # completing (after an arrival vs. after a departure) and the kind of the
-    # event that is unlocked next. enter_yard_su completes an arrival; the
+    # event that is unlocked next. arrive_su completes an arrival; the
     # depart actions complete a departure.
     compiled_departure_ready = problem.add_fluent(up.Fluent("compiled_departure_ready", up.BoolType(), su=shunting_unit_type), default_initial_value=False)
     next_after_arrival_to_arrival = problem.add_fluent(up.Fluent("next_after_arrival_to_arrival", up.BoolType(), after_su=shunting_unit_type, next_su=shunting_unit_type), default_initial_value=False)
@@ -1009,7 +1106,6 @@ def create_instance_from_scenario(
 
     phantom_track = problem.add_object("phantom", track_part_type)
     su_arrival_track = problem.add_fluent(up.Fluent("su_arrival_track", up.BoolType(), su=shunting_unit_type, track=track_part_type), default_initial_value=False)
-    su_first_parking_track = problem.add_fluent(up.Fluent("su_first_parking_track", up.BoolType(), su=shunting_unit_type, track=track_part_type), default_initial_value=False)
 
     parking_slot_for_request = problem.add_fluent(up.Fluent("parking_slot_for_request", up.BoolType(), slot=parking_slot_type, request=parking_request_type), default_initial_value=False)
     parking_slot_track = problem.add_fluent(up.Fluent("parking_slot_track", up.BoolType(), slot=parking_slot_type, track=track_part_type), default_initial_value=False)
@@ -1021,7 +1117,6 @@ def create_instance_from_scenario(
     facility_type_type = up.UserType("facilitytype")
     service_allowed   = problem.add_fluent(up.Fluent("service_allowed", up.BoolType(), trackpart=track_part_type), default_initial_value=False)
     facility_type     = problem.add_fluent(up.Fluent("facility_type", up.BoolType(), trackpart=track_part_type, ftype=facility_type_type), default_initial_value=False)
-    requires_facility = problem.add_fluent(up.Fluent("requires_facility", up.BoolType(), shunting_unit=shunting_unit_type, ftype=facility_type_type), default_initial_value=False)
     serviced          = problem.add_fluent(up.Fluent("serviced", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=True)
 
 
@@ -1032,7 +1127,7 @@ def create_instance_from_scenario(
     request_size = problem.add_fluent(up.Fluent("request_size", up.IntType(), request=departure_request_type), default_initial_value=up.Int(0))
 
     id_to_facility_type = {ftype_str: problem.add_object(ftype_str.lower(), facility_type_type)
-                           for ftype_str in {info["type"] for info in service_track_ids.values()}}
+                           for ftype_str in sorted({task for info in service_track_ids.values() for task in info["types"]})}
 
     startMoveSu = up.InstantaneousAction('start_move_su', su=shunting_unit_type)
     startMoveSu.add_precondition(active_su(startMoveSu.su))
@@ -1052,31 +1147,19 @@ def create_instance_from_scenario(
     arrive_su.add_precondition(at_su(arrive_su.su, phantom_track))
     arrive_su.add_precondition(concurrent_movements < max_concurrent_movements)
     arrive_su.add_precondition(su_arrival_track(arrive_su.su, arrive_su.l))
-    arrive_su.add_effect(concurrent_movements, concurrent_movements + 1)
+    arrive_su.add_precondition(parking_allowed(arrive_su.l))
+    arrive_su.add_precondition(up.Equals(number_of_trains_on_track(arrive_su.l), 0))
+    arrive_su.add_precondition(occupied_length(arrive_su.l) + su_length(arrive_su.su) <= track_length(arrive_su.l))
     arrive_su.add_effect(at_su(arrive_su.su, phantom_track), False)
     arrive_su.add_effect(at_su(arrive_su.su, arrive_su.l), True)
-    problem.add_action(arrive_su)
-
-    enter_yard_su = up.InstantaneousAction('enter_yard_su', su=shunting_unit_type, entry=track_part_type, target=track_part_type)
-    enter_yard_su.add_precondition(active_su(enter_yard_su.su))
-    enter_yard_su.add_precondition(up.Not(su_has_arrived(enter_yard_su.su)))
-    enter_yard_su.add_precondition(at_su(enter_yard_su.su, enter_yard_su.entry))
-    enter_yard_su.add_precondition(su_arrival_track(enter_yard_su.su, enter_yard_su.entry))
-    enter_yard_su.add_precondition(su_first_parking_track(enter_yard_su.su, enter_yard_su.target))
-    enter_yard_su.add_precondition(parking_allowed(enter_yard_su.target))
-    enter_yard_su.add_precondition(up.Equals(number_of_trains_on_track(enter_yard_su.target), 0))
-    enter_yard_su.add_precondition(occupied_length(enter_yard_su.target) + su_length(enter_yard_su.su) <= track_length(enter_yard_su.target))
-    enter_yard_su.add_effect(at_su(enter_yard_su.su, enter_yard_su.entry), False)
-    enter_yard_su.add_effect(at_su(enter_yard_su.su, enter_yard_su.target), True)
-    enter_yard_su.add_effect(su_has_arrived(enter_yard_su.su), True)
-    enter_yard_su.add_effect(concurrent_movements, concurrent_movements - 1)
-    enter_yard_su.add_effect(number_of_trains_on_track(enter_yard_su.target), 1)
-    enter_yard_su.add_effect(occupied_length(enter_yard_su.target), su_length(enter_yard_su.su))
+    arrive_su.add_effect(su_has_arrived(arrive_su.su), True)
+    arrive_su.add_effect(number_of_trains_on_track(arrive_su.l), 1)
+    arrive_su.add_effect(occupied_length(arrive_su.l), su_length(arrive_su.su))
     next_su = up.Variable("next_su", shunting_unit_type)
-    enter_yard_su.add_effect(fluent=su_previous_arrived(next_su), value=True, condition=su_arrival_immediately_before(enter_yard_su.su, next_su), forall=[next_su])
-    enter_yard_su.add_effect(frontmost_a_su(enter_yard_su.su), True)
-    enter_yard_su.add_effect(frontmost_b_su(enter_yard_su.su), True)
-    problem.add_action(enter_yard_su)
+    arrive_su.add_effect(fluent=su_previous_arrived(next_su), value=True, condition=su_arrival_immediately_before(arrive_su.su, next_su), forall=[next_su])
+    arrive_su.add_effect(frontmost_a_su(arrive_su.su), True)
+    arrive_su.add_effect(frontmost_b_su(arrive_su.su), True)
+    problem.add_action(arrive_su)
 
     park_su = up.InstantaneousAction('park_su', su=shunting_unit_type, l=track_part_type)
     park_su.add_precondition(active_su(park_su.su))
@@ -1277,12 +1360,45 @@ def create_instance_from_scenario(
 
     service_su = up.InstantaneousAction('service_su', su=shunting_unit_type, l=track_part_type, f=facility_type_type)
     service_su.add_precondition(active_su(service_su.su))
+    service_su.add_precondition(su_has_arrived(service_su.su))
+    service_su.add_precondition(up.Not(allowed_to_move_su(service_su.su)))
     service_su.add_precondition(at_su(service_su.su, service_su.l))
     service_su.add_precondition(up.Not(serviced(service_su.su)))
     service_su.add_precondition(service_allowed(service_su.l))
     service_su.add_precondition(facility_type(service_su.l, service_su.f))
-    service_su.add_precondition(requires_facility(service_su.su, service_su.f))
-    service_su.add_effect(serviced(service_su.su), True)
+    pending_service = problem.add_fluent(
+        up.Fluent("pending_service", up.BoolType(), unit=train_unit_type, facility=facility_type_type),
+        default_initial_value=False,
+    )
+    service_unit = up.Variable("service_unit", train_unit_type)
+    service_type = up.Variable("service_type", facility_type_type)
+
+    def all_members_serviced(su, excluding=None):
+        member = contains_su(su, service_unit)
+        if excluding is not None:
+            member = up.And(member, up.Not(up.Equals(service_unit, excluding)))
+        return up.Forall(
+            up.Implies(member, up.Not(pending_service(service_unit, service_type))),
+            service_unit,
+            service_type,
+        )
+
+    service_su.add_precondition(up.Exists(
+        up.And(contains_su(service_su.su, service_unit), pending_service(service_unit, service_su.f)),
+        service_unit,
+    ))
+    service_su.add_effect(
+        pending_service(service_unit, service_su.f), False,
+        condition=contains_su(service_su.su, service_unit), forall=[service_unit],
+    )
+    service_su.add_effect(serviced(service_su.su), True, condition=up.Forall(
+        up.Implies(
+            up.And(contains_su(service_su.su, service_unit), pending_service(service_unit, service_type)),
+            up.Equals(service_type, service_su.f),
+        ),
+        service_unit,
+        service_type,
+    ))
     problem.add_action(service_su)
 
     depart_aside_su.add_precondition(serviced(depart_aside_su.su))
@@ -1369,7 +1485,8 @@ def create_instance_from_scenario(
         adopt_composition.add_precondition(up.Not(active_su(adopt_composition.request_su)))
         adopt_composition.add_precondition(compiled_whole_target(adopt_composition.source_su, adopt_composition.request_su))
         adopt_composition.add_precondition(at_su(adopt_composition.source_su, adopt_composition.track))
-        adopt_composition.add_precondition(serviced(adopt_composition.source_su))
+        adopt_composition.add_effect(serviced(adopt_composition.request_su), True, condition=serviced(adopt_composition.source_su))
+        adopt_composition.add_effect(serviced(adopt_composition.request_su), False, condition=up.Not(serviced(adopt_composition.source_su)))
         adopt_composition.add_effect(active_su(adopt_composition.source_su), False)
         adopt_composition.add_effect(active_su(adopt_composition.request_su), True)
         adopt_composition.add_effect(at_su(adopt_composition.source_su, adopt_composition.track), False)
@@ -1426,20 +1543,33 @@ def create_instance_from_scenario(
             action.add_precondition(up.Not(compiled_direct_departure(action.parent_su)))
             action.add_precondition(up.Not(compiled_must_stay_coupled(action.parent_su)))
             action.add_precondition(compiled_uncouple_track(action.parent_su, action.track))
-            action.add_precondition(allowed_to_move_su(action.parent_su))
+            action.add_precondition(su_has_arrived(action.parent_su))
+            action.add_precondition(su_may_move(action.parent_su))
+            action.add_precondition(up.Not(allowed_to_move_su(action.parent_su)))
             action.add_precondition(up.Not(active_su(action.child_su)))
             action.add_precondition(contains_su(action.parent_su, action.unit))
             action.add_precondition(contains_su(action.child_su, action.unit))
             action.add_precondition(single_unit_su(action.child_su, action.unit))
             action.add_precondition(front_of(action.unit, action.parent_su) if front else back_of(action.unit, action.parent_su))
             action.add_precondition(at_su(action.parent_su, action.track))
-            action.add_precondition(serviced(action.parent_su))
-            action.add_precondition(up.GE(su_unit_count(action.parent_su), 2))
+            action.add_effect(
+                serviced(action.parent_su), True,
+                condition=all_members_serviced(action.parent_su, excluding=action.unit),
+            )
+            action.add_effect(
+                serviced(action.child_su), True,
+                condition=up.Forall(up.Not(pending_service(action.unit, service_type)), service_type),
+            )
+            action.add_effect(
+                serviced(action.child_su), False,
+                condition=up.Exists(pending_service(action.unit, service_type), service_type),
+            )
+            action.add_precondition(
+                up.GE(su_unit_count(action.parent_su), 2 if front else 3)
+            )
             action.add_effect(active_su(action.child_su), True)
             action.add_effect(su_may_move(action.parent_su), True)
             action.add_effect(su_may_move(action.child_su), True)
-            action.add_effect(allowed_to_move_su(action.parent_su), False)
-            action.add_effect(concurrent_movements, concurrent_movements - 1)
             action.add_effect(at_su(action.child_su, action.track), True)
             action.add_effect(su_length(action.parent_su), su_length(action.parent_su) - su_length(action.child_su))
             action.add_effect(su_unit_count(action.parent_su), su_unit_count(action.parent_su) - 1)
@@ -1501,6 +1631,8 @@ def create_instance_from_scenario(
             track=track_part_type,
         )
         compiled_start.add_precondition(active_su(compiled_start.source_su))
+        compiled_start.add_precondition(su_has_arrived(compiled_start.source_su))
+        compiled_start.add_precondition(up.Not(allowed_to_move_su(compiled_start.source_su)))
         compiled_start.add_precondition(up.Not(parked_su(compiled_start.source_su)))
         compiled_start.add_precondition(up.Not(active_su(compiled_start.request_su)))
         compiled_start.add_precondition(contains_su(compiled_start.source_su, compiled_start.unit))
@@ -1509,7 +1641,8 @@ def create_instance_from_scenario(
         compiled_start.add_precondition(at_su(compiled_start.source_su, compiled_start.track))
         compiled_start.add_precondition(coupling_allowed(compiled_start.track))
         compiled_start.add_precondition(compiled_coupling_track(compiled_start.request_su, compiled_start.track))
-        compiled_start.add_precondition(serviced(compiled_start.source_su))
+        compiled_start.add_effect(serviced(compiled_start.request_su), True, condition=serviced(compiled_start.source_su))
+        compiled_start.add_effect(serviced(compiled_start.request_su), False, condition=up.Not(serviced(compiled_start.source_su)))
         compiled_start.add_effect(active_su(compiled_start.source_su), False)
         compiled_start.add_effect(active_su(compiled_start.request_su), True)
         compiled_start.add_effect(at_su(compiled_start.source_su, compiled_start.track), False)
@@ -1543,6 +1676,9 @@ def create_instance_from_scenario(
             )
             action.add_precondition(active_su(action.source_su))
             action.add_precondition(active_su(action.request_su))
+            action.add_precondition(su_has_arrived(action.source_su))
+            action.add_precondition(up.Not(allowed_to_move_su(action.source_su)))
+            action.add_precondition(up.Not(allowed_to_move_su(action.request_su)))
             action.add_precondition(up.Not(parked_su(action.source_su)))
             action.add_precondition(up.Not(parked_su(action.request_su)))
             action.add_precondition(contains_su(action.source_su, action.unit))
@@ -1552,8 +1688,7 @@ def create_instance_from_scenario(
             action.add_precondition(at_su(action.request_su, action.track))
             action.add_precondition(coupling_allowed(action.track))
             action.add_precondition(compiled_coupling_track(action.request_su, action.track))
-            action.add_precondition(serviced(action.source_su))
-            action.add_precondition(serviced(action.request_su))
+            action.add_effect(serviced(action.request_su), False, condition=up.Not(serviced(action.source_su)))
             if front:
                 action.add_precondition(up.Equals(compiled_target_rank(action.unit) + 1, compiled_front_rank(action.request_su)))
                 action.add_precondition(behind_su(action.request_su, action.source_su))
@@ -1709,11 +1844,10 @@ def create_instance_from_scenario(
                     required_track_ids.add(str(tid))
                     corridor_or_required.add(str(tid))
         for train in scenario_object.get("in", []):
-            for key in ("entryTrackPart", "firstParkingTrackPart"):
-                tid = train.get(key)
-                if tid is not None:
-                    required_track_ids.add(str(tid))
-                    corridor_or_required.add(str(tid))
+            tid = train.get("firstParkingTrackPart")
+            if tid is not None:
+                required_track_ids.add(str(tid))
+                corridor_or_required.add(str(tid))
         for tid in exit_ids:
             required_track_ids.add(str(tid))
             corridor_or_required.add(str(tid))
@@ -1726,7 +1860,7 @@ def create_instance_from_scenario(
                     if ftype:
                         needed_facility_types.add(ftype)
         for ftid_str, finfo in service_track_ids.items():
-            if finfo["type"] in needed_facility_types and ftid_str not in switch_like_track_ids:
+            if finfo["types"] & needed_facility_types and ftid_str not in switch_like_track_ids:
                 required_track_ids.add(ftid_str)
                 corridor_or_required.add(ftid_str)
 
@@ -1759,7 +1893,8 @@ def create_instance_from_scenario(
         if str(track_part["id"]) in service_track_ids:
             info = service_track_ids[str(track_part["id"])]
             problem.set_initial_value(service_allowed(obj), True)
-            problem.set_initial_value(facility_type(obj, id_to_facility_type[info["type"]]), True)
+            for task_type in sorted(info["types"]):
+                problem.set_initial_value(facility_type(obj, id_to_facility_type[task_type]), True)
 
         if float(track_part.get("length", 0.0)) <= 0.0:
             problem.set_initial_value(track_length(obj), up.Real(Fraction(10**9)))
@@ -1832,29 +1967,35 @@ def create_instance_from_scenario(
     single_unit_su_by_unit_name = {}
     direct_departure_sources = set()
     for source, index, train in all_trains_with_source(scenario_object):
-        preferred_track_keys = ["firstParkingTrackPart", "entryTrackPart"] if source == "inStanding" else ["entryTrackPart", "firstParkingTrackPart"]
+        preferred_track_keys = ["firstParkingTrackPart"]
         initial_track_id = _train_initial_track_id(train, preferred_track_keys)
         first_parking_track_id = train.get("firstParkingTrackPart")
+        train_total_length = _train_total_length(train_unit_types, train)
 
         # The scenario's firstParkingTrackPart is often the non-parkable arrival
         # corridor (906a). Such a track is not a legal resting place for an
-        # arrived train (parking_allowed is False, and enter_yard_su now demands
-        # a parkable target), so redirect the arrival onto the nearest parkable
+        # arrived train (parking_allowed is False), so redirect the arrival
+        # onto the nearest parkable
         # deep-yard track that is actually modelled in this problem instance.
         # Trains may still share a track; the only hard rule is that the resting
         # track must permit parking, matching the human reference plans.
         if source == "in" and first_parking_track_id is not None:
             _tid = first_parking_track_id
             _tp = _track_part_by_id.get(_tid)
-            if _tp is None or not _tp.get("parkingAllowed", False):
+            _fits = _tp is not None and Fraction(str(_tp.get("length", 0))) >= train_total_length
+            if _tp is None or not _tp.get("parkingAllowed", False) or not _fits:
                 _candidates = [
                     pid for pid in parking_ids
                     if pid in bfs_dist and pid in id_to_track_part
+                    and Fraction(str(_track_part_by_id[pid].get("length", 0))) >= train_total_length
                 ]
                 if _candidates:
                     first_parking_track_id = min(
                         _candidates, key=lambda pid: bfs_dist[pid]
                     )
+                else:
+                    raise ValueError(f"No parkable track fits incoming train {train['id']}")
+            initial_track_id = first_parking_track_id
 
         train_members = train["members"]
 
@@ -1868,21 +2009,13 @@ def create_instance_from_scenario(
             raise ValueError(f"Incoming train {train['id']} has no firstParkingTrackPart")
         if needs_service:
             problem.set_initial_value(serviced(shunting_unit), False)
-            for member in train.get("members", []):
-                for task in member.get("tasks", []):
-                    task_type_str = task.get("type", {}).get("other")
-                    if task_type_str and task_type_str in id_to_facility_type:
-                        problem.set_initial_value(requires_facility(shunting_unit, id_to_facility_type[task_type_str]), True)
 
-        train_total_length = _train_total_length(train_unit_types, train)
         problem.set_initial_value(su_length(shunting_unit), up.Real(train_total_length))
         problem.set_initial_value(su_unit_count(shunting_unit), up.Int(len(train_members)))
         if source == "in":
             problem.set_initial_value(at_su(shunting_unit, phantom_track), True)
             if initial_track_id in id_to_track_part:
                 problem.set_initial_value(su_arrival_track(shunting_unit, id_to_track_part[initial_track_id]), True)
-            if first_parking_track_id in id_to_track_part:
-                problem.set_initial_value(su_first_parking_track(shunting_unit, id_to_track_part[first_parking_track_id]), True)
             else:
                 raise ValueError(f"Unknown firstParkingTrackPart {first_parking_track_id} for incoming train {train['id']}")
         elif initial_track_id in id_to_track_part:
@@ -1915,6 +2048,11 @@ def create_instance_from_scenario(
             unit_type_by_id[unit["id"]] = train_unit_type_key(unit)
             member_unit_objs.append(unit_obj)
             problem.set_initial_value(contains_su(shunting_unit, unit_obj), True)
+            for task in unit.get("tasks", []) or []:
+                task_type = task.get("type", {}).get("other")
+                if task_type not in id_to_facility_type:
+                    raise ValueError(f"No service facility for task {task_type!r} on unit {unit['id']}")
+                problem.set_initial_value(pending_service(unit_obj, id_to_facility_type[task_type]), True)
             if len(train_members) == 1:
                 problem.set_initial_value(single_unit_su(shunting_unit, unit_obj), True)
             else:
@@ -2024,12 +2162,14 @@ def create_instance_from_scenario(
         departure_candidates = _departure_matching_candidates(
             scenario_object, unit_type_by_id
         )
+        # Use the same direction-adjusted positions throughout request compilation.
+        unit_positions = _unit_source_positions(scenario_object, location_object)
         assignment = _select_precomputed_matching(
             departure_candidates,
             departure_slot_records,
             matching_variant,
             matching_strategy=matching_strategy,
-            unit_positions=_unit_source_positions(scenario_object),
+            unit_positions=unit_positions,
             scenario_object=scenario_object,
         )
         for unit_id, slot_index in assignment:
@@ -2052,6 +2192,10 @@ def create_instance_from_scenario(
             unit.name: source_su
             for source_su, source_units in source_composition_records
             for unit in source_units
+        }
+        # Direction data uses scenario IDs while compositions contain PDDL objects.
+        unit_id_by_name = {
+            unit.name: unit_id for unit_id, unit in id_to_unit.items()
         }
         assigned_unit_names = {unit.name for unit in assigned_unit_by_slot.values()}
         for unit_name in assigned_unit_names:
@@ -2091,7 +2235,15 @@ def create_instance_from_scenario(
                 problem.set_initial_value(compiled_target_request_su(unit, request_su), True)
                 problem.set_initial_value(compiled_target_rank(unit), up.Int(rank))
             for source_su, source_units in source_composition_records:
-                if source_units == slot_units:
+                # Compare each composition in its effective departure direction.
+                effective_source_units = sorted(
+                    source_units,
+                    key=lambda unit: unit_positions.get(
+                        (unit_id_by_name[unit.name], request_obj.name),
+                        unit_positions.get(unit_id_by_name[unit.name], (0, 1)),
+                    )[0],
+                )
+                if effective_source_units == slot_units:
                     problem.set_initial_value(compiled_whole_target(source_su, request_su), True)
                     problem.set_initial_value(compiled_must_stay_coupled(source_su), True)
                     departure_su_by_source[source_su] = request_su
@@ -2188,21 +2340,21 @@ def create_instance_from_scenario(
         # Every arrival is gated by its position in the global event chain.
         arrive_su.add_precondition(compiled_arrival_ready(arrive_su.su))
 
-        # Completing an event unlocks whichever event follows it. enter_yard_su
+        # Completing an event unlocks whichever event follows it. arrive_su
         # completes an arrival event, so it advances the chain from the four
         # next_after_arrival_* links; each depart action completes a departure
         # event, so it advances from the next_after_departure_* links.
         advance_next = up.Variable("compiled_next_event", shunting_unit_type)
-        enter_yard_su.add_effect(
+        arrive_su.add_effect(
             fluent=compiled_arrival_ready(advance_next),
             value=True,
-            condition=next_after_arrival_to_arrival(enter_yard_su.su, advance_next),
+            condition=next_after_arrival_to_arrival(arrive_su.su, advance_next),
             forall=[advance_next],
         )
-        enter_yard_su.add_effect(
+        arrive_su.add_effect(
             fluent=compiled_departure_ready(advance_next),
             value=True,
-            condition=next_after_arrival_to_departure(enter_yard_su.su, advance_next),
+            condition=next_after_arrival_to_departure(arrive_su.su, advance_next),
             forall=[advance_next],
         )
         for depart_action in (
