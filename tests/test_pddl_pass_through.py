@@ -71,18 +71,16 @@ def test_pddl_allows_a_train_to_pass_through_another_on_906b(tmp_path):
     state = sim.get_initial_state()
     plan = []
 
-    # su_train2 (arrival 0) arrives, enters the yard on 906b, then moves aside
-    # to o_52 so 906b is free again.
-    state = _apply(problem, sim, state, plan, "arrive_su", "su_train2", "sein70")
-    state = _apply(problem, sim, state, plan, "enter_yard_su", "su_train2", "sein70", "o_906b")
+    # su_train2 (arrival 0) arrives on 906b, then moves aside to o_52 so 906b
+    # is free again.
+    state = _apply(problem, sim, state, plan, "arrive_su", "su_train2", "o_906b")
     state = _apply(problem, sim, state, plan, "start_move_su", "su_train2")
     state = _apply(problem, sim, state, plan, "move_aside_empty_su", "su_train2", "o_906b", "o_906a")
     state = _apply(problem, sim, state, plan, "move_bside_empty_su", "su_train2", "o_906a", "o_52")
     state = _apply(problem, sim, state, plan, "end_move_su", "su_train2", "o_52")
 
     # su_train1 (arrival 900) arrives and occupies 906b.
-    state = _apply(problem, sim, state, plan, "arrive_su", "su_train1", "sein70")
-    state = _apply(problem, sim, state, plan, "enter_yard_su", "su_train1", "sein70", "o_906b")
+    state = _apply(problem, sim, state, plan, "arrive_su", "su_train1", "o_906b")
 
     # su_train2 moves back and joins su_train1 on 906b through the throat,
     # ending up between su_train1 and the 906b -> 906a exit.
