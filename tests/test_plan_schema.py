@@ -153,7 +153,7 @@ def test_no_fabricated_arrive_for_non_scenario_su():
     root = _sibling("robust-rail-general", "RRN_INPUTS_DIR") / "Location_KleineBinckhorst"
     location = json.loads((root / "location.json").read_text())
     scenario = json.loads(
-        (root / "scenarios" / "scenario_KleineBinckhorst_6t_custom_example3.json").read_text()
+        (root / "scenarios" / "scenario_example3.json").read_text()
     )
 
     train_lookup = C.build_train_lookup(scenario)
