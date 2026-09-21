@@ -1,5 +1,19 @@
 # Contributing
 
+## Git hooks
+
+Tracked hooks live under [`.githooks/`](.githooks/). They aren't active
+until you point git at them once per clone:
+
+```
+git config core.hooksPath .githooks
+```
+
+Currently just `pre-commit`, which refuses a direct commit to `edge` (see
+the branch flow rules below) while still allowing a `git merge --no-ff`
+completion. Like any hook, `git commit --no-verify` skips it — it's a
+backstop, not a guarantee.
+
 ## Image channels: `stable` and `edge`
 
 The planner image is published under two channels:

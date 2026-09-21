@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+# Refuses to commit directly to edge, but allows completing a legitimate
+# `git merge --no-ff` (the documented way to advance edge — see
+# CONTRIBUTING.md). A merge-in-progress is detected via MERGE_HEAD, which
+# git sets before the commit and clears after, so it can't be confused with
+# an ordinary commit.
+#
+# main is deliberately not covered here: commits land there often enough,
+# for good reason, that blocking them would just get in the way. This is a
+# client-side backstop, not a substitute for care:
+# `git commit --no-verify` skips it entirely.
+protected_branches='^(edge)$'
+
+current_branch=$(git rev-parse --abbrev-ref HEAD)
+merge_head=$(git rev-parse --git-path MERGE_HEAD)
+
+if [[ "$current_branch" =~ $protected_branches ]] && [ ! -e "$merge_head" ]; then
+  echo "error: refusing to commit directly to '$current_branch'." >&2
+  echo "  Create a feature branch (see CONTRIBUTING.md), then" >&2
+  echo "  'git merge --no-ff' it into edge instead." >&2
+  echo "  (Deliberate override: git commit --no-verify)" >&2
+  exit 1
+fi
+
+exit 0
