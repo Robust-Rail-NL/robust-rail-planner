@@ -5,7 +5,13 @@ zero-length signal a train cannot occupy)."""
 
 import os
 
-from convert_plan_to_tors.convert_to_tors import convert_plan
+import pytest
+
+from convert_plan_to_tors.convert_to_tors import (
+    ScheduleInfeasibleError,
+    convert_plan,
+    post_process_actions,
+)
 
 FIXTURES_DIR = os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "fixtures", "simple_service"
@@ -16,6 +22,7 @@ SCENARIO_FILE = os.path.join(FIXTURES_DIR, "scenarios", "scenario_simple.json")
 # Fixture track ids: 0=bumper_in, 1=rail_transit, 2=rail_service (parkable),
 # 3=rail_park (parkable), 4=bumper_out. Request 1 leaves via bumper_out but its
 # lastParkingTrackPart is 3, so the Exit must sit on 3.
+RAIL_TRANSIT = 1
 RAIL_SERVICE = 2
 RAIL_PARK = 3
 BUMPER_OUT = 4
@@ -320,3 +327,115 @@ def test_no_two_moves_overlap(tmp_path):
                         and b["endTime"] > a["startTime"]), (
                 "overlapping Moves:", a, b,
             )
+
+
+def test_service_chains_behind_same_wagon_event(tmp_path):
+    """Issue #37: a Service action carries a real member wagon (memberIDs), so
+    it fell into the pinned Arrive/Exit/StandOut branch of Phase 2 and the
+    Service chaining block below it was dead code. A service could then overlap
+    a Combine/Split that had just used the same wagon. Services (taskType
+    'other') must chain behind prior wagon use."""
+    service_duration = 300
+
+    def _su(su_id, members):
+        return {"id": su_id, "memberIDs": members, "parentIDs": [], "childIDs": []}
+
+    combine = {
+        "startTime": 100,
+        "endTime": 280,
+        "taskType": {"predefined": "Combine"},
+        "shuntingUnit": _su("A", ["w1", "w2"]),
+        "location": "rail_service",
+        "resources": [],
+    }
+    service = {
+        "startTime": 150,
+        "endTime": 150 + service_duration,
+        "taskType": {"other": "Cleaning"},
+        "shuntingUnit": _su("B", ["w2", "w3"]),
+        "location": "rail_service",
+        "resources": [],
+    }
+
+    out = post_process_actions(
+        [combine, service],
+        train_lookup={}, unit_lookup={}, track_lookup={}, track_id_lookup={},
+        train_locations={}, train_arrival_times={},
+        scenario={"in": [], "inStanding": [], "outStanding": []},
+    )
+
+    combined = [a for a in out if _predefined(a) == "Combine"][0]
+    serviced = [a for a in out if "other" in a["taskType"]][0]
+    assert int(serviced["startTime"]) >= int(combined["endTime"]), (serviced, combined)
+    assert (int(serviced["endTime"]) - int(serviced["startTime"])) == service_duration
+    assert int(serviced["endTime"]) >= int(combined["endTime"]), serviced
+
+
+def test_phase3_anchors_identical_waits_to_their_own_move():
+    """Issue #39.1: Phase 3 located every Wait with processed_actions.index(),
+    a value-based lookup on plain dicts. Two Wait actions with identical
+    content would both resolve to the first structural match, so the second
+    wait anchored behind the first wait's Move instead of its own. Anchoring
+    must be identity-based."""
+    def _su(su_id):
+        return {"id": su_id, "memberIDs": [], "parentIDs": [], "childIDs": []}
+
+    move1 = {"startTime": 100, "endTime": 200, "taskType": {"predefined": "Move"},
+             "shuntingUnit": _su(1), "location": "rail_service", "resources": []}
+    wait_a = {"startTime": 400, "endTime": 500, "taskType": {"predefined": "Wait"},
+              "shuntingUnit": _su(1), "location": "rail_service", "resources": []}
+    move2 = {"startTime": 600, "endTime": 700, "taskType": {"predefined": "Move"},
+             "shuntingUnit": _su(1), "location": "rail_service", "resources": []}
+    wait_b = {"startTime": 400, "endTime": 500, "taskType": {"predefined": "Wait"},
+              "shuntingUnit": _su(1), "location": "rail_service", "resources": []}
+    move3 = {"startTime": 1000, "endTime": 1100, "taskType": {"predefined": "Move"},
+             "shuntingUnit": _su(1), "location": "rail_service", "resources": []}
+
+    out = post_process_actions(
+        [move1, wait_a, move2, wait_b, move3],
+        train_lookup={}, unit_lookup={}, track_lookup={}, track_id_lookup={},
+        train_locations={}, train_arrival_times={},
+        scenario={"in": [], "inStanding": [], "outStanding": []},
+    )
+
+    # wait_a anchors behind move1 (end 200): start stays 400, ends when move2
+    # starts (600). wait_b anchors behind move2 (end 700): start 701, ends when
+    # move3 starts (1000). The two identical waits must NOT collapse onto move1.
+    waits = [a for a in out if _predefined(a) == "Wait"]
+    assert len(waits) == 2, out
+    intervals = {(int(w["startTime"]), int(w["endTime"])) for w in waits}
+    assert intervals == {(400, 600), (701, 1000)}, intervals
+
+    # Order: the wait anchored to move1 sits before move2, the other after it.
+    kinds = ["Move", "Wait"] 
+    seq = [a for a in out if _predefined(a) in kinds]
+    positions = [(i, _predefined(a)) for i, a in enumerate(seq)]
+    wait_indexes = [i for i, k in positions if k == "Wait"]
+    move2_index = next(
+        i for i, a in enumerate(seq)
+        if _predefined(a) == "Move" and int(a["startTime"]) == 600
+    )
+    assert wait_indexes[0] < move2_index < wait_indexes[1], positions
+
+
+def test_depart_rest_track_must_be_parkable(tmp_path):
+    """Issue #39.3: the pre-exit rest track derives from the PDDL (run start /
+    su_loc) with no parkability check. Resting a departing train on a
+    non-parkable track (rail_transit) must surface as an INFEASIBLE problem
+    instead of silently emitting a Wait/Exit that TORS cannot honour."""
+    plan = [
+        "(arrive_su su_train9001 rail_park)",
+        "(start_move_su su_train9001)",
+        "(move_aside_occupied_su su_train9001 rail_park rail_transit)",
+        "(end_move_su su_train9001 rail_transit)",
+        "(depart_bside_su_for_request su_train9001 unit9101 request1_slot0 request1 bumper_out)",
+    ]
+    plan_file = tmp_path / "plan.plan"
+    plan_file.write_text("\n".join(plan) + "\n")
+
+    with pytest.raises(ScheduleInfeasibleError) as excinfo:
+        convert_plan(str(plan_file), SCENARIO_FILE, LOCATION_FILE)
+    problems = excinfo.value.problems
+    assert any(
+        "non-parkable" in p and str(RAIL_TRANSIT) in p for p in problems
+    ), problems
