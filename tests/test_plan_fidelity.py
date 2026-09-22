@@ -18,6 +18,9 @@ FIXTURES_DIR = os.path.join(
 )
 LOCATION_FILE = os.path.join(FIXTURES_DIR, "location.json")
 SCENARIO_FILE = os.path.join(FIXTURES_DIR, "scenarios", "scenario_simple.json")
+SCENARIO_STANDING_FILE = os.path.join(
+    FIXTURES_DIR, "scenarios", "scenario_standing.json"
+)
 
 # Fixture track ids: 0=bumper_in, 1=rail_transit, 2=rail_service (parkable),
 # 3=rail_park (parkable), 4=bumper_out. Request 1 leaves via bumper_out but its
@@ -39,10 +42,10 @@ PARK_THEN_DEPART_PLAN = [
 ]
 
 
-def _run_plan(tmp_path, lines):
+def _run_plan(tmp_path, lines, scenario_file=SCENARIO_FILE):
     plan_file = tmp_path / "plan.plan"
     plan_file.write_text("\n".join(lines) + "\n")
-    return convert_plan(str(plan_file), SCENARIO_FILE, LOCATION_FILE)
+    return convert_plan(str(plan_file), scenario_file, LOCATION_FILE)
 
 
 def _actions_of_kind(plan, *kinds):
@@ -110,6 +113,30 @@ def test_schedule_is_feasible_for_fixture_plan(tmp_path):
         times.append(a["startTime"])
         times.append(a["endTime"])
     assert max(times) <= 1000
+
+
+# A standing train (already in the yard when the scenario starts) never gets
+# an arrive_su line, so the first reference to it falls back to
+# _ensure_position resolving its position from the scenario's inStanding
+# entry. Regression for a NameError: a rename of _materialized_arrival_track
+# to _scenario_arrival_track (atomic-arrival rework) updated the arrive_su
+# handler's own call site but missed the two inside _ensure_position, which
+# crashed on the first standing-train plan the converter ever saw.
+STANDING_TRAIN_PLAN = [
+    "(start_move_su su_train_in_standing_0)",
+    "(park_su su_train_in_standing_0 rail_park)",
+    "(depart_bside_su_for_request su_train_in_standing_0 unit9101 request1_slot0 request1 bumper_out)",
+]
+
+
+def test_standing_train_position_resolves_without_crashing(tmp_path):
+    plan = _run_plan(
+        tmp_path, STANDING_TRAIN_PLAN, scenario_file=SCENARIO_STANDING_FILE
+    )
+
+    exits = _actions_of_kind(plan, "Exit")
+    assert len(exits) == 1
+    assert exits[0]["location"] == RAIL_PARK, exits
 
 
 # The 4-train KleineBinckhorst plan is the golden pipeline output the user
