@@ -1904,34 +1904,56 @@ def create_instance_from_scenario(
     b_adj = _build_directed_adj(location_object, "bSide")
     allowed_ids = set(id_to_track_part.keys())
 
+    # One traversal per source per side serves both the connected_* fluent
+    # (reachability via switch-like nodes) and the entry-side land_on_* fluent
+    # (which end of each reachable track the path plugs into), so the BFS is not
+    # run twice over the same adjacency. Traversals are cached and emitted in the
+    # original grouping — all connected_* facts, then all land_on_* facts — so
+    # the generated problem is byte-identical to the two-pass version.
+    pred_cache = {}
     for src_id in list(id_to_track_part):
-        for target_id in _bfs_through_switches(a_adj, src_id, switch_like_track_ids, allowed_ids):
-            if target_id != src_id and target_id in id_to_track_part:
-                problem.set_initial_value(connected_aside(id_to_track_part[src_id], id_to_track_part[target_id]), True)
-
-        for target_id in _bfs_through_switches(b_adj, src_id, switch_like_track_ids, allowed_ids):
-            if target_id != src_id and target_id in id_to_track_part:
-                problem.set_initial_value(connected_bside(id_to_track_part[src_id], id_to_track_part[target_id]), True)
+        pred_cache[src_id] = (
+            _bfs_through_switches_with_predecessors(
+                a_adj, src_id, switch_like_track_ids, allowed_ids
+            ),
+            _bfs_through_switches_with_predecessors(
+                b_adj, src_id, switch_like_track_ids, allowed_ids
+            ),
+        )
 
     for src_id in list(id_to_track_part):
-        for target_id, pred_id in _bfs_through_switches_with_predecessors(
-            a_adj, src_id, switch_like_track_ids, allowed_ids
-        ).items():
+        a_pred, b_pred = pred_cache[src_id]
+        for target_id in set(a_pred):
+            if target_id != src_id and target_id in id_to_track_part:
+                problem.set_initial_value(
+                    connected_aside(id_to_track_part[src_id], id_to_track_part[target_id]),
+                    True,
+                )
+        for target_id in set(b_pred):
+            if target_id != src_id and target_id in id_to_track_part:
+                problem.set_initial_value(
+                    connected_bside(id_to_track_part[src_id], id_to_track_part[target_id]),
+                    True,
+                )
+
+    for src_id in list(id_to_track_part):
+        a_pred, b_pred = pred_cache[src_id]
+        for target_id, pred_id in a_pred.items():
             if target_id != src_id and target_id in id_to_track_part:
                 side = _entry_side_on_target(_track_part_by_id, target_id, pred_id)
-                if side == "a":
-                    problem.set_initial_value(land_on_a(id_to_track_part[src_id], id_to_track_part[target_id]), True)
-                else:
-                    problem.set_initial_value(land_on_b(id_to_track_part[src_id], id_to_track_part[target_id]), True)
-        for target_id, pred_id in _bfs_through_switches_with_predecessors(
-            b_adj, src_id, switch_like_track_ids, allowed_ids
-        ).items():
+                land_on_side = land_on_a if side == "a" else land_on_b
+                problem.set_initial_value(
+                    land_on_side(id_to_track_part[src_id], id_to_track_part[target_id]),
+                    True,
+                )
+        for target_id, pred_id in b_pred.items():
             if target_id != src_id and target_id in id_to_track_part:
                 side = _entry_side_on_target(_track_part_by_id, target_id, pred_id)
-                if side == "a":
-                    problem.set_initial_value(land_on_a(id_to_track_part[src_id], id_to_track_part[target_id]), True)
-                else:
-                    problem.set_initial_value(land_on_b(id_to_track_part[src_id], id_to_track_part[target_id]), True)
+                land_on_side = land_on_a if side == "a" else land_on_b
+                problem.set_initial_value(
+                    land_on_side(id_to_track_part[src_id], id_to_track_part[target_id]),
+                    True,
+                )
 
     # --- Compute initial occupancies ---
     # Standing trains already occupy their tracks at time zero. Record their
