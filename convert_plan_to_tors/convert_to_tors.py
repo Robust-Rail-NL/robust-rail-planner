@@ -813,7 +813,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         for i, standing in enumerate(scenario.get("inStanding", [])):
             names = (f"train_in_standing_{i}", f"su_train_in_standing_{i}")
             if stripped in names or train in names:
-                materialized = _materialized_arrival_track(standing)
+                materialized = _scenario_arrival_track(standing)
                 if materialized is not None:
                     su_loc[train] = materialized
                 su_arrival[train] = int(standing.get("arrival", 0))
@@ -822,7 +822,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         for incoming in scenario.get("in", []):
             names = (f"train{incoming['id']}", f"su_train{incoming['id']}")
             if stripped in names or train in names:
-                materialized = _materialized_arrival_track(incoming)
+                materialized = _scenario_arrival_track(incoming)
                 if materialized is not None:
                     su_loc[train] = materialized
                 su_arrival[train] = int(incoming.get("arrival", 0))
