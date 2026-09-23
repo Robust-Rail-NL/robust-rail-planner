@@ -223,13 +223,18 @@ def _unit_source_positions(scenario_object, location_object=None):
         if source != "in" or not members or not tracks:
             continue
         entry_track = tracks.get(train.get("entryTrackPart"), {})
-        arrival_side = "b" if entry_track.get("bSide") else "a"
+        arrival_side = (
+            "b" if entry_track.get("bSide")
+            else "a" if entry_track.get("aSide")
+            else None
+        )
+        if arrival_side is None:
+            continue
         for request in scenario_object.get("out", []):
-            leave_track = request.get("leaveTrackPart")
-            leave_track_part = tracks.get(leave_track, {})
+            leave_track_part = tracks.get(request.get("leaveTrackPart"), {})
             departure_side = (
-                "a" if leave_track_part.get("bSide")
-                else "b" if leave_track_part.get("aSide")
+                "b" if leave_track_part.get("bSide")
+                else "a" if leave_track_part.get("aSide")
                 else None
             )
             if departure_side is None:
