@@ -34,7 +34,10 @@ class ScheduleInfeasibleError(Exception):
 
 # Interchange schema version this converter writes. Bumped together with the
 # generator, solver and evaluator; see robust-rail-general's SCHEMA_CHANGELOG.md.
-SCHEMA_VERSION = 1
+# v2 requires every in-place reversal to be an explicit Reverse action rather
+# than folded into a Move's resource path -- true since consolidate_loops's
+# reinstatement routes its merges through create_move_and_reverse_actions too.
+SCHEMA_VERSION = 2
 
 SINGLE_ARG = r"\(([\w_]+) ([^)]+)\)"
 DOUBLE_ARG = r"\(([\w_]+) ([^ ]+) ([^)]+)\)"

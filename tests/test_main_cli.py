@@ -189,7 +189,7 @@ def test_a_late_departure_is_converted_not_failed(tmp_path):
     assert output_file.exists()
 
     plan = json.loads(output_file.read_text())
-    assert plan["schemaVersion"] == 1
+    assert plan["schemaVersion"] == 2
     assert plan["actions"], "expected the plan to carry its actions"
     assert plan["actions"][0]["taskType"]["predefined"] == "Arrive"
 
