@@ -81,3 +81,76 @@ def test_move_separated_by_wait_is_not_merged():
     kinds = [a["taskType"]["predefined"] for a in out]
     assert kinds == ["Move", "Wait", "Move"]
     assert out[0] != out[2]
+
+
+# --- Regression: a reversal (saw) sitting exactly on a run-boundary split ---
+#
+# compute_reversals only inspects *interior* tracks of the path it is given
+# (range(1, len(path) - 1)): a track that is the last element of one leg and
+# the first element of the next is an endpoint in both, so a same-side
+# turnaround sitting exactly on that seam is invisible to either half. This is
+# the concrete mechanism behind the bug Tycho reported when he removed
+# consolidate_loops: "allowing a train to move from a track to another track
+# without sawing." consolidate_loops is what puts the two legs back together
+# so the reversal is seen at all.
+#
+# Track 2's 'a' side reaches both neighbours 1 and 3 (a switch fan on one
+# side) -- entering from 1 and leaving toward 3 is a same-side turnaround.
+_REVERSAL_A_ADJ = {2: [1, 3]}
+_REVERSAL_B_ADJ = {}
+
+
+def test_reversal_on_a_run_boundary_is_invisible_to_each_leg_alone():
+    full_path = [1, 2, 3]
+    assert C.compute_reversals(full_path, _REVERSAL_A_ADJ, _REVERSAL_B_ADJ) == 1
+    # Split at the reversal track itself: neither half sees it.
+    assert C.compute_reversals([1, 2], _REVERSAL_A_ADJ, _REVERSAL_B_ADJ) == 0
+    assert C.compute_reversals([2, 3], _REVERSAL_A_ADJ, _REVERSAL_B_ADJ) == 0
+
+
+def test_consolidate_loops_recovers_a_reversal_lost_at_a_run_boundary():
+    # Two separately-closed Move actions for the same run: 1 -> 2, then
+    # 2 -> 3. Emitted this way (as _close_run would if the run got split for
+    # bookkeeping reasons right at the reversal), each leg's own resource path
+    # looks like ordinary travel -- neither shows a reversal.
+    a1 = _action(0, "Move", 0, 60, location=1, resources=[2])
+    a2 = _action(0, "Move", 61, 121, location=2, resources=[3])
+    out = C.consolidate_loops(
+        [a1, a2], _REVERSAL_A_ADJ, _REVERSAL_B_ADJ, set(), {}, {}, {}, set())
+    moves = [a for a in out if a["taskType"]["predefined"] == "Move"]
+    assert len(moves) == 1
+    merged_path = [moves[0]["location"]] + [r["id"] for r in moves[0]["resources"]]
+    assert merged_path == [1, 2, 3]
+    # Merging is what makes the reversal visible again.
+    assert C.compute_reversals(merged_path, _REVERSAL_A_ADJ, _REVERSAL_B_ADJ) == 1
+
+
+# --- Regression: an ordinary (non-reversal) boundary split inflates duration ---
+#
+# Splitting a continuous straight-through drive into two Move actions double-
+# counts the shared boundary track in each leg's own track-crossing time, so
+# their *summed* duration overshoots the correct, single-Move duration.
+# Track 2 connects to 1 on its 'a' side and to 3 on its 'b' side here: an
+# ordinary pass-through, not a reversal.
+_STRAIGHT_A_ADJ = {2: [1]}
+_STRAIGHT_B_ADJ = {2: [3]}
+
+
+def test_consolidate_loops_avoids_double_counting_a_split_straight_run():
+    leg1_dur = C.compute_move_duration([1, 2], _STRAIGHT_A_ADJ, _STRAIGHT_B_ADJ, {}, 0, None)
+    leg2_dur = C.compute_move_duration([2, 3], _STRAIGHT_A_ADJ, _STRAIGHT_B_ADJ, {}, 0, None)
+    naive_sum = leg1_dur + leg2_dur
+
+    a1 = _action(0, "Move", 0, leg1_dur, location=1, resources=[2])
+    a2 = _action(0, "Move", leg1_dur + 1, leg1_dur + 1 + leg2_dur, location=2, resources=[3])
+    out = C.consolidate_loops(
+        [a1, a2], _STRAIGHT_A_ADJ, _STRAIGHT_B_ADJ, set(), {}, {}, {}, set())
+    moves = [a for a in out if a["taskType"]["predefined"] == "Move"]
+    assert len(moves) == 1
+    merged_dur = moves[0]["endTime"] - moves[0]["startTime"]
+
+    correct_dur = C.compute_move_duration([1, 2, 3], _STRAIGHT_A_ADJ, _STRAIGHT_B_ADJ, {}, 0, None)
+    assert merged_dur == correct_dur
+    # The un-merged legs' own sum overshoots by exactly one double-counted
+    # boundary track's crossing time.
+    assert naive_sum == correct_dur + C.TRACK_CROSSING_TIME
