@@ -1745,7 +1745,7 @@ def convert_plan(plan_file, scenario_file, location_file):
     # left untouched, so every departing unit's final exit-approach Move stays.
     actions = consolidate_loops(
         actions, a_adj, b_adj, switch_ids, switch_costs, track_parts_by_id,
-        track_id_lookup, zero_length_tracks)
+        track_id_lookup, zero_length_tracks, train_lookup, unit_lookup)
 
     # Fill in missing members/parentIDs/childIDs for actions that reference
     # SUs by integer ID (e.g. Wait actions created by post_process_actions).
@@ -1857,10 +1857,11 @@ def _collapse_loops(seq):
 
 def consolidate_loops(actions, a_adj, b_adj, switch_ids, switch_costs,
                       track_parts_by_id, track_id_lookup,
-                      zero_length_tracks):
+                      zero_length_tracks, train_lookup, unit_lookup):
     """Merge each maximal run of *consecutive* Move actions -- the same shunting
     unit, with no other action type (Wait, Serve, Split, Combine) in between --
-    into a single Move over the run's net non-backtracking path.
+    into a single Move (or Move/Reverse/Move/... sequence, when the net path
+    itself revisits a track) over the run's net non-backtracking path.
 
     The merged Move's duration is recomputed from that net path, so a pointless
     park-and-return excursion (e.g. 906b -> track -> 906b) collapses to the
@@ -1935,7 +1936,7 @@ def consolidate_loops(actions, a_adj, b_adj, switch_ids, switch_costs,
                 merged[rep] = _merge_run(
                     run, rest_track, actions, a_adj, b_adj, switch_ids,
                     switch_costs, track_parts_by_id, track_id_lookup,
-                    zero_length_tracks)
+                    zero_length_tracks, train_lookup, unit_lookup)
                 _relocate_rest(actions, run, rest_track, a_adj, b_adj,
                                switch_ids, switch_costs, track_parts_by_id,
                                track_id_lookup, zero_length_tracks)
@@ -1947,7 +1948,7 @@ def consolidate_loops(actions, a_adj, b_adj, switch_ids, switch_costs,
             continue  # absorbed into the merged run handed at its representative
         if i in merged:
             if merged[i] is not None:
-                result.append(merged[i])
+                result.extend(merged[i])
             continue
         result.append(a)
 
@@ -2020,11 +2021,13 @@ def _pick_rest_track(actions, run0, a_adj, b_adj, switch_ids, zero_length_tracks
 
 
 def _merge_run(run0, rest_track, actions, a_adj, b_adj, switch_ids, switch_costs,
-               track_parts_by_id, track_id_lookup, zero_length_tracks):
-    """Build the single Move that replaces a run of consecutive Moves, ending at
-    `rest_track`.
+               track_parts_by_id, track_id_lookup, zero_length_tracks,
+               train_lookup, unit_lookup):
+    """Build the Move (or Move/Reverse/Move/... sequence, if the net path
+    itself turns back on itself) that replaces a run of consecutive Moves,
+    ending at `rest_track`.
 
-    Returns the merged Move over the run's net non-backtracking path to
+    Returns the action list for the run's net non-backtracking path to
     `rest_track`, or None when the run cancels out (returns to its starting
     track with no net transit) and should be dropped entirely.
     """
@@ -2053,18 +2056,23 @@ def _merge_run(run0, rest_track, actions, a_adj, b_adj, switch_ids, switch_costs
     stripped = list(expanded)
     while len(stripped) > 1 and stripped[-1] in zero_length_tracks:
         stripped.pop()
+
+    train_id = actions[run0[0]]["shuntingUnit"]["id"]
+    reversal_duration = get_reversal_duration(train_id, train_lookup)
     duration = compute_move_duration(
-        stripped, a_adj, b_adj, switch_costs, 0, track_parts_by_id)
+        stripped, a_adj, b_adj, switch_costs, reversal_duration, track_parts_by_id)
     end = start + duration
 
-    new = dict(actions[run0[0]])
-    new["shuntingUnit"] = actions[run0[0]]["shuntingUnit"]
-    new["startTime"] = _as_time(start)
-    new["endTime"] = _as_time(end)
-    resources = [track_id_lookup.get(p, _track_resource(p)) for p in net]
-    new["location"] = resources[0]["id"]
-    new["resources"] = resources[1:]
-    return new
+    # Route through create_move_and_reverse_actions rather than building a
+    # single Move dict directly: the net path can itself revisit a track
+    # (e.g. two runs that were separately closed for bookkeeping reasons,
+    # with the real reversal sitting exactly on the seam between them - see
+    # tests/test_consolidate_loops.py) and must come out as an explicit
+    # Reverse, not a Move whose resources happen to double back.
+    return create_move_and_reverse_actions(
+        train_id, start, end, stripped, a_adj, b_adj, switch_costs,
+        reversal_duration, track_parts_by_id, train_lookup, track_id_lookup,
+        unit_lookup)
 
 
 def _relocate_rest(actions, run, rest_track, a_adj, b_adj, switch_ids,

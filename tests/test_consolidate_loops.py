@@ -34,7 +34,7 @@ def test_forward_only_run_merged_into_single_move():
     a1 = _action(0, "Move", 0, 100, location=906, resources=[59, 15])
     a2 = _action(0, "Move", 101, 200, location=15, resources=[59, 41])
     out = C.consolidate_loops(
-        [a1, a2], {}, {}, set(), {}, {}, {}, set())
+        [a1, a2], {}, {}, set(), {}, {}, {}, set(), {}, {})
     moves = [a for a in out if a["taskType"]["predefined"] == "Move"]
     assert len(moves) == 1
     assert moves[0]["startTime"] == 0
@@ -51,7 +51,7 @@ def test_detour_run_collapses_to_net_transit():
     a2 = _action(0, "Move", 101, 200, location=906, resources=[59, 52])
     a3 = _action(0, "Move", 201, 300, location=52, resources=[59, 906])
     out = C.consolidate_loops(
-        [a1, a2, a3], {}, {}, set(), {}, {}, {}, set())
+        [a1, a2, a3], {}, {}, set(), {}, {}, {}, set(), {}, {})
     moves = [a for a in out if a["taskType"]["predefined"] == "Move"]
     # Net path is entry(42) -> 15 -> 59 -> 906.
     assert len(moves) == 1
@@ -65,7 +65,7 @@ def test_cancelling_detour_is_dropped():
     a1 = _action(0, "Move", 0, 100, location=906, resources=[59, 52])
     a2 = _action(0, "Move", 101, 200, location=52, resources=[59, 906])
     out = C.consolidate_loops(
-        [a1, a2], {}, {}, set(), {}, {}, {}, set())
+        [a1, a2], {}, {}, set(), {}, {}, {}, set(), {}, {})
     moves = [a for a in out if a["taskType"]["predefined"] == "Move"]
     assert moves == []
 
@@ -77,7 +77,7 @@ def test_move_separated_by_wait_is_not_merged():
     w = _action(0, "Wait", 100, 8850, location=906)
     m2 = _action(0, "Move", 8850, 9000, location=906, resources=[59, 15])
     out = C.consolidate_loops(
-        [m1, w, m2], {}, {}, set(), {}, {}, {}, set())
+        [m1, w, m2], {}, {}, set(), {}, {}, {}, set(), {}, {})
     kinds = [a["taskType"]["predefined"] for a in out]
     assert kinds == ["Move", "Wait", "Move"]
     assert out[0] != out[2]
@@ -116,13 +116,19 @@ def test_consolidate_loops_recovers_a_reversal_lost_at_a_run_boundary():
     a1 = _action(0, "Move", 0, 60, location=1, resources=[2])
     a2 = _action(0, "Move", 61, 121, location=2, resources=[3])
     out = C.consolidate_loops(
-        [a1, a2], _REVERSAL_A_ADJ, _REVERSAL_B_ADJ, set(), {}, {}, {}, set())
-    moves = [a for a in out if a["taskType"]["predefined"] == "Move"]
-    assert len(moves) == 1
-    merged_path = [moves[0]["location"]] + [r["id"] for r in moves[0]["resources"]]
-    assert merged_path == [1, 2, 3]
-    # Merging is what makes the reversal visible again.
-    assert C.compute_reversals(merged_path, _REVERSAL_A_ADJ, _REVERSAL_B_ADJ) == 1
+        [a1, a2], _REVERSAL_A_ADJ, _REVERSAL_B_ADJ, set(), {}, {}, {}, set(), {}, {})
+    kinds = [a["taskType"]["predefined"] for a in out]
+    # Merging must not fold the reversal back into a single Move whose
+    # resources happen to double back (invisible to compute_reversals, and
+    # rejected outright under schemaVersion 2) -- it comes out as an explicit
+    # Move/Reverse/Move, same as a reversal discovered within a single run.
+    assert kinds == ["Move", "Reverse", "Move"], kinds
+    assert out[0]["location"] == 1
+    assert [r["id"] for r in out[0]["resources"]] == [2]
+    assert out[1]["location"] == 2
+    assert out[1]["resources"] == []
+    assert out[2]["location"] == 2
+    assert [r["id"] for r in out[2]["resources"]] == [3]
 
 
 # --- Regression: an ordinary (non-reversal) boundary split inflates duration ---
@@ -144,7 +150,7 @@ def test_consolidate_loops_avoids_double_counting_a_split_straight_run():
     a1 = _action(0, "Move", 0, leg1_dur, location=1, resources=[2])
     a2 = _action(0, "Move", leg1_dur + 1, leg1_dur + 1 + leg2_dur, location=2, resources=[3])
     out = C.consolidate_loops(
-        [a1, a2], _STRAIGHT_A_ADJ, _STRAIGHT_B_ADJ, set(), {}, {}, {}, set())
+        [a1, a2], _STRAIGHT_A_ADJ, _STRAIGHT_B_ADJ, set(), {}, {}, {}, set(), {}, {})
     moves = [a for a in out if a["taskType"]["predefined"] == "Move"]
     assert len(moves) == 1
     merged_dur = moves[0]["endTime"] - moves[0]["startTime"]
