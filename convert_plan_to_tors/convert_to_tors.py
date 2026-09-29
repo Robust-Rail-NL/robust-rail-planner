@@ -1645,6 +1645,11 @@ def convert_plan(plan_file, scenario_file, location_file):
                 f"{deadline} but no Exit action was emitted."
             )
 
+    # Cross-SU track occupancy: reported, never fatal (see find_track_conflicts).
+    for msg in find_track_conflicts(
+            actions, track_parts_by_id, build_member_lengths(scenario)):
+        print("WARNING:", msg, file=sys.stderr)
+
     result = {
         "schemaVersion": SCHEMA_VERSION,
         "actions": actions,
@@ -1658,6 +1663,69 @@ def convert_plan(plan_file, scenario_file, location_file):
 # =====================================================
 # POST-PROCESS
 # =====================================================
+
+def build_member_lengths(scenario):
+    """Map each train unit id to its physical length (metres)."""
+    type_lookup = {(t["typePrefix"], t["carriages"]): t
+                   for t in scenario.get("trainUnitTypes", [])}
+    lengths = {}
+    for train in scenario.get("in", []) + scenario.get("inStanding", []):
+        for member in train.get("members", []):
+            key = _member_type_key(member, type_lookup)
+            if key is not None:
+                lengths[member["id"]] = type_lookup[key].get("length", 0)
+    return lengths
+
+
+def find_track_conflicts(actions, track_parts_by_id, member_lengths):
+    """Report cross-SU track occupancy that exceeds a track's capacity.
+
+    Diagnostic only: nothing is rescheduled. For every pair of actions of
+    different shuntingUnits (excluding Combine/Split lineage via
+    parentIDs/childIDs) whose [startTime, endTime) windows overlap on the same
+    location, the two units' summed length must fit on that track. This covers
+    every action type, so Wait/Service occupancy is checked like a Move. Zero-
+    length track parts (signals, bumpers) cannot hold a unit and are skipped.
+    Returns one message per conflicting (pair, track), for the caller to log.
+    """
+    def _length(su):
+        return sum(member_lengths.get(m, 0) for m in su.get("memberIDs", []))
+
+    def _related(a, b):
+        return (a["id"] in b.get("parentIDs", []) or a["id"] in b.get("childIDs", [])
+                or b["id"] in a.get("parentIDs", []) or b["id"] in a.get("childIDs", []))
+
+    by_track = {}
+    for a in actions:
+        loc = a.get("location")
+        if loc is None or a["taskType"].get("predefined") in ("Combine", "Split"):
+            continue
+        by_track.setdefault(loc, []).append(a)
+
+    conflicts, seen = [], set()
+    for loc, group in by_track.items():
+        capacity = track_parts_by_id.get(loc, {}).get("length", 0)
+        if capacity == 0:
+            continue
+        for i, a in enumerate(group):
+            for b in group[i + 1:]:
+                sa, sb = a["shuntingUnit"], b["shuntingUnit"]
+                if sa["id"] == sb["id"] or _related(sa, sb):
+                    continue
+                if int(a["startTime"]) >= int(b["endTime"]) or \
+                        int(b["startTime"]) >= int(a["endTime"]):
+                    continue
+                need = _length(sa) + _length(sb)
+                key = (loc, min(sa["id"], sb["id"]), max(sa["id"], sb["id"]))
+                if need > capacity and key not in seen:
+                    seen.add(key)
+                    conflicts.append(
+                        f"TRACK CONFLICT: SU {sa['id']} and SU {sb['id']} overlap "
+                        f"on track {loc} ({need} m needed, {capacity} m available) "
+                        f"at t={max(int(a['startTime']), int(b['startTime']))}."
+                    )
+    return conflicts
+
 
 def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
                          track_id_lookup, train_locations, train_arrival_times, scenario, su_id_fn=None,

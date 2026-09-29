@@ -466,3 +466,36 @@ def test_depart_rest_track_must_be_parkable(tmp_path):
     assert any(
         "non-parkable" in p and str(RAIL_TRANSIT) in p for p in problems
     ), problems
+
+
+def _act(kind, su, members, loc, start, end, parents=(), children=()):
+    return {
+        "taskType": {"predefined": kind},
+        "shuntingUnit": {"id": su, "memberIDs": members,
+                         "parentIDs": list(parents), "childIDs": list(children)},
+        "location": loc, "startTime": start, "endTime": end,
+    }
+
+
+def test_find_track_conflicts_flags_overlap_beyond_capacity():
+    from convert_plan_to_tors.convert_to_tors import find_track_conflicts
+    tracks = {1: {"length": 100}}
+    lengths = {1: 60, 2: 60, 3: 30}
+    acts = [_act("Wait", 0, [1], 1, 0, 100), _act("Move", 1, [2], 1, 50, 60)]
+    assert len(find_track_conflicts(acts, tracks, lengths)) == 1
+    # A Wait is checked like a Move, and a unit that fits is not a conflict.
+    acts = [_act("Wait", 0, [1], 1, 0, 100), _act("Wait", 1, [3], 1, 50, 60)]
+    assert find_track_conflicts(acts, tracks, lengths) == []
+
+
+def test_find_track_conflicts_ignores_disjoint_lineage_and_zero_length():
+    from convert_plan_to_tors.convert_to_tors import find_track_conflicts
+    tracks = {1: {"length": 100}, 2: {"length": 0}}
+    lengths = {1: 60, 2: 60}
+    disjoint = [_act("Wait", 0, [1], 1, 0, 50), _act("Wait", 1, [2], 1, 50, 90)]
+    assert find_track_conflicts(disjoint, tracks, lengths) == []
+    lineage = [_act("Wait", 0, [1], 1, 0, 90, children=[1]),
+               _act("Wait", 1, [2], 1, 10, 90, parents=[0])]
+    assert find_track_conflicts(lineage, tracks, lengths) == []
+    signal = [_act("Wait", 0, [1], 2, 0, 90), _act("Wait", 1, [2], 2, 10, 90)]
+    assert find_track_conflicts(signal, tracks, lengths) == []
