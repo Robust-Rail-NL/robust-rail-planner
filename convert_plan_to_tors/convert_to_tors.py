@@ -1750,6 +1750,13 @@ def convert_plan(plan_file, scenario_file, location_file):
         actions, a_adj, b_adj, switch_ids, switch_costs, track_parts_by_id,
         track_id_lookup, zero_length_tracks, train_lookup, unit_lookup)
 
+    # Insert a Reverse action wherever a unit must reverse across a real
+    # stop (a Wait with enough slack to absorb it) that consolidate_loops's
+    # own merge doesn't see, because it only ever looks inside one run's own
+    # path (see issue #48).
+    actions = insert_missing_reversals(
+        actions, a_adj, b_adj, train_lookup, track_id_lookup, unit_lookup)
+
     # Fill in missing members/parentIDs/childIDs for actions that reference
     # SUs by integer ID (e.g. Wait actions created by post_process_actions).
     su_fill = {}
@@ -1956,6 +1963,84 @@ def consolidate_loops(actions, a_adj, b_adj, switch_ids, switch_costs,
         result.append(a)
 
     return _tighten_waits(result)
+
+
+def insert_missing_reversals(actions, a_adj, b_adj, train_lookup, track_id_lookup, unit_lookup):
+    """Insert a Reverse action wherever a shunting unit must reverse across a
+    real stop, not just the bookkeeping-only run split consolidate_loops's
+    own merge already covers (issue #48). A Wait separating two
+    independently, correctly closed runs is invisible to
+    find_reversal_indices/compute_reversals either side of it: the track
+    where the reversal happens is the *last* track of the closing run and
+    the *first* track of the reopened one, an endpoint of each path, never
+    an interior one.
+
+    Handles only the case where the reversal's own duration fits inside the
+    Wait between the two runs: the Wait shrinks by exactly that much from
+    its end, a Reverse fills the reclaimed slice, and nothing else in the
+    schedule moves - the next action's own start was already anchored to
+    the Wait's old end, so it lines up exactly, and nothing downstream ever
+    reads a Wait's own timing (su_clock is set by the close_run/move that
+    precedes it, never by the Wait itself), so there is no Split/Combine
+    staleness risk to guard against here the way consolidate_loops's own
+    merge has to.
+
+    A Wait too short to absorb the reversal (or any other shape - a Service
+    action in the gap, or no gap at all) is left alone. Deliberately the
+    narrow, always-safe case, not a general fix - see issue #48.
+    """
+    by_su = {}
+    for i, a in enumerate(actions):
+        by_su.setdefault(a["shuntingUnit"]["id"], []).append(i)
+
+    result = list(actions)
+    insertions = {}  # idx of the (now-shrunk) Wait -> Reverse action to insert after it
+
+    for _sid, idxs in by_su.items():
+        for pos in range(len(idxs) - 2):
+            prev_idx, wait_idx, next_idx = idxs[pos], idxs[pos + 1], idxs[pos + 2]
+            prev_a, wait_a, next_a = actions[prev_idx], actions[wait_idx], actions[next_idx]
+
+            if (wait_a["taskType"].get("predefined") != "Wait"
+                    or prev_a["taskType"].get("predefined") != "Move"
+                    or next_a["taskType"].get("predefined") != "Move"):
+                continue
+
+            prev_path = [prev_a["location"]] + [r["id"] for r in prev_a.get("resources", [])]
+            next_path = [next_a["location"]] + [r["id"] for r in next_a.get("resources", [])]
+            if len(prev_path) < 2 or len(next_path) < 2:
+                continue
+
+            track = prev_path[-1]
+            if next_path[0] != track or wait_a.get("location") != track:
+                continue
+
+            boundary = [prev_path[-2], track, next_path[1]]
+            if compute_reversals(boundary, a_adj, b_adj) != 1:
+                continue
+
+            train_id = wait_a["shuntingUnit"]["id"]
+            reversal_duration = get_reversal_duration(train_id, train_lookup)
+            wait_start = int(wait_a["startTime"])
+            wait_end = int(wait_a["endTime"])
+            if wait_end - wait_start < reversal_duration:
+                continue  # not enough slack: the hard case, left for #48
+
+            new_wait_end = wait_end - reversal_duration
+            result[wait_idx] = dict(wait_a, endTime=_as_time(new_wait_end))
+            insertions[wait_idx] = create_reverse_action(
+                train_id, new_wait_end, wait_end, track,
+                train_lookup, track_id_lookup, unit_lookup)
+
+    if not insertions:
+        return actions
+
+    final = []
+    for i, a in enumerate(result):
+        final.append(a)
+        if i in insertions:
+            final.append(insertions[i])
+    return final
 
 
 def _track_bfs_dist(start, a_adj, b_adj, switch_ids):

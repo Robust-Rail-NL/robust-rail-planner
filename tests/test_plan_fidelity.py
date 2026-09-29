@@ -264,6 +264,38 @@ def test_list_order_waits_and_moves_follow_the_concurrent_plan(tmp_path):
         assert int(wait["endTime"]) == int(approach["startTime"]), wait
 
 
+def test_reversal_across_a_real_stop_is_made_explicit(tmp_path):
+    """train0 (members {0}) drives 15 -> 59 -> 41, waits at 41, then drives
+    back 41 -> 59 -> 15 -- entering and leaving 41 via the same side (see
+    issue #48). Neither Move's own path shows this: the boundary is an
+    endpoint of both. insert_missing_reversals must recover it as an
+    explicit Reverse action sitting between the Wait and the departure
+    Move."""
+    scenario_file, location_file = _kleinebinckhorst_inputs()
+    plan = convert_plan(KLEINEBINCKHORST_PLAN, scenario_file, location_file)
+    actions = plan["actions"]
+
+    def members(a):
+        return frozenset(a["shuntingUnit"]["memberIDs"])
+
+    def predefined(a):
+        return a["taskType"].get("predefined")
+
+    train0 = [a for a in actions if members(a) == frozenset({0})]
+    kinds = [predefined(a) for a in train0]
+    assert kinds == ["Arrive", "Move", "Wait", "Reverse", "Move", "Exit"], kinds
+
+    wait, reverse, departure = train0[2], train0[3], train0[4]
+    assert reverse["location"] == 41
+    assert reverse["resources"] == []
+    # The train0 fixture's reversal_duration is 0, so the Wait isn't
+    # actually shortened here -- test_insert_missing_reversals.py covers
+    # the nonzero-duration reshaping directly. This just confirms the
+    # boundary is recovered as an explicit action at all, on a real plan.
+    assert int(wait["endTime"]) == int(reverse["startTime"])
+    assert int(reverse["endTime"]) == int(departure["startTime"])
+
+
 # ── combine-split chaining regression ──────────────────────────────────────
 # The s07 feasible_small plan exercises combine/split with member trains that
 # must not be left moving when the combine fires.  The fixture lives next to
