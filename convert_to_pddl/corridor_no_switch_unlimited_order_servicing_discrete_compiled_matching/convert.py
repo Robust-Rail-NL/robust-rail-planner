@@ -25,7 +25,13 @@ parser.add_argument("--log-level", default="ERROR", required=False)
 parser.add_argument("--matching-variant", type=int, default=0)
 
 
-CORRIDOR_EXPAND_HOPS = 3
+# How far the corridor heuristic walks out from the tracks a scenario actually
+# names before it stops widening the modelled sub-graph. At 3 the walk falls
+# short of tracks a train needs in order to reach a coupling track, and the
+# scenarios that need them come back UNSOLVED within seconds. 4 is the smallest
+# value that solves them; past that the only effect is to admit single moves
+# that detour far enough to blow through a train's departure deadline.
+CORRIDOR_EXPAND_HOPS = 4
 
 
 def _build_adjacency(location_object):
