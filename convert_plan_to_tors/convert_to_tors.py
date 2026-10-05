@@ -4,6 +4,8 @@ import json
 import sys
 from collections import deque
 
+from .schedule import assign_times
+
 
 _DBG = os.environ.get("CONVERT_DEBUG") == "1"
 
@@ -1731,6 +1733,16 @@ def convert_plan(plan_file, scenario_file, location_file):
                 f"INFEASIBLE: departing SU {su_name} has departure deadline "
                 f"{deadline} but no Exit action was emitted."
             )
+
+    # Until here every action was timed from a clock kept per shunting unit,
+    # which cannot see the other units. Hand the finished plan to the scheduler
+    # to place all of them at once, so two routes never hold one trackPart at
+    # the same moment. A plan it cannot satisfy keeps the converter's own times.
+    # A schedule is only taken if it still lands every departure on the instant
+    # the scenario asks for. There is no relaxed second attempt: re-timing a
+    # departure to make the arithmetic work would quietly turn a plan that
+    # misses its deadline into one that appears to meet it.
+    assign_times(actions, scenario, location)
 
     result = {
         "schemaVersion": SCHEMA_VERSION,
