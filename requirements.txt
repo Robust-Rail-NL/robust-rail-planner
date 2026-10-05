@@ -4,3 +4,8 @@
 # install would build a different image every time and could break on a release
 # nobody chose.
 unified-planning==1.3.0
+
+# The CP scheduler in convert_plan_to_tors/schedule.py, which decides when a
+# converted plan's actions happen. Pinned for the same reason as the line above:
+# an unpinned install would build a different image every time.
+ortools==9.15.6755
