@@ -1088,7 +1088,7 @@ def create_instance_from_scenario(
     # currently-generated plans that split a composition and re-couple it from
     # opposite ends. Propagated through renames/splits and only consumed by the
     # compiled coupling preconditions.
-    came_from_a_su = problem.add_fluent(up.Fluent("came_from_a_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
+    came_from_aSide_su = problem.add_fluent(up.Fluent("came_from_aSide_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
     behind_su        = problem.add_fluent(up.Fluent("behind_su", up.BoolType(), back=shunting_unit_type, front=shunting_unit_type), default_initial_value=False)
     allowed_to_move_su = problem.add_fluent(up.Fluent("allowed_to_move_su", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
     su_may_move       = problem.add_fluent(up.Fluent("su_may_move", up.BoolType(), shunting_unit=shunting_unit_type), default_initial_value=False)
@@ -1219,8 +1219,8 @@ def create_instance_from_scenario(
     move_aside_empty_su.add_effect(fluent=behind_su(_maev, move_aside_empty_su.su), value=False, condition=behind_su(_maev, move_aside_empty_su.su), forall=[_maev])
     move_aside_empty_su.add_effect(frontmost_a_su(move_aside_empty_su.su), True)
     move_aside_empty_su.add_effect(frontmost_b_su(move_aside_empty_su.su), True)
-    move_aside_empty_su.add_effect(came_from_a_su(move_aside_empty_su.su), True, condition=land_on_a(move_aside_empty_su.l_from, move_aside_empty_su.l_to))
-    move_aside_empty_su.add_effect(came_from_a_su(move_aside_empty_su.su), False, condition=land_on_b(move_aside_empty_su.l_from, move_aside_empty_su.l_to))
+    move_aside_empty_su.add_effect(came_from_aSide_su(move_aside_empty_su.su), True, condition=land_on_a(move_aside_empty_su.l_from, move_aside_empty_su.l_to))
+    move_aside_empty_su.add_effect(came_from_aSide_su(move_aside_empty_su.su), False, condition=land_on_b(move_aside_empty_su.l_from, move_aside_empty_su.l_to))
     problem.add_action(move_aside_empty_su)
 
     move_aside_occupied_su = up.InstantaneousAction('move_aside_occupied_su', su=shunting_unit_type, l_from=track_part_type, l_to=track_part_type)
@@ -1254,8 +1254,8 @@ def create_instance_from_scenario(
     move_aside_occupied_su.add_effect(fluent=behind_su(move_aside_occupied_su.su, _maop), value=True, condition=up.And(land_on_b(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to), at_su(_maop, move_aside_occupied_su.l_to), frontmost_b_su(_maop)), forall=[_maop])
     move_aside_occupied_su.add_effect(frontmost_b_su(move_aside_occupied_su.su), True, condition=land_on_b(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to))
     move_aside_occupied_su.add_effect(frontmost_a_su(move_aside_occupied_su.su), False, condition=land_on_b(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to))
-    move_aside_occupied_su.add_effect(came_from_a_su(move_aside_occupied_su.su), True, condition=land_on_a(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to))
-    move_aside_occupied_su.add_effect(came_from_a_su(move_aside_occupied_su.su), False, condition=land_on_b(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to))
+    move_aside_occupied_su.add_effect(came_from_aSide_su(move_aside_occupied_su.su), True, condition=land_on_a(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to))
+    move_aside_occupied_su.add_effect(came_from_aSide_su(move_aside_occupied_su.su), False, condition=land_on_b(move_aside_occupied_su.l_from, move_aside_occupied_su.l_to))
     problem.add_action(move_aside_occupied_su)
 
     move_bside_empty_su = up.InstantaneousAction('move_bside_empty_su', su=shunting_unit_type, l_from=track_part_type, l_to=track_part_type)
@@ -1278,8 +1278,8 @@ def create_instance_from_scenario(
     move_bside_empty_su.add_effect(fluent=behind_su(move_bside_empty_su.su, _mbev), value=False, condition=behind_su(move_bside_empty_su.su, _mbev), forall=[_mbev])
     move_bside_empty_su.add_effect(frontmost_a_su(move_bside_empty_su.su), True)
     move_bside_empty_su.add_effect(frontmost_b_su(move_bside_empty_su.su), True)
-    move_bside_empty_su.add_effect(came_from_a_su(move_bside_empty_su.su), True, condition=land_on_a(move_bside_empty_su.l_from, move_bside_empty_su.l_to))
-    move_bside_empty_su.add_effect(came_from_a_su(move_bside_empty_su.su), False, condition=land_on_b(move_bside_empty_su.l_from, move_bside_empty_su.l_to))
+    move_bside_empty_su.add_effect(came_from_aSide_su(move_bside_empty_su.su), True, condition=land_on_a(move_bside_empty_su.l_from, move_bside_empty_su.l_to))
+    move_bside_empty_su.add_effect(came_from_aSide_su(move_bside_empty_su.su), False, condition=land_on_b(move_bside_empty_su.l_from, move_bside_empty_su.l_to))
     problem.add_action(move_bside_empty_su)
 
     move_bside_occupied_su = up.InstantaneousAction('move_bside_occupied_su', su=shunting_unit_type, l_from=track_part_type, l_to=track_part_type)
@@ -1313,8 +1313,8 @@ def create_instance_from_scenario(
     move_bside_occupied_su.add_effect(fluent=behind_su(_mbop, move_bside_occupied_su.su), value=True, condition=up.And(land_on_a(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to), at_su(_mbop, move_bside_occupied_su.l_to), frontmost_a_su(_mbop)), forall=[_mbop])
     move_bside_occupied_su.add_effect(frontmost_a_su(move_bside_occupied_su.su), True, condition=land_on_a(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to))
     move_bside_occupied_su.add_effect(frontmost_b_su(move_bside_occupied_su.su), False, condition=land_on_a(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to))
-    move_bside_occupied_su.add_effect(came_from_a_su(move_bside_occupied_su.su), True, condition=land_on_a(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to))
-    move_bside_occupied_su.add_effect(came_from_a_su(move_bside_occupied_su.su), False, condition=land_on_b(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to))
+    move_bside_occupied_su.add_effect(came_from_aSide_su(move_bside_occupied_su.su), True, condition=land_on_a(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to))
+    move_bside_occupied_su.add_effect(came_from_aSide_su(move_bside_occupied_su.su), False, condition=land_on_b(move_bside_occupied_su.l_from, move_bside_occupied_su.l_to))
     problem.add_action(move_bside_occupied_su)
 
     depart_aside_su = up.InstantaneousAction('depart_aside_su', su=shunting_unit_type, l=track_part_type)
@@ -1544,8 +1544,8 @@ def create_instance_from_scenario(
         adopt_composition.add_effect(fluent=request_assembled(adopted_request), value=True, condition=request_su_for_request(adopt_composition.request_su, adopted_request), forall=[adopted_request])
         adopt_composition.add_effect(fluent=frontmost_a_su(adopt_composition.request_su), value=True, condition=frontmost_a_su(adopt_composition.source_su))
         adopt_composition.add_effect(fluent=frontmost_b_su(adopt_composition.request_su), value=True, condition=frontmost_b_su(adopt_composition.source_su))
-        adopt_composition.add_effect(came_from_a_su(adopt_composition.request_su), True, condition=came_from_a_su(adopt_composition.source_su))
-        adopt_composition.add_effect(came_from_a_su(adopt_composition.request_su), False, condition=up.Not(came_from_a_su(adopt_composition.source_su)))
+        adopt_composition.add_effect(came_from_aSide_su(adopt_composition.request_su), True, condition=came_from_aSide_su(adopt_composition.source_su))
+        adopt_composition.add_effect(came_from_aSide_su(adopt_composition.request_su), False, condition=up.Not(came_from_aSide_su(adopt_composition.source_su)))
         adopt_composition.add_effect(frontmost_a_su(adopt_composition.source_su), False)
         adopt_composition.add_effect(frontmost_b_su(adopt_composition.source_su), False)
         # Replace the source SU with the request SU in the surrounding track order.
@@ -1607,8 +1607,8 @@ def create_instance_from_scenario(
             # A detached child keeps the parent's entry side: TORS carries the
             # parent's "previous" onto the Split successor, so both units can
             # still be re-combined on the same track.
-            action.add_effect(came_from_a_su(action.child_su), True, condition=came_from_a_su(action.parent_su))
-            action.add_effect(came_from_a_su(action.child_su), False, condition=up.Not(came_from_a_su(action.parent_su)))
+            action.add_effect(came_from_aSide_su(action.child_su), True, condition=came_from_aSide_su(action.parent_su))
+            action.add_effect(came_from_aSide_su(action.child_su), False, condition=up.Not(came_from_aSide_su(action.parent_su)))
             # Promote the remaining end unit and release composition membership.
             uncoupled_neighbor_unit = up.Variable(f"{name}_neighbor_unit", train_unit_type)
             uncoupled_composition = up.Variable(f"{name}_composition", arrival_composition_type)
@@ -1688,8 +1688,8 @@ def create_instance_from_scenario(
         start_request_track_neighbor = up.Variable("start_request_track_neighbor", shunting_unit_type)
         compiled_start.add_effect(fluent=frontmost_a_su(compiled_start.request_su), value=True, condition=frontmost_a_su(compiled_start.source_su))
         compiled_start.add_effect(fluent=frontmost_b_su(compiled_start.request_su), value=True, condition=frontmost_b_su(compiled_start.source_su))
-        compiled_start.add_effect(came_from_a_su(compiled_start.request_su), True, condition=came_from_a_su(compiled_start.source_su))
-        compiled_start.add_effect(came_from_a_su(compiled_start.request_su), False, condition=up.Not(came_from_a_su(compiled_start.source_su)))
+        compiled_start.add_effect(came_from_aSide_su(compiled_start.request_su), True, condition=came_from_aSide_su(compiled_start.source_su))
+        compiled_start.add_effect(came_from_aSide_su(compiled_start.request_su), False, condition=up.Not(came_from_aSide_su(compiled_start.source_su)))
         compiled_start.add_effect(frontmost_a_su(compiled_start.source_su), False)
         compiled_start.add_effect(frontmost_b_su(compiled_start.source_su), False)
         compiled_start.add_effect(fluent=behind_su(start_request_track_neighbor, compiled_start.request_su), value=True, condition=behind_su(start_request_track_neighbor, compiled_start.source_su), forall=[start_request_track_neighbor])
@@ -1727,8 +1727,8 @@ def create_instance_from_scenario(
             # B-side entries.
             action.add_precondition(
                 up.Or(
-                    up.And(came_from_a_su(action.request_su), came_from_a_su(action.source_su)),
-                    up.And(up.Not(came_from_a_su(action.request_su)), up.Not(came_from_a_su(action.source_su))),
+                    up.And(came_from_aSide_su(action.request_su), came_from_aSide_su(action.source_su)),
+                    up.And(up.Not(came_from_aSide_su(action.request_su)), up.Not(came_from_aSide_su(action.source_su))),
                 )
             )
             action.add_effect(serviced(action.request_su), False, condition=up.Not(serviced(action.source_su)))
@@ -2113,7 +2113,7 @@ def create_instance_from_scenario(
             if arrival_pred is None:
                 arrival_pred = arrival_track_id if arrival_track_id in id_to_track_part else entry_track_id
             initial_facing_a = _entry_side_on_target(_track_part_by_id, initial_track_id, arrival_pred) == "a"
-        problem.set_initial_value(came_from_a_su(shunting_unit), initial_facing_a)
+        problem.set_initial_value(came_from_aSide_su(shunting_unit), initial_facing_a)
         composition_obj = None
         if len(train_members) > 1:
             composition_obj = problem.add_object("composition" + str(train["id"]), arrival_composition_type)
