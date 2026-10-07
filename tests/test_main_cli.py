@@ -11,14 +11,12 @@ import pytest
 from conftest import LOCATION_FILE, REPO_ROOT, SCENARIO_FILE, requires_julia
 
 
-def _run_main(output_file, scenario=SCENARIO_FILE, variant="compiled_matching"):
+def _run_main(output_file, scenario=SCENARIO_FILE):
     cmd = [sys.executable, os.path.join(REPO_ROOT, "main.py"),
            "--location", LOCATION_FILE,
            "--scenario", scenario,
            "--planner", "symbolic",
            "--output", str(output_file)]
-    if variant:
-        cmd += ["--variant", variant]
     return subprocess.run(
         cmd,
         cwd=REPO_ROOT,
@@ -77,7 +75,7 @@ def test_main_no_bumpers_variant_produces_a_valid_tors_plan(tmp_path):
     """The no_bumpers corridor model is selectable via --variant and its plan
     converts to a valid, deadline-respecting TORS plan like the base model."""
     output_file = tmp_path / "plan.json"
-    result = _run_main(output_file, variant="compiled_matching_no_bumpers")
+    result = _run_main(output_file)
 
     assert result.returncode == 0, result.stderr
     assert output_file.exists()

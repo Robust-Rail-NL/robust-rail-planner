@@ -6,6 +6,8 @@ Where `robust-rail-planner` stands against the 2.0.0 interchange schema, as of
 
 ## Layout
 
+On 2026-10-07, all variants of `convert_to_pddl` were archived and only one main `convert.py` remains.
+
 On 2026-08-10 `new_pipeline_version` was merged into `release/2.0.0`, replacing
 the `src/` package layout with a Docker-first one. The two branches had diverged
 from a 2026-08-05 base and neither contained the other's work: the restructure
