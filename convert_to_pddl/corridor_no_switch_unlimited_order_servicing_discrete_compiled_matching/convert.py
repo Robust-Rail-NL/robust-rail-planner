@@ -135,7 +135,7 @@ def all_trains_with_source(scenario_object):
 
 def _coupling_track_ids_for_request(request, location_object,
                                     candidate_track_ids, train_unit_types):
-    # Prefer request-specific parking/departure information, otherwise use nearby coupling tracks.
+    # Keep the preferred coupling track and its nearest suitable alternative.
     candidate_track_ids = {str(track_id) for track_id in candidate_track_ids}
     required_length = float(_train_total_length(train_unit_types, request))
     track_length_by_id = {
@@ -153,25 +153,43 @@ def _coupling_track_ids_for_request(request, location_object,
             f"with length {required_length}"
         )
     preferred_ids = [request.get("lastParkingTrackPart"), request.get("leaveTrackPart")]
-    preferred_ids = [str(track_id) for track_id in preferred_ids if track_id is not None and str(track_id) in candidate_track_ids]
+    preferred_ids = [
+        str(track_id)
+        for track_id in preferred_ids
+        if track_id is not None and str(track_id) in candidate_track_ids
+    ]
     if preferred_ids:
-        return preferred_ids[:1]
+        primary_id = preferred_ids[0]
+    else:
+        leave_track_id = request.get("leaveTrackPart")
+        resolved_leave_ids = _resolve_boundary_track_ids(
+            [leave_track_id] if leave_track_id is not None else [], location_object
+        )
+        distances = _bfs_from(_build_adjacency(location_object), resolved_leave_ids)
+        reachable_candidates = [
+            (distances[track_id], track_id)
+            for track_id in candidate_track_ids
+            if track_id in distances
+        ]
+        if reachable_candidates:
+            primary_id = sorted(reachable_candidates)[0][1]
+        else:
+            primary_id = sorted(candidate_track_ids)[0]
 
-    leave_track_id = request.get("leaveTrackPart")
-    resolved_leave_ids = _resolve_boundary_track_ids(
-        [leave_track_id] if leave_track_id is not None else [], location_object
-    )
-    adjacency = _build_adjacency(location_object)
-    distances = _bfs_from(adjacency, resolved_leave_ids)
-    reachable_candidates = [
+    adjacency = {
+        str(track_id): {str(neighbor) for neighbor in neighbors}
+        for track_id, neighbors in _build_adjacency(location_object).items()
+    }
+    distances = _bfs_from(adjacency, [primary_id])
+    alternatives = [
         (distances[track_id], track_id)
         for track_id in candidate_track_ids
-        if track_id in distances
+        if track_id != primary_id and track_id in distances
     ]
-    if reachable_candidates:
-        return [track_id for _, track_id in sorted(reachable_candidates)[:1]]
 
-    return sorted(candidate_track_ids)[:1]
+    return [primary_id] + [
+        track_id for _, track_id in sorted(alternatives)[:1]
+    ]
 
 
 def _shortest_path(adjacency, start_id, goal_id):
