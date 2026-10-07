@@ -2,7 +2,7 @@
 
 TORS refuses to combine two shunting units unless they entered their shared
 track from the same side (CombineAction.cpp compares each unit's "previous"
-track). The model mirrors that with the `came_from_a_su` fluent: moves set it
+track). The model mirrors that with the `came_from_aSide_su` fluent: moves set it
 from the side they land on, coupling requires it to match, and an arriving unit
 starts out facing the side its entryTrackPart plugs into.
 
@@ -37,7 +37,7 @@ BUMPER_OUT = 4
 ARRIVING_SU = "su_train9001"
 
 # The writer emits boolean fluents as bare atoms: listed in (:init) is True.
-CAME_FROM_A_INIT = re.compile(r"\(came_from_a_su (\S+)\)")
+CAME_FROM_A_INIT = re.compile(r"\(came_from_aSide_su (\S+)\)")
 
 
 def _convert(tmp_path, scenario_file=SCENARIO_FILE, location_file=LOCATION_FILE):
@@ -75,7 +75,7 @@ def compiled_matching_pddl(tmp_path_factory):
 def test_domain_declares_the_facing_fluent(compiled_matching_pddl):
     domain, _ = compiled_matching_pddl
 
-    assert "(came_from_a_su ?shunting_unit - shuntingunit)" in domain
+    assert "(came_from_aSide_su ?shunting_unit - shuntingunit)" in domain
 
 
 @pytest.mark.parametrize(
@@ -92,11 +92,11 @@ def test_every_move_sets_facing_from_the_side_it_lands_on(compiled_matching_pddl
     body = _action_body(domain, action)
 
     assert (
-        "(when (land_on_a ?l_from ?l_to) (came_from_a_su ?su))" in body
-    ), f"{action} must set came_from_a_su when it lands on the a-side"
+        "(when (land_on_a ?l_from ?l_to) (came_from_aSide_su ?su))" in body
+    ), f"{action} must set came_from_aSide_su when it lands on the a-side"
     assert (
-        "(when (land_on_b ?l_from ?l_to) (not (came_from_a_su ?su)))" in body
-    ), f"{action} must clear came_from_a_su when it lands on the b-side"
+        "(when (land_on_b ?l_from ?l_to) (not (came_from_aSide_su ?su)))" in body
+    ), f"{action} must clear came_from_aSide_su when it lands on the b-side"
 
 
 def test_coupling_requires_both_units_to_face_the_same_way(compiled_matching_pddl):
@@ -104,8 +104,8 @@ def test_coupling_requires_both_units_to_face_the_same_way(compiled_matching_pdd
     body = _action_body(domain, "compiled_couple_front")
 
     assert (
-        "(or (and (came_from_a_su ?request_su) (came_from_a_su ?source_su))"
-        " (and (not (came_from_a_su ?request_su)) (not (came_from_a_su ?source_su))))"
+        "(or (and (came_from_aSide_su ?request_su) (came_from_aSide_su ?source_su))"
+        " (and (not (came_from_aSide_su ?request_su)) (not (came_from_aSide_su ?source_su))))"
     ) in body
 
 
@@ -114,16 +114,16 @@ def test_uncoupling_hands_the_facing_to_the_detached_unit(compiled_matching_pddl
 
     for action in ("compiled_uncouple_front", "compiled_uncouple_back"):
         body = _action_body(domain, action)
-        assert "(when (came_from_a_su ?parent_su) (came_from_a_su ?child_su))" in body
-        assert "(when (not (came_from_a_su ?parent_su)) (not (came_from_a_su ?child_su)))" in body
+        assert "(when (came_from_aSide_su ?parent_su) (came_from_aSide_su ?child_su))" in body
+        assert "(when (not (came_from_aSide_su ?parent_su)) (not (came_from_aSide_su ?child_su)))" in body
 
 
 def test_adopting_a_unit_onto_a_request_keeps_the_facing(compiled_matching_pddl):
     domain, _ = compiled_matching_pddl
     body = _action_body(domain, "compiled_adopt_composition")
 
-    assert "(when (came_from_a_su ?source_su) (came_from_a_su ?request_su))" in body
-    assert "(when (not (came_from_a_su ?source_su)) (not (came_from_a_su ?request_su)))" in body
+    assert "(when (came_from_aSide_su ?source_su) (came_from_aSide_su ?request_su))" in body
+    assert "(when (not (came_from_aSide_su ?source_su)) (not (came_from_aSide_su ?request_su)))" in body
 
 
 def test_arrival_facing_follows_the_a_side_entry_track(tmp_path):
@@ -166,16 +166,16 @@ def test_adopting_a_unit_onto_a_request_keeps_the_facing(multi_unit_pddl):
     domain, _ = multi_unit_pddl
     body = _action_body(domain, "compiled_adopt_composition")
 
-    assert "(when (came_from_a_su ?source_su) (came_from_a_su ?request_su))" in body
-    assert "(when (not (came_from_a_su ?source_su)) (not (came_from_a_su ?request_su)))" in body
+    assert "(when (came_from_aSide_su ?source_su) (came_from_aSide_su ?request_su))" in body
+    assert "(when (not (came_from_aSide_su ?source_su)) (not (came_from_aSide_su ?request_su)))" in body
 
 
 def test_starting_a_request_from_a_source_keeps_the_facing(multi_unit_pddl):
     domain, _ = multi_unit_pddl
     body = _action_body(domain, "compiled_start_request")
 
-    assert "(when (came_from_a_su ?source_su) (came_from_a_su ?request_su))" in body
-    assert "(when (not (came_from_a_su ?source_su)) (not (came_from_a_su ?request_su)))" in body
+    assert "(when (came_from_aSide_su ?source_su) (came_from_aSide_su ?request_su))" in body
+    assert "(when (not (came_from_aSide_su ?source_su)) (not (came_from_aSide_su ?request_su)))" in body
 
 
 def test_redirected_arrival_lands_on_the_parkable_track(multi_unit_pddl):
