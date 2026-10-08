@@ -136,12 +136,14 @@ def all_trains_with_source(scenario_object):
 def _coupling_track_ids_for_request(request, location_object,
                                     candidate_track_ids, train_unit_types):
     # Keep all reachable coupling tracks that can hold the completed request.
+    # Normalize track IDs before comparing scenario and location data.
     candidate_track_ids = {str(track_id) for track_id in candidate_track_ids}
     required_length = float(_train_total_length(train_unit_types, request))
     track_length_by_id = {
         str(track_part["id"]): float(track_part.get("length", 0.0))
         for track_part in location_object["trackParts"]
     }
+    # Exclude tracks that cannot hold the completed request.
     candidate_track_ids = {
         track_id
         for track_id in candidate_track_ids
@@ -153,24 +155,29 @@ def _coupling_track_ids_for_request(request, location_object,
             f"with length {required_length}"
         )
     leave_track_id = request.get("leaveTrackPart")
+    # Convert boundary signals and bumpers to physical departure tracks.
     resolved_leave_ids = {
         str(track_id) for track_id in _resolve_boundary_track_ids(
             [leave_track_id] if leave_track_id is not None else [], location_object
         )
     }
+    # Normalize the location graph before calculating route distances.
     adjacency = {
         str(track_id): {str(neighbor) for neighbor in neighbors}
         for track_id, neighbors in _build_adjacency(location_object).items()
     }
     distances = _bfs_from(adjacency, resolved_leave_ids)
+    # Keep every suitable track reachable from the departure boundary.
     reachable_candidates = [
         (distances[track_id], track_id)
         for track_id in candidate_track_ids
         if track_id in distances
     ]
     if reachable_candidates:
+        # Order all permitted tracks by distance and then by track ID.
         return [track_id for _, track_id in sorted(reachable_candidates)]
 
+    # Preserve all fitting candidates when no departure route is available.
     return sorted(candidate_track_ids)
 
 
@@ -748,6 +755,7 @@ def _relevant_corridor_nodes(scenario_object, location_object,
 
     for request in scenario_object.get("out", []):
         request_keys = _request_type_keys(request)
+        # Every permitted coupling track contributes to the retained corridor.
         coupling_ids = [str(c) for c in
                         _coupling_track_ids_for_request(request, location_object, coupling_candidate_track_ids, train_unit_types)]
         route_targets = {
@@ -1811,6 +1819,7 @@ def create_instance_from_scenario(
     id_to_track_part = {}
     switch_like_track_ids = {tp["id"] for tp in location_object["trackParts"] if _is_switch_like_track_part(tp)}
     all_non_switch_ids = {tp["id"] for tp in location_object["trackParts"] if tp["id"] not in switch_like_track_ids}
+    # Only parkable physical tracks can be coupling candidates.
     coupling_candidate_track_ids = {tp["id"] for tp in location_object["trackParts"] if tp.get("parkingAllowed") and tp["id"] not in switch_like_track_ids}
 
     corridor_nodes = _relevant_corridor_nodes(scenario_object,
@@ -2146,6 +2155,7 @@ def create_instance_from_scenario(
 
         coupling_track_objects = []
         for track_id in _coupling_track_ids_for_request(request, location_object, coupling_candidate_track_ids, train_unit_types):
+            # Convert selected location IDs into PDDL track objects.
             # Match track IDs independently of whether the JSON source stores them as strings or integers.
             native_track_id = next(
                 (known_id for known_id in id_to_track_part if str(known_id) == str(track_id)),
@@ -2174,6 +2184,7 @@ def create_instance_from_scenario(
 
             problem.add_goal(request_assembled(request_obj))
             problem.add_goal(departed_su(request_su))
+        # Reuse these tracks when compiling request actions and route edges.
         request_action_records.append(
             (request, request_obj, request_su, slot_objects, coupling_track_objects)
         )
@@ -2281,6 +2292,7 @@ def create_instance_from_scenario(
                 (departure_event_time, request_su)
             )
             for track in coupling_tracks:
+                # Mark every assembly location permitted for this request.
                 problem.set_initial_value(compiled_coupling_track(request_su, track), True)
 
         has_service_tasks = any(
@@ -2294,6 +2306,7 @@ def create_instance_from_scenario(
         )
         allowed_route_edges = set()
         if restrict_routes:
+            # Retain routes between exits and every permitted coupling track.
             coupling_ids = {
                 track.name.removeprefix("o_")
                 for _, _, _, _, tracks in request_action_records
@@ -2305,6 +2318,7 @@ def create_instance_from_scenario(
                     for first, second in zip(route, route[1:]):
                         allowed_route_edges.add((first, second))
                         allowed_route_edges.add((second, first))
+        # Use the complete graph when no restricted route can be formed.
         if not allowed_route_edges:
             allowed_route_edges = {
                 (source, target)
