@@ -959,8 +959,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         else:
             start = ready
             end = start + duration
-
-        su_clock[train] = end + 1
+        su_clock[train] = end
         su_loc[train] = expanded[-1]
         return start, end, _run_actions(train, expanded, start)
 
@@ -1006,7 +1005,7 @@ def convert_plan(plan_file, scenario_file, location_file):
         end = start + duration
         for action in _run_actions(train, expanded, start):
             _append_su_action(action, train)
-        su_clock[train] = end + 1
+        su_clock[train] = end
         su_loc[train] = expanded[-1]
 
     problems = []
@@ -1161,7 +1160,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                     track_id_lookup=track_id_lookup
                 )
                 _append_su_action(exit_action, train)
-                su_clock[train] = exit_time + 1
+                su_clock[train] = exit_time
             continue
 
         # --------------------------------
@@ -1188,7 +1187,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                 track_id_lookup=track_id_lookup
             )
             _append_su_action(exit_action, su_id)
-            su_clock[su_id] = exit_time + 1
+            su_clock[su_id] = exit_time
             continue
 
         # --------------------------------
@@ -1263,7 +1262,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                 exit_time = app_end
                 wait_end = app_start
             elif had_run:
-                exit_time = app_end + 1
+                exit_time = app_end
                 wait_end = ready_time
             else:
                 exit_time = dep if dep is not None else ready_time
@@ -1312,7 +1311,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                 exit_action["location"] = exit_track_id
                 exit_action["resources"] = [track_id_lookup[exit_track_id]]
             _append_su_action(exit_action, train)
-            su_clock[train] = exit_time + 1
+            su_clock[train] = exit_time
             continue
 
         # --------------------------------
@@ -1370,9 +1369,9 @@ def convert_plan(plan_file, scenario_file, location_file):
             su_loc[detached_su] = split_track_id
             rested[remaining_su] = split_track_id
             rested[detached_su] = split_track_id
-            su_clock[parent_su] = end_time + 1
-            su_clock[remaining_su] = end_time + 1
-            su_clock[detached_su] = end_time + 1
+            su_clock[parent_su] = end_time
+            su_clock[remaining_su] = end_time
+            su_clock[detached_su] = end_time
             continue
 
         m = COMPILED_COUPLE_RE.match(line)
@@ -1425,9 +1424,9 @@ def convert_plan(plan_file, scenario_file, location_file):
             su_loc[result_su] = track_id
             rested[result_su] = track_id
             _set_request_departure(result_su, request_name)
-            su_clock[source_su] = end_time + 1
-            su_clock[request_su] = end_time + 1
-            su_clock[result_su] = end_time + 1
+            su_clock[source_su] = end_time
+            su_clock[request_su] = end_time
+            su_clock[result_su] = end_time
             continue
 
         # --------------------------------
@@ -1465,9 +1464,9 @@ def convert_plan(plan_file, scenario_file, location_file):
                 if dep_time is not None:
                     su_departure_time[su_result] = int(dep_time)
 
-            su_clock[su_a] = end_time + 1
-            su_clock[su_b] = end_time + 1
-            su_clock[su_result] = end_time + 1
+            su_clock[su_a] = end_time
+            su_clock[su_b] = end_time
+            su_clock[su_result] = end_time
             su_loc[su_result] = track_id
             rested[su_result] = track_id
             continue
@@ -1501,9 +1500,9 @@ def convert_plan(plan_file, scenario_file, location_file):
             )
             actions.append(split_action)
 
-            su_clock[parent_su] = end_time + 1
+            su_clock[parent_su] = end_time
             for child in child_ids:
-                su_clock[child] = end_time + 1
+                su_clock[child] = end_time
                 su_loc[child] = track_id
                 rested[child] = track_id
             continue
@@ -1566,7 +1565,7 @@ def convert_plan(plan_file, scenario_file, location_file):
                 ]
                 actions.append(service_action)
                 completed_service_tasks.add((member_id, task_index))
-                su_clock[su_id] = end_time + 1
+                su_clock[su_id] = end_time
             continue
 
         # Nothing matched. An action the converter does not know would be
@@ -1615,7 +1614,7 @@ def convert_plan(plan_file, scenario_file, location_file):
             ),
             su_name,
         )
-        su_clock[su_name] = exit_time + 1
+        su_clock[su_name] = exit_time
 
     # Assign integer SU IDs to all actions and fix members for combined SUs.
     for action in actions:
@@ -2042,7 +2041,7 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
         anchor = anchors[id(wait)]
         if anchor is not None:
             wait["startTime"] = _as_time(max(
-                int(anchor["endTime"]) + 1, int(wait["startTime"])
+                int(anchor["endTime"]), int(wait["startTime"])
             ))
         su_id = wait["shuntingUnit"]["id"]
         approach = next(
