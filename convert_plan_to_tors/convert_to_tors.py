@@ -34,7 +34,7 @@ class ScheduleInfeasibleError(Exception):
 
 # Interchange schema version this converter writes. Bumped together with the
 # generator, solver and evaluator; see robust-rail-general's SCHEMA_CHANGELOG.md.
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SINGLE_ARG = r"\(([\w_]+) ([^)]+)\)"
 DOUBLE_ARG = r"\(([\w_]+) ([^ ]+) ([^)]+)\)"
@@ -1988,7 +1988,7 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
         # Arrive / Exit / StandOut — pinned to scenario times; record their
         # end so anything after them chains (monotonic).
         wag = _wagons(action)
-        if wag and "other" not in action["taskType"]:
+        if wag and "other" not in action["taskType"] and not _kind(action, "Reverse"):
             for w in wag:
                 wagon_end[w] = max(int(action["endTime"]),
                                    wagon_end.get(w, 0))
@@ -2055,6 +2055,15 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
         # Ensure start <= end after chaining adjustments.
         if int(wait["startTime"]) > int(wait["endTime"]):
             wait["endTime"] = wait["startTime"]
+
+    for action in processed_actions:
+        if _kind(action, "Move"):
+            route = [action.get("location")] + [r["id"] for r in action.get("resources", [])]
+            for i in range(1, len(route) - 1):
+                if route[i - 1] == route[i + 1]:
+                    raise ValueError(
+                        f"Move for shunting unit {action['shuntingUnit'].get('id')} at "
+                        f"{action['startTime']} embeds a reversal at track {route[i]}: {route}")
 
     # --- Phase 4: align Exits to their approach Move ---
     for i, action in enumerate(processed_actions):
