@@ -16,7 +16,7 @@ import re
 
 import pytest
 
-from convert_to_pddl.corridor_no_switch_unlimited_order_servicing_discrete_compiled_matching.convert import (
+from convert_to_pddl.convert import (
     create_instance_from_scenario,
 )
 
