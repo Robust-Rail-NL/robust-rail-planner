@@ -8,7 +8,7 @@ An AI Planning approach to solving the TUSPwSS.
 
 ## Structure
 - `main.py`: container entrypoint. Chains scenario → PDDL → plan → TORS JSON in one call; this is what the Docker image runs.
-- `convert_to_pddl/`: converts a solver-format scenario/location pair into a PDDL domain + problem. One subfolder per model variant, each with its own `convert.py`:
+- `convert_to_pddl/`: converts a solver-format scenario/location pair into a PDDL domain + problem. One main model `convert.py` and several older variants in `archive`:
   `md_files/` holds per-model design notes (currently `baseline_no_parameters.md`).
 - `plan/`: Julia planner backends, run as subprocesses by `main.py`.
   - `symbolic_planner.jl`: SymbolicPlanners.jl `WeightedAStarPlanner(HAdd())`.
@@ -82,7 +82,7 @@ misbehaving, or to try a converter variant `main.py` doesn't wire up yet:
 FIX=tests/fixtures/simple_service
 
 # 1. scenario -> PDDL
-python convert_to_pddl/baseline_no_parameters/convert.py \
+python convert_to_pddl/convert.py \
   -l $FIX/location.json -s $FIX/scenarios/scenario_simple.json \
   -d /tmp/domain.pddl -o /tmp/problem.pddl
 
@@ -99,6 +99,12 @@ python convert_plan_to_tors/convert_to_tors.py \
 Discrete/corridor variants add `--precompute-matching` and/or
 `--matching-variant N` flags — pass `-h` to any `convert.py` to see what it
 accepts.
+
+### Running the tests
+In the main directory, simply run:
+```
+$ pytest
+```
 
 ## Dev container
 
