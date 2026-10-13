@@ -2036,6 +2036,7 @@ def create_instance_from_scenario(
         initial_track_id = _train_initial_track_id(train, preferred_track_keys)
         first_parking_track_id = train.get("firstParkingTrackPart")
         raw_first_parking_track_id = first_parking_track_id
+        arrival_options = [first_parking_track_id]
         train_total_length = _train_total_length(train_unit_types, train)
 
         # The scenario's firstParkingTrackPart is often the non-parkable arrival
@@ -2059,6 +2060,12 @@ def create_instance_from_scenario(
                     first_parking_track_id = min(
                         _candidates, key=lambda pid: bfs_dist[pid]
                     )
+                    # Let the planner pick any fitting parkable track to arrive
+                    # on: forcing the nearest one (often the dead-end 906b) makes
+                    # every later move off it a reversal. Facing is still derived
+                    # from the nearest track alone, which assumes all candidates
+                    # are entered from the same side (true for Kleine Binckhorst).
+                    arrival_options = sorted(_candidates, key=lambda pid: bfs_dist[pid])
                 else:
                     raise ValueError(f"No parkable track fits incoming train {train['id']}")
             initial_track_id = first_parking_track_id
@@ -2081,7 +2088,9 @@ def create_instance_from_scenario(
         if source == "in":
             problem.set_initial_value(at_su(shunting_unit, phantom_track), True)
             if initial_track_id in id_to_track_part:
-                problem.set_initial_value(su_arrival_track(shunting_unit, id_to_track_part[initial_track_id]), True)
+                for option_id in arrival_options:
+                    if option_id in id_to_track_part:
+                        problem.set_initial_value(su_arrival_track(shunting_unit, id_to_track_part[option_id]), True)
             else:
                 raise ValueError(f"Unknown firstParkingTrackPart {first_parking_track_id} for incoming train {train['id']}")
         elif initial_track_id in id_to_track_part:
@@ -2121,12 +2130,13 @@ def create_instance_from_scenario(
             problem.set_initial_value(su_may_move(shunting_unit), True)
             if compile_precomputed_actions:
                 problem.set_initial_value(compiled_arrival_composition_su(shunting_unit), True)
-                uncouple_track_id = first_parking_track_id if source == "in" else initial_track_id
-                if uncouple_track_id in id_to_track_part:
-                    problem.set_initial_value(
-                        compiled_uncouple_track(shunting_unit, id_to_track_part[uncouple_track_id]),
-                        True,
-                    )
+                uncouple_track_ids = arrival_options if source == "in" else [initial_track_id]
+                for uncouple_track_id in uncouple_track_ids:
+                    if uncouple_track_id in id_to_track_part:
+                        problem.set_initial_value(
+                            compiled_uncouple_track(shunting_unit, id_to_track_part[uncouple_track_id]),
+                            True,
+                        )
         else:
             problem.set_initial_value(su_may_move(shunting_unit), True)
 
