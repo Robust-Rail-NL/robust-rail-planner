@@ -2336,7 +2336,10 @@ def create_instance_from_scenario(
                         unit_positions.get(unit_id_by_name[unit.name], (0, 1)),
                     )[0],
                 )
-                if effective_source_units == slot_units:
+                # TORS accepts a departing composition in either direction
+                # (ShuntingUnit::MatchesShuntingUnit), so a reversed match
+                # needs no split-and-recombine either.
+                if effective_source_units in (slot_units, slot_units[::-1]):
                     problem.set_initial_value(compiled_whole_target(source_su, request_su), True)
                     problem.set_initial_value(compiled_must_stay_coupled(source_su), True)
                     departure_su_by_source[source_su] = request_su
