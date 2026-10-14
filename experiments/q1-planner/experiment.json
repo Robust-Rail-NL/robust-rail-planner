@@ -1,0 +1,54 @@
+{
+    "name": "q1_planner_fix2_genmain_kleinebinckhorst_1to5",
+    "location": "Location_KleineBinckhorst",
+    "tools": [
+        "planner"
+    ],
+    "planner": "symbolic-rail",
+    "max_duration": 600,
+    "jobs": 4,
+    "versions": {
+        "generator": "local",
+        "planner": "local",
+        "evaluator": "local"
+    },
+    "scenario_config": {
+        "number_of_trains": [
+            1,
+            2,
+            3,
+            4,
+            5
+        ],
+        "number_of_instances": 5,
+        "matchings": [
+            "FIFO",
+            "LIFO",
+            "random"
+        ],
+        "seed": 42,
+        "time_window_per_train": 1440,
+        "mixed_traffic": false,
+        "min_gap_on_gateway": 480,
+        "perform_servicing": false,
+        "train_unit_types": [
+            "VIRM-4",
+            "VIRM-6",
+            "ICM-3",
+            "ICM-4",
+            "SNG-3",
+            "SNG-4",
+            "SLT-4",
+            "SLT-6"
+        ],
+        "super_type_ratio": 0.5,
+        "units_per_composition": [
+            1,
+            2,
+            3
+        ],
+        "instanding_ratio": 0.3,
+        "outstanding_ratio": 0.1
+    },
+    "departure_delay_fraction": 0.0
+}
