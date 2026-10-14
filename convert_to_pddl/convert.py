@@ -45,6 +45,26 @@ def _build_adjacency(location_object):
     return adjacency
 
 
+def _tracks_reachable_through_connectors(adjacency, track_part_by_id, start_id):
+    # Track parts with length reachable from start_id passing only zero-length
+    # parts (switches, connectors) on the way, i.e. without driving across
+    # another track that a train could be standing on.
+    reached = set()
+    seen = {start_id}
+    queue = deque([start_id])
+    while queue:
+        current = queue.popleft()
+        for nb in adjacency.get(current, ()):
+            if nb in seen:
+                continue
+            seen.add(nb)
+            if track_part_by_id.get(nb, {}).get("length", 0) > 0:
+                reached.add(nb)
+            else:
+                queue.append(nb)
+    return reached
+
+
 def _bfs_from(adjacency, start_ids):
     # Returns hop-distance from any of the start nodes to every reachable node.
     dist = {}
@@ -2062,10 +2082,17 @@ def create_instance_from_scenario(
                     )
                     # Let the planner pick any fitting parkable track to arrive
                     # on: forcing the nearest one (often the dead-end 906b) makes
-                    # every later move off it a reversal. Facing is still derived
+                    # every later move off it a reversal. Only tracks reached
+                    # through switches alone qualify, since arrive_su does not
+                    # check the route and TORS would drive across whatever
+                    # stands on a track in between. Facing is still derived
                     # from the nearest track alone, which assumes all candidates
                     # are entered from the same side (true for Kleine Binckhorst).
-                    arrival_options = sorted(_candidates, key=lambda pid: bfs_dist[pid])
+                    _direct = _tracks_reachable_through_connectors(adjacency, _track_part_by_id, _tid)
+                    arrival_options = sorted(
+                        [pid for pid in _candidates if pid in _direct] or [first_parking_track_id],
+                        key=lambda pid: bfs_dist[pid],
+                    )
                 else:
                     raise ValueError(f"No parkable track fits incoming train {train['id']}")
             initial_track_id = first_parking_track_id
