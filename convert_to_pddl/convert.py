@@ -45,6 +45,26 @@ def _build_adjacency(location_object):
     return adjacency
 
 
+def _tracks_reachable_through_connectors(adjacency, track_part_by_id, start_id):
+    # Track parts with length reachable from start_id passing only zero-length
+    # parts (switches, connectors) on the way, i.e. without driving across
+    # another track that a train could be standing on.
+    reached = set()
+    seen = {start_id}
+    queue = deque([start_id])
+    while queue:
+        current = queue.popleft()
+        for nb in adjacency.get(current, ()):
+            if nb in seen:
+                continue
+            seen.add(nb)
+            if track_part_by_id.get(nb, {}).get("length", 0) > 0:
+                reached.add(nb)
+            else:
+                queue.append(nb)
+    return reached
+
+
 def _bfs_from(adjacency, start_ids):
     # Returns hop-distance from any of the start nodes to every reachable node.
     dist = {}
@@ -2036,6 +2056,7 @@ def create_instance_from_scenario(
         initial_track_id = _train_initial_track_id(train, preferred_track_keys)
         first_parking_track_id = train.get("firstParkingTrackPart")
         raw_first_parking_track_id = first_parking_track_id
+        arrival_options = [first_parking_track_id]
         train_total_length = _train_total_length(train_unit_types, train)
 
         # The scenario's firstParkingTrackPart is often the non-parkable arrival
@@ -2059,6 +2080,19 @@ def create_instance_from_scenario(
                     first_parking_track_id = min(
                         _candidates, key=lambda pid: bfs_dist[pid]
                     )
+                    # Let the planner pick any fitting parkable track to arrive
+                    # on: forcing the nearest one (often the dead-end 906b) makes
+                    # every later move off it a reversal. Only tracks reached
+                    # through switches alone qualify, since arrive_su does not
+                    # check the route and TORS would drive across whatever
+                    # stands on a track in between. Facing is still derived
+                    # from the nearest track alone, which assumes all candidates
+                    # are entered from the same side (true for Kleine Binckhorst).
+                    _direct = _tracks_reachable_through_connectors(adjacency, _track_part_by_id, _tid)
+                    arrival_options = sorted(
+                        [pid for pid in _candidates if pid in _direct] or [first_parking_track_id],
+                        key=lambda pid: bfs_dist[pid],
+                    )
                 else:
                     raise ValueError(f"No parkable track fits incoming train {train['id']}")
             initial_track_id = first_parking_track_id
@@ -2081,7 +2115,9 @@ def create_instance_from_scenario(
         if source == "in":
             problem.set_initial_value(at_su(shunting_unit, phantom_track), True)
             if initial_track_id in id_to_track_part:
-                problem.set_initial_value(su_arrival_track(shunting_unit, id_to_track_part[initial_track_id]), True)
+                for option_id in arrival_options:
+                    if option_id in id_to_track_part:
+                        problem.set_initial_value(su_arrival_track(shunting_unit, id_to_track_part[option_id]), True)
             else:
                 raise ValueError(f"Unknown firstParkingTrackPart {first_parking_track_id} for incoming train {train['id']}")
         elif initial_track_id in id_to_track_part:
@@ -2121,12 +2157,13 @@ def create_instance_from_scenario(
             problem.set_initial_value(su_may_move(shunting_unit), True)
             if compile_precomputed_actions:
                 problem.set_initial_value(compiled_arrival_composition_su(shunting_unit), True)
-                uncouple_track_id = first_parking_track_id if source == "in" else initial_track_id
-                if uncouple_track_id in id_to_track_part:
-                    problem.set_initial_value(
-                        compiled_uncouple_track(shunting_unit, id_to_track_part[uncouple_track_id]),
-                        True,
-                    )
+                uncouple_track_ids = arrival_options if source == "in" else [initial_track_id]
+                for uncouple_track_id in uncouple_track_ids:
+                    if uncouple_track_id in id_to_track_part:
+                        problem.set_initial_value(
+                            compiled_uncouple_track(shunting_unit, id_to_track_part[uncouple_track_id]),
+                            True,
+                        )
         else:
             problem.set_initial_value(su_may_move(shunting_unit), True)
 
@@ -2336,7 +2373,10 @@ def create_instance_from_scenario(
                         unit_positions.get(unit_id_by_name[unit.name], (0, 1)),
                     )[0],
                 )
-                if effective_source_units == slot_units:
+                # TORS accepts a departing composition in either direction
+                # (ShuntingUnit::MatchesShuntingUnit), so a reversed match
+                # needs no split-and-recombine either.
+                if effective_source_units in (slot_units, slot_units[::-1]):
                     problem.set_initial_value(compiled_whole_target(source_su, request_su), True)
                     problem.set_initial_value(compiled_must_stay_coupled(source_su), True)
                     departure_su_by_source[source_su] = request_su

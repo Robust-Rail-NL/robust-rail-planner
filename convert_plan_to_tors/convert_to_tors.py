@@ -96,6 +96,11 @@ COMPILED_COUPLE_RE = re.compile(
 )
 
 
+IN_STANDING_NAME_RE = re.compile(r"^(?:su_)?train_in_standing_(\d+)$")
+# Below the ids handed to generated split/combine SUs (next_generated_su) and
+# far above any scenario train id.
+IN_STANDING_ID_OFFSET = 500000
+
 COMBINE_DURATION = 180
 SPLIT_DURATION = 120
 
@@ -109,6 +114,12 @@ def _as_id(value):
     if isinstance(value, dict):
         return _as_id(value["id"])
     text = str(value)
+    # An in-standing train is named by its index, not its scenario id, so
+    # stripping the prefix would give train_in_standing_0 the same id as
+    # incoming train0 and merge the two. Give them their own range instead.
+    standing = IN_STANDING_NAME_RE.match(text)
+    if standing:
+        return IN_STANDING_ID_OFFSET + int(standing.group(1))
     # PDDL object names carry prefixes the JSON does not: unit2801, su_train3.
     digits = re.sub(r"^\D+", "", text)
     if not digits.isdigit():
