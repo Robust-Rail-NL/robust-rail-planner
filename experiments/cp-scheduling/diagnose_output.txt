@@ -1,0 +1,79 @@
+scenario             TORS      GAP=1       GAP=0       GAP=0 noWait  pinnedExits
+custom_1_FIFO_0      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_1_FIFO_1      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_1_FIFO_2      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_1_FIFO_3      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_1_FIFO_4      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_1_LIFO_0      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_1_LIFO_1      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_1_LIFO_2      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_1_LIFO_3      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_1_LIFO_4      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_1_random_0    accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_1_random_1    accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_1_random_2    accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_1_random_3    accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_1_random_4    accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_2_FIFO_0      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_2_FIFO_1      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_2_FIFO_2      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_2_FIFO_3      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_2_FIFO_4      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_2_LIFO_0      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_2_LIFO_1      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_2_LIFO_2      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_2_LIFO_3      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_2_LIFO_4      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_2_random_0    accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_2_random_1    accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_2_random_2    accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_2_random_3    accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_2_random_4    accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_3_FIFO_0      rejected  INFEASIBLE  OPTIMAL     OPTIMAL       INFEASIBLE
+custom_3_FIFO_1      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_3_FIFO_2      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_3_FIFO_3      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_3_FIFO_4      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_3_LIFO_0      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_3_LIFO_1      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_3_LIFO_2      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_3_LIFO_3      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_3_LIFO_4      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_3_random_0    accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_3_random_1    accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_3_random_4    accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_4_FIFO_0      accepted  INFEASIBLE  INFEASIBLE  OPTIMAL       -
+custom_4_FIFO_1      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_4_FIFO_2      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_4_FIFO_3      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_4_FIFO_4      accepted  INFEASIBLE  INFEASIBLE  INFEASIBLE    -
+custom_4_LIFO_0      accepted  INFEASIBLE  INFEASIBLE  OPTIMAL       -
+custom_4_LIFO_1      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_4_LIFO_2      rejected  INFEASIBLE  OPTIMAL     OPTIMAL       INFEASIBLE
+custom_4_LIFO_3      accepted  INFEASIBLE  INFEASIBLE  INFEASIBLE    -
+custom_4_LIFO_4      accepted  INFEASIBLE  INFEASIBLE  INFEASIBLE    -
+custom_4_random_0    accepted  INFEASIBLE  INFEASIBLE  INFEASIBLE    -
+custom_4_random_2    accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_4_random_3    rejected  INFEASIBLE  OPTIMAL     OPTIMAL       INFEASIBLE
+custom_4_random_4    accepted  INFEASIBLE  INFEASIBLE  INFEASIBLE    -
+custom_5_FIFO_0      rejected  INFEASIBLE  INFEASIBLE  INFEASIBLE    INFEASIBLE
+custom_5_FIFO_1      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_5_FIFO_2      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_5_FIFO_3      rejected  INFEASIBLE  INFEASIBLE  INFEASIBLE    INFEASIBLE
+custom_5_FIFO_4      rejected  INFEASIBLE  INFEASIBLE  OPTIMAL       INFEASIBLE
+custom_5_LIFO_0      rejected  INFEASIBLE  INFEASIBLE  INFEASIBLE    INFEASIBLE
+custom_5_LIFO_1      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_5_LIFO_2      accepted  INFEASIBLE  OPTIMAL     OPTIMAL       -
+custom_5_LIFO_3      rejected  INFEASIBLE  INFEASIBLE  INFEASIBLE    INFEASIBLE
+custom_5_LIFO_4      rejected  INFEASIBLE  INFEASIBLE  OPTIMAL       INFEASIBLE
+custom_5_random_0    accepted  INFEASIBLE  INFEASIBLE  OPTIMAL       -
+custom_5_random_1    accepted  INFEASIBLE  INFEASIBLE  INFEASIBLE    -
+custom_5_random_4    rejected  INFEASIBLE  INFEASIBLE  OPTIMAL       INFEASIBLE
+
+summary (count: TORS, GAP=1, GAP=0, GAP=0 noWait, pinnedExits)
+   51: accepted, INFEASIBLE, OPTIMAL, OPTIMAL, -
+    6: accepted, INFEASIBLE, INFEASIBLE, INFEASIBLE, -
+    4: rejected, INFEASIBLE, INFEASIBLE, INFEASIBLE, INFEASIBLE
+    3: rejected, INFEASIBLE, OPTIMAL, OPTIMAL, INFEASIBLE
+    3: accepted, INFEASIBLE, INFEASIBLE, OPTIMAL, -
+    3: rejected, INFEASIBLE, INFEASIBLE, OPTIMAL, INFEASIBLE
