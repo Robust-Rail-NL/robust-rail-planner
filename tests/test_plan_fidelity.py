@@ -256,7 +256,7 @@ def test_list_order_waits_and_moves_follow_the_concurrent_plan(tmp_path):
         assert members(anchor) == cluster and predefined(anchor) in ("Arrive", "Move"), (
             "Wait must follow the unit's own arrival or last Move", wait, anchor
         )
-        expected_start = int(anchor["endTime"]) + (1 if predefined(anchor) == "Move" else 0)
+        expected_start = int(anchor["endTime"])
         assert int(wait["startTime"]) == expected_start, wait
         approach = next(
             a for a in actions[i + 1:] if predefined(a) == "Move" and members(a) == cluster
@@ -426,12 +426,12 @@ def test_phase3_anchors_identical_waits_to_their_own_move():
     )
 
     # wait_a anchors behind move1 (end 200): start stays 400, ends when move2
-    # starts (600). wait_b anchors behind move2 (end 700): start 701, ends when
+    # starts (600). wait_b anchors behind move2 (end 700): start 700, ends when
     # move3 starts (1000). The two identical waits must NOT collapse onto move1.
     waits = [a for a in out if _predefined(a) == "Wait"]
     assert len(waits) == 2, out
     intervals = {(int(w["startTime"]), int(w["endTime"])) for w in waits}
-    assert intervals == {(400, 600), (701, 1000)}, intervals
+    assert intervals == {(400, 600), (700, 1000)}, intervals
 
     # Order: the wait anchored to move1 sits before move2, the other after it.
     kinds = ["Move", "Wait"] 

@@ -66,7 +66,7 @@ def scenario_object():
 @pytest.fixture(scope="session")
 def pddl_files(tmp_path_factory):
     """Convert the simple-service fixture scenario+location into a PDDL domain/problem pair."""
-    from convert_to_pddl.baseline_no_parameters.convert import create_instance_from_scenario
+    from convert_to_pddl.convert import create_instance_from_scenario
 
     out_dir = tmp_path_factory.mktemp("pddl")
     domain_file = str(out_dir / "domain.pddl")
