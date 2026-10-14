@@ -1666,7 +1666,8 @@ def convert_plan(plan_file, scenario_file, location_file):
     # the scenario asks for. There is no relaxed second attempt: re-timing a
     # departure to make the arithmetic work would quietly turn a plan that
     # misses its deadline into one that appears to meet it.
-    assign_times(actions, scenario, location)
+    schedule = assign_times(actions, scenario, location)
+    print(f"CP schedule: {schedule}", file=sys.stderr)
 
     result = {
         "schemaVersion": SCHEMA_VERSION,
