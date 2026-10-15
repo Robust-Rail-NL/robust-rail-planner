@@ -1,0 +1,65 @@
+instance,tool,seed,reason,seconds
+custom_1_random_1,local_search,1,plan rejected,601.648
+custom_1_random_10,local_search,1,Adding ShuntingUnit-ShuntingUnit-0 to Track 906b exceeds the maximum length (270.620000 > 255.000000),602.812
+custom_1_random_11,local_search,1,Adding ShuntingUnit-ShuntingUnit-0 to Track 906b exceeds the maximum length (270.620000 > 255.000000),602.547
+custom_1_random_2,local_search,1,plan rejected,601.406
+custom_1_random_3,local_search,1,Adding ShuntingUnit-ShuntingUnit-0 to Track 906b exceeds the maximum length (270.620000 > 255.000000),601.773
+custom_1_random_4,local_search,1,Adding ShuntingUnit-ShuntingUnit-0 to Track 906b exceeds the maximum length (270.620000 > 255.000000),601.789
+custom_1_random_5,local_search,1,Adding ShuntingUnit-ShuntingUnit-0 to Track 906b exceeds the maximum length (270.620000 > 255.000000),601.612
+custom_2_random_0,local_search,1,plan rejected,602.219
+custom_2_random_12,local_search,1,plan rejected,603.608
+custom_2_random_13,local_search,1,Error in generating action (Combine: [1] and [0]): The action is invalid. The two shunting units are not on the same track,2.222
+custom_2_random_17,local_search,1,plan rejected,602.092
+custom_2_random_2,local_search,1,plan rejected,601.917
+custom_2_random_6,local_search,1,plan rejected,602.66
+custom_2_random_8,local_search,1,plan rejected,601.969
+custom_3_random_10,local_search,1,plan rejected,602.999
+custom_3_random_11,local_search,1,plan rejected,604.8
+custom_3_random_12,local_search,1,Adding ShuntingUnit-ShuntingUnit-0 to Track 57 exceeds the maximum length (270.620000 > 202.000000),602.956
+custom_3_random_13,local_search,1,plan rejected,603.084
+custom_3_random_15,local_search,1,plan rejected,604.326
+custom_3_random_16,local_search,1,plan rejected,607.238
+custom_3_random_17,local_search,1,plan rejected,602.717
+custom_3_random_19,local_search,1,plan rejected,603.925
+custom_3_random_2,local_search,1,Adding ShuntingUnit-ShuntingUnit-2 to Track 60 exceeds the maximum length (325.680000 > 248.000000),603.67
+custom_3_random_3,local_search,1,plan rejected,605.432
+custom_3_random_5,local_search,1,plan rejected,603.461
+custom_3_random_7,local_search,1,plan rejected,603.071
+custom_3_random_9,local_search,1,plan rejected,603.465
+custom_4_LIFO_7,local_search,1,Adding ShuntingUnit-ShuntingUnit-0 to Track 52 exceeds the maximum length (549.080000 > 480.000000),3.339
+custom_4_random_0,local_search,1,Adding ShuntingUnit-ShuntingUnit-2 to Track 60 exceeds the maximum length (270.620000 > 248.000000),605.252
+custom_4_random_1,local_search,1,plan rejected,604.721
+custom_4_random_10,local_search,1,plan rejected,604.026
+custom_4_random_11,local_search,1,Adding ShuntingUnit-ShuntingUnit-1 to Track 906a exceeds the maximum length (426.220000 > 326.000000),603.53
+custom_4_random_12,local_search,1,Error in generating action (Combine: [1] and [0]): The action is invalid. The two shunting units are not facing the same direction,603.152
+custom_4_random_13,local_search,1,Error in generating action (Combine: [0] and [1]): The action is invalid. The two shunting units are not facing the same direction,2.922
+custom_4_random_15,local_search,1,plan rejected,604.309
+custom_4_random_16,local_search,1,Adding ShuntingUnit-ShuntingUnit-0 to Track 59 exceeds the maximum length (325.680000 > 271.000000),603.389
+custom_4_random_17,local_search,1,Error in generating action (Combine: [2] and [0]): The action is invalid. The two shunting units are not on the same track,3.178
+custom_4_random_18,local_search,1,Error in generating action (Combine: [3] and [2]): The action is invalid. The two shunting units are not on the same track,3.173
+custom_4_random_2,local_search,1,plan rejected,603.115
+custom_4_random_3,local_search,1,Adding ShuntingUnit-ShuntingUnit-3 to Track 56 exceeds the maximum length (270.620000 > 222.000000),601.549
+custom_4_random_4,local_search,1,Adding ShuntingUnit-ShuntingUnit-1 to Track 906b exceeds the maximum length (270.620000 > 255.000000),603.228
+custom_4_random_5,local_search,1,plan rejected,603.771
+custom_4_random_6,local_search,1,plan rejected,603.641
+custom_4_random_8,local_search,1,Error in generating action (Combine: [1] and [5]): The action is invalid. The two shunting units are not on the same track,3.832
+custom_4_random_9,local_search,1,plan rejected,3.03
+custom_5_FIFO_18,local_search,1,Adding ShuntingUnit-ShuntingUnit-2 to Track 59 exceeds the maximum length (331.100000 > 271.000000),3.715
+custom_5_FIFO_5,local_search,1,Adding ShuntingUnit-ShuntingUnit-4 to Track 52 exceeds the maximum length (594.740000 > 480.000000),3.322
+custom_5_FIFO_6,local_search,1,Adding ShuntingUnit-ShuntingUnit-4 to Track 53 exceeds the maximum length (438.200000 > 431.000000),3.725
+custom_5_LIFO_15,local_search,1,Adding ShuntingUnit-ShuntingUnit-3 to Track 53 exceeds the maximum length (565.420000 > 431.000000),3.829
+custom_5_LIFO_5,local_search,1,"Track 52, id 1 is occupied",3.523
+custom_5_random_0,local_search,1,plan rejected,604.355
+custom_5_random_1,local_search,1,plan rejected,605.319
+custom_5_random_11,local_search,1,Error in generating action (Combine: [2] and [1]): The action is invalid. The two shunting units are not facing the same direction,3.826
+custom_5_random_12,local_search,1,"Error in generating action (Wait: [4, 5]): The action is invalid. The ShuntingUnit is already waiting",603.525
+custom_5_random_14,local_search,1,plan rejected,606.152
+custom_5_random_16,local_search,1,"Error in generating action (Wait: [5, 4]): The action is invalid. The ShuntingUnit is already waiting",5.549
+custom_5_random_17,local_search,1,Adding ShuntingUnit-ShuntingUnit-4 to Track 56 exceeds the maximum length (324.120000 > 222.000000),605.388
+custom_5_random_19,local_search,1,plan rejected,3.401
+custom_5_random_2,local_search,1,plan rejected,2.929
+custom_5_random_3,local_search,1,Adding ShuntingUnit-ShuntingUnit-1 to Track 58 exceeds the maximum length (270.620000 > 203.000000),604.085
+custom_5_random_4,local_search,1,Adding ShuntingUnit-ShuntingUnit-4 to Track 52 exceeds the maximum length (602.580000 > 480.000000),603.553
+custom_5_random_5,local_search,1,Parking is not allowed on track 906a,604.924
+custom_5_random_6,local_search,1,plan rejected,604.327
+custom_5_random_7,local_search,1,plan rejected,604.55

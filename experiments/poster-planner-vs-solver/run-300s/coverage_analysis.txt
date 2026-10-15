@@ -1,0 +1,51 @@
+RQ1: Coverage (local_search vs. planning)
+
+--- Known-feasible subset (primary) (n=265) ---
+  local_search coverage: 236/265 = 0.891  95% CI [0.847, 0.923]
+  planning     coverage: 239/265 = 0.902  95% CI [0.860, 0.932]
+  paired: both=210  local_search only=26  planning only=29  neither=0
+  McNemar exact test (discordant pairs=55): p=0.7877
+
+--- Full instance set (secondary, denominator=300) (n=300) ---
+  local_search coverage: 236/300 = 0.787  95% CI [0.737, 0.829]
+  planning     coverage: 239/300 = 0.797  95% CI [0.748, 0.838]
+  paired: both=210  local_search only=26  planning only=29  neither=35
+  McNemar exact test (discordant pairs=55): p=0.7877
+
+Per matching strategy (same instances, grouped)
+
+--- matching=FIFO (n=100) ---
+  local_search coverage: 97/100 = 0.970  95% CI [0.915, 0.990]
+  planning     coverage: 87/100 = 0.870  95% CI [0.790, 0.922]
+  paired: both=85  local_search only=12  planning only=2  neither=1
+  McNemar exact test (discordant pairs=14): p=0.0129
+
+--- matching=LIFO (n=100) ---
+  local_search coverage: 97/100 = 0.970  95% CI [0.915, 0.990]
+  planning     coverage: 87/100 = 0.870  95% CI [0.790, 0.922]
+  paired: both=86  local_search only=11  planning only=1  neither=2
+  McNemar exact test (discordant pairs=12): p=0.0063
+
+--- matching=random (n=100) ---
+  local_search coverage: 42/100 = 0.420  95% CI [0.328, 0.518]
+  planning     coverage: 65/100 = 0.650  95% CI [0.553, 0.736]
+  paired: both=39  local_search only=3  planning only=26  neither=32
+  McNemar exact test (discordant pairs=29): p=0.0000
+
+Percent of instances solved and evaluator-accepted, by number of trains and matching (solved/total in brackets)
+
+local_search:
+  trains            FIFO            LIFO         random
+       1  100.0% (20/20)  100.0% (20/20)  65.0% (13/20)
+       2  100.0% (20/20)  100.0% (20/20)  65.0% (13/20)
+       3  100.0% (20/20)  100.0% (20/20)   35.0% (7/20)
+       4  100.0% (20/20)   95.0% (19/20)   15.0% (3/20)
+       5   85.0% (17/20)   90.0% (18/20)   30.0% (6/20)
+
+planning:
+  trains            FIFO            LIFO          random
+       1  100.0% (20/20)  100.0% (20/20)  100.0% (20/20)
+       2   95.0% (19/20)   95.0% (19/20)   95.0% (19/20)
+       3   90.0% (18/20)  100.0% (20/20)   55.0% (11/20)
+       4   80.0% (16/20)   80.0% (16/20)    35.0% (7/20)
+       5   70.0% (14/20)   60.0% (12/20)    40.0% (8/20)
