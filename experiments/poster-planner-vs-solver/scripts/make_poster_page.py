@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """Build the one-page poster summary (one table, two charts) from a results directory.
 
-    python3 make_poster_page.py <results-dir> <out.html> [--pdf out.pdf] [--timing-note TEXT]
+    python3 make_poster_page.py <results-dir> <out.html> [--pdf out.pdf]
+        [--timing-repeats DIR [DIR ...]] [--timing-note TEXT]
 
 The page is a single self-contained HTML file (inline SVG, no scripts). `--pdf`
 prints it to one A4 page with headless Chromium, which must be on the PATH as
-`chromium` or `chromium-browser`. `--timing-note` is added under the time chart,
-for example to explain a start-of-sweep slowdown (see startup_effect.py). Only
-reads <results-dir>.
+`chromium` or `chromium-browser`. `--timing-repeats` takes the results
+directories of repeated planner-only runs of some of the same scenarios (for
+example the 1 to 3 train cells). For the train counts they cover, the planner's
+time in the time chart is then the median, over the scenarios that every
+repetition solved, of each scenario's median time over the repetitions; other
+train counts keep the single sweep's median. `--timing-note` adds a free-text
+note under the time chart. Only reads the results directories.
 """
 
 import argparse
@@ -41,6 +46,18 @@ th,td{border:1px solid #ccc;padding:3px 7px;text-align:right} th{text-align:cent
 
 def pct(a, b):
     return f"{100 * a / b:.0f}%" if b else "-"
+
+
+def repeated_planner_medians(repeat_dirs):
+    """train count -> median over scenarios of the scenario's median planner
+    time across the repetitions, for scenarios every repetition solved."""
+    per_rep = [{r["instance"]: r for r in rl.runs(d) if r["tool"] == "planner"} for d in repeat_dirs]
+    medians = collections.defaultdict(list)
+    for instance in sorted(set.intersection(*(set(p) for p in per_rep))):
+        runs = [p[instance] for p in per_rep]
+        if all(r["accepted"] for r in runs):
+            medians[runs[0]["trains"]].append(statistics.median(r["seconds"] for r in runs))
+    return {n: statistics.median(v) for n, v in medians.items()}
 
 
 def collect(results):
@@ -90,7 +107,7 @@ def _axes(width, left, bottom, top, ticks, ymap):
     return out
 
 
-def time_chart(secs, trains):
+def time_chart(secs, trains, planner_override=None):
     width, height, left, bottom, top = 420, 240, 40, 36, 16
     plot_w, plot_h = width - left - 10, height - bottom - top
     top_log = math.log10(200)
@@ -102,9 +119,12 @@ def time_chart(secs, trains):
     for i, n in enumerate(trains):
         x0 = left + i * group_w + group_w * 0.15
         for j, (colour, tool) in enumerate(((PLANNER_COLOUR, "planner"), (SOLVER_COLOUR, "solver"))):
-            if not secs[(tool, n)]:
+            if tool == "planner" and n in (planner_override or {}):
+                value = planner_override[n]
+            elif secs[(tool, n)]:
+                value = statistics.median(secs[(tool, n)])
+            else:
                 continue
-            value = statistics.median(secs[(tool, n)])
             y = ymap(value)
             out.append(f'<rect x="{x0 + j * bar_w:.1f}" y="{y:.1f}" width="{bar_w - 1:.1f}" height="{top + plot_h - y:.1f}" fill="{colour}"/>'
                        f'<text x="{x0 + j * bar_w + bar_w / 2 - .5:.1f}" y="{y - 3:.1f}" font-size="9" text-anchor="middle" fill="#333">{value:.0f}</text>')
@@ -141,7 +161,7 @@ def legend(items):
     return '<div class="legend">' + "".join(f'<span><i style="background:{c}"></i>{l}</span>' for l, c in items) + "</div>"
 
 
-def build(results, timing_note=""):
+def build(results, timing_note="", repeat_dirs=()):
     exp = rl.load_experiment(results)
     cells, secs, fails = collect(results)
     trains = sorted({k[1] for k in cells})
@@ -150,13 +170,24 @@ def build(results, timing_note=""):
     total = per_cell * len(trains) * len(matchings)
     ok = {t: sum(c[1] for k, c in cells.items() if k[0] == t) for t in rl.TOOLS}
     versions = exp.get("versions", {})
-    note = f" {timing_note}" if timing_note else ""
+    override = repeated_planner_medians(repeat_dirs) if repeat_dirs else {}
+    medians = {t: [override[n] if t == "planner" and n in override else statistics.median(secs[(t, n)])
+                   for n in trains if secs[(t, n)] or (t == "planner" and n in override)] for t in rl.TOOLS}
+    span = lambda v: f"{min(v):.0f}&ndash;{max(v):.0f}"
+    parts = []
+    if override:
+        lo, hi = min(override), max(override)
+        parts.append(f"Planner times for {lo}&ndash;{hi} trains are the median over {len(repeat_dirs)} repetition{"s" if len(repeat_dirs) != 1 else ""} of those scenarios; "
+                     f"other train counts come from the single sweep.")
+    if timing_note:
+        parts.append(timing_note)
+    note = (" " + " ".join(parts)) if parts else ""
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Planner evaluation: poster panels</title><style>{CSS}</style></head><body>
 <h1>Planner vs solver on generated Kleine Binckhorst scenarios</h1>
 <p class="setup">{per_cell} scenarios per cell, {len(trains)} train counts &times; {len(matchings)} matchings = {total} scenarios; planner ({exp.get("planner")}, image <code>{versions.get("planner")}</code>) and solver run on identical instances; generator, solver and evaluator <code>{versions.get("generator")}</code>/<code>{versions.get("solver")}</code>/<code>{versions.get("evaluator")}</code>; no servicing; <b>{exp.get("max_duration")} s per scenario for both tools</b>. A scenario counts as solved only if the TORS evaluator accepts the plan.</p>
 <h2>1. How many scenarios are solved?</h2><p class="msg">Overall the two tools are level ({pct(ok["planner"], total)} planner, {pct(ok["solver"], total)} solver). The planner is clearly ahead on random matching; the solver is ahead on FIFO and LIFO.</p>{table_html(cells, trains, matchings)}
-<h2>2. Time to a plan</h2><p class="msg">The solver needs about 2&ndash;3 s; the planner needs about 23&ndash;30 s at 2&ndash;5 trains.</p><div class="one">{time_chart(secs, trains)}</div>{legend([("planner", PLANNER_COLOUR), ("solver", SOLVER_COLOUR)])}
+<h2>2. Time to a plan</h2><p class="msg">The solver needs about {span(medians["solver"])} s; the planner needs about {span(medians["planner"])} s.</p><div class="one">{time_chart(secs, trains, override)}</div>{legend([("planner", PLANNER_COLOUR), ("solver", SOLVER_COLOUR)])}
 <p class="y">y-axis: median seconds to an accepted plan (log scale).{note}</p>
 <h2>3. Why the planner fails</h2><p class="msg">Failures start at 2&ndash;3 trains and are dominated by late departures and search timeouts.</p><div class="one">{failure_chart(fails, trains, per_cell * len(matchings))}</div>{legend([(l, c) for _, l, c in CAUSES])}
 <p class="y">y-axis: % of the planner's scenarios at that train count ({per_cell * len(matchings)} each) that fail, by cause.</p>
@@ -168,10 +199,11 @@ def main():
     ap.add_argument("results")
     ap.add_argument("out_html")
     ap.add_argument("--pdf")
+    ap.add_argument("--timing-repeats", nargs="+", default=[], metavar="DIR")
     ap.add_argument("--timing-note", default="")
     args = ap.parse_args()
     with open(args.out_html, "w") as f:
-        f.write(build(args.results, args.timing_note))
+        f.write(build(args.results, args.timing_note, args.timing_repeats))
     if args.pdf:
         browser = shutil.which("chromium") or shutil.which("chromium-browser")
         if not browser:

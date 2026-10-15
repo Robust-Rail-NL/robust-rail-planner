@@ -46,11 +46,13 @@ def print_accepted(cells):
         for t in rl.TOOLS:
             ok = sum(cells[(t, n, m)]["ok"] for n in trains)
             n_all = sum(cells[(t, n, m)]["n"] for n in trains)
-            print(f"  {m:6s} {t:8s} {ok}/{n_all} = {100 * ok / n_all:.0f}%")
+            if n_all:
+                print(f"  {m:6s} {t:8s} {ok}/{n_all} = {100 * ok / n_all:.0f}%")
     for t in rl.TOOLS:
         ok = sum(c["ok"] for k, c in cells.items() if k[0] == t)
         n_all = sum(c["n"] for k, c in cells.items() if k[0] == t)
-        print(f"  all    {t:8s} {ok}/{n_all} = {100 * ok / n_all:.0f}%")
+        if n_all:
+            print(f"  all    {t:8s} {ok}/{n_all} = {100 * ok / n_all:.0f}%")
 
 
 def print_causes(table):

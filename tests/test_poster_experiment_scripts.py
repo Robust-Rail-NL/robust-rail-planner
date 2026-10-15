@@ -93,3 +93,41 @@ def test_poster_page_builds(results):
     import make_poster_page
     html = make_poster_page.build(results, timing_note="a note")
     assert "<svg" in html and "a note" in html and "FIFO" in html
+
+
+def _repeat_dir(tmp_path, name, rows):
+    d = tmp_path / name
+    d.mkdir()
+    _write(str(d / "experiment.json"), {"max_duration": 300})
+    with open(d / "runs.csv", "w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["instance", "tool", "seed", "plan_found", "timed_out", "valid_plan", "seconds"])
+        for instance, valid, secs in rows:
+            w.writerow([instance, "planning", "", "yes", "no", valid, secs])
+    return str(d)
+
+
+def test_repeated_planner_medians_use_scenarios_solved_in_every_repetition(tmp_path):
+    import make_poster_page
+    rep1 = _repeat_dir(tmp_path, "rep1", [("custom_1_FIFO_0", "yes", 20), ("custom_1_FIFO_1", "yes", 22),
+                                          ("custom_2_FIFO_0", "yes", 40)])
+    rep2 = _repeat_dir(tmp_path, "rep2", [("custom_1_FIFO_0", "yes", 30), ("custom_1_FIFO_1", "no", 300),
+                                          ("custom_2_FIFO_0", "yes", 50)])
+    # custom_1_FIFO_1 failed in rep2 and is left out; the others use their own median over the reps.
+    assert make_poster_page.repeated_planner_medians([rep1, rep2]) == {1: 25, 2: 45}
+
+
+def test_poster_page_uses_repeats_for_planner_time(results, tmp_path):
+    import make_poster_page
+    rep = _repeat_dir(tmp_path, "rep", [("custom_1_FIFO_0", "yes", 77)])
+    html = make_poster_page.build(results, repeat_dirs=[rep])
+    assert ">77<" in html
+    assert "median over 1 repetition of those" in html
+
+
+def test_analyze_run_handles_a_planner_only_run(tmp_path, capsys):
+    import analyze_run
+    rep = _repeat_dir(tmp_path, "rep", [("custom_1_FIFO_0", "yes", 20), ("custom_2_FIFO_0", "no", 30)])
+    analyze_run.print_accepted(analyze_run.tables(rep))
+    out = capsys.readouterr().out
+    assert "planner" in out and "1/2 = 50%" in out
