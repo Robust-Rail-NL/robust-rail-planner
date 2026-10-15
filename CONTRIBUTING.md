@@ -100,3 +100,35 @@ Whatever version string a build embeds (stable or edge) also becomes
 [`.github/workflows/schema.yml`](.github/workflows/schema.yml), since it
 only ever gains work via direct `git merge --no-ff`, never a GitHub PR
 targeting it.
+
+## Reproducing a CI failure locally
+
+CI runs the test suite inside the planner image, not on the runner, and that
+differs from a plain host `pytest` in ways that have bitten before: the image
+has an older Python than a typical dev machine, it contains only what
+[`.dockerignore`](.dockerignore) allowlists (so a test that reads a new
+directory fails there until it is allowed in), and it is the only place the
+Julia backend is instantiated (on the host those tests skip).
+
+To run what CI runs, from the repo root with a `robust-rail-general` checkout
+next to it:
+
+```
+docker build -t planner:ci .
+docker run --rm \
+  -e RRN_INPUTS_DIR=/siblings/robust-rail-general \
+  -v "$PWD/../robust-rail-general:/siblings/robust-rail-general:ro" \
+  --entrypoint sh planner:ci -c '
+    pip install --quiet --no-cache-dir -r requirements-test.txt jsonschema &&
+    python3 -m pytest tests -q -rs
+  '
+```
+
+This mirrors the "Test inside the image" step in
+[`schema.yml`](.github/workflows/schema.yml); if that step changes, update
+this block too. The build copies the working tree, so uncommitted files end up
+in the image — commit first for a faithful reproduction.
+
+`schema.yml` runs on pushes to `main` and `edge` and on pull requests
+targeting `main`, not on other branch pushes. To get CI on a change before it
+lands on `main`, open a PR and wait for it to go green.
