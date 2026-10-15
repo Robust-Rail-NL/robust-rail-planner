@@ -54,7 +54,8 @@ The planner's 61 failures: 33 late or early departures (the PDDL model has no no
 - `scripts/`: the scripts below.
 - `../../tests/test_poster_experiment_scripts.py`: tests for the scripts over a small fake results directory.
 
-The raw results directories (every scenario, plan and TORS trace, about 58 MB per sweep) are not stored in git. They will be attached to a GitHub release of this repository as one tarball, `poster-sweeps-raw.tar.gz`, containing `run-300s/`, `run-600s/` and `timing-rep1/` to `timing-rep5/`; the release link and checksum are added here when it exists. The scripts below read such a directory, so with the raw data they reproduce everything in this folder.
+The raw results directories (every scenario, plan and TORS trace, about 58 MB per sweep) are not stored in git. They are attached to the GitHub release `data-poster-sweeps-2026-10` as one tarball, `poster-sweeps-raw.tar.gz` (10.4 MB, sha256 `aea7f349c25d7697d1fc238dc6b0c94bacc3eb4a26a62a321e37fac6c0320423`):
+<https://github.com/Robust-Rail-NL/robust-rail-planner/releases/download/data-poster-sweeps-2026-10/poster-sweeps-raw.tar.gz>. It unpacks to `poster-sweeps-raw/` with `run-300s/`, `run-600s/` and `timing-rep1/` to `timing-rep5/`. The scripts below read such a directory, so with the raw data they reproduce everything in this folder.
 
 ## Reproducing the tables and charts
 
