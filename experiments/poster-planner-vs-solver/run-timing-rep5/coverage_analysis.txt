@@ -1,0 +1,47 @@
+RQ1: Coverage (local_search vs. planning)
+
+--- Known-feasible subset (primary) (n=166) ---
+  local_search coverage: 0/166 = 0.000  95% CI [0.000, 0.023]
+  planning     coverage: 166/166 = 1.000  95% CI [0.977, 1.000]
+  paired: both=0  local_search only=0  planning only=166  neither=0
+  McNemar exact test (discordant pairs=166): p=0.0000
+
+--- Full instance set (secondary, denominator=180) (n=180) ---
+  local_search coverage: 0/180 = 0.000  95% CI [0.000, 0.021]
+  planning     coverage: 166/180 = 0.922  95% CI [0.874, 0.953]
+  paired: both=0  local_search only=0  planning only=166  neither=14
+  McNemar exact test (discordant pairs=166): p=0.0000
+
+Per matching strategy (same instances, grouped)
+
+--- matching=FIFO (n=60) ---
+  local_search coverage: 0/60 = 0.000  95% CI [0.000, 0.060]
+  planning     coverage: 57/60 = 0.950  95% CI [0.863, 0.983]
+  paired: both=0  local_search only=0  planning only=57  neither=3
+  McNemar exact test (discordant pairs=57): p=0.0000
+
+--- matching=LIFO (n=60) ---
+  local_search coverage: 0/60 = 0.000  95% CI [0.000, 0.060]
+  planning     coverage: 59/60 = 0.983  95% CI [0.911, 0.997]
+  paired: both=0  local_search only=0  planning only=59  neither=1
+  McNemar exact test (discordant pairs=59): p=0.0000
+
+--- matching=random (n=60) ---
+  local_search coverage: 0/60 = 0.000  95% CI [0.000, 0.060]
+  planning     coverage: 50/60 = 0.833  95% CI [0.720, 0.907]
+  paired: both=0  local_search only=0  planning only=50  neither=10
+  McNemar exact test (discordant pairs=50): p=0.0000
+
+Percent of instances solved and evaluator-accepted, by number of trains and matching (solved/total in brackets)
+
+local_search:
+  trains         FIFO         LIFO       random
+       1  0.0% (0/20)  0.0% (0/20)  0.0% (0/20)
+       2  0.0% (0/20)  0.0% (0/20)  0.0% (0/20)
+       3  0.0% (0/20)  0.0% (0/20)  0.0% (0/20)
+
+planning:
+  trains            FIFO            LIFO          random
+       1  100.0% (20/20)  100.0% (20/20)  100.0% (20/20)
+       2   95.0% (19/20)   95.0% (19/20)   95.0% (19/20)
+       3   90.0% (18/20)  100.0% (20/20)   55.0% (11/20)
