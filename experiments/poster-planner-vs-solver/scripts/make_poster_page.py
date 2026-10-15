@@ -177,7 +177,7 @@ def build(results, timing_note="", repeat_dirs=()):
     parts = []
     if override:
         lo, hi = min(override), max(override)
-        parts.append(f"Planner times for {lo}&ndash;{hi} trains are the median over {len(repeat_dirs)} repetition{"s" if len(repeat_dirs) != 1 else ""} of those scenarios; "
+        parts.append(f"Planner times for {lo}&ndash;{hi} trains are the median over {len(repeat_dirs)} repetition{'s' if len(repeat_dirs) != 1 else ''} of those scenarios; "
                      f"other train counts come from the single sweep.")
     if timing_note:
         parts.append(timing_note)
