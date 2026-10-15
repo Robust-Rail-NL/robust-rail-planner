@@ -21,6 +21,10 @@
 !tests/
 !pytest.ini
 
+# tests/test_poster_experiment_scripts.py imports these (it writes its own
+# fixture data). Scripts only: not the experiment's results or instances. ~36K.
+!experiments/poster-planner-vs-solver/scripts/
+
 !requirements.txt
 !requirements-test.txt
 
