@@ -1,0 +1,15 @@
+instance,tool,seed,reason,seconds
+custom_2_FIFO_12,planning,,plan rejected,23.034
+custom_2_LIFO_17,planning,,plan rejected,24.123
+custom_2_random_12,planning,,plan rejected,20.937
+custom_3_FIFO_0,planning,,plan rejected,21.076
+custom_3_FIFO_9,planning,,plan rejected,28.85
+custom_3_random_11,planning,,timed out after 300s,300.063
+custom_3_random_12,planning,,timed out after 300s,300.053
+custom_3_random_13,planning,,plan rejected,33.157
+custom_3_random_15,planning,,timed out after 300s,300.013
+custom_3_random_16,planning,,timed out after 300s,300.013
+custom_3_random_19,planning,,timed out after 300s,300.013
+custom_3_random_2,planning,,timed out after 300s,300.015
+custom_3_random_3,planning,,timed out after 300s,300.016
+custom_3_random_7,planning,,plan rejected,32.101

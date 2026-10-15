@@ -1,0 +1,17 @@
+Accepted / total (median seconds of accepted runs)
+trains | FIFO planner | FIFO solver | LIFO planner | LIFO solver | random planner | random solver 
+     1 | 20/20 (22s) | 0/0 (-) | 20/20 (22s) | 0/0 (-) | 20/20 (22s) | 0/0 (-) 
+     2 | 19/20 (22s) | 0/0 (-) | 19/20 (23s) | 0/0 (-) | 19/20 (22s) | 0/0 (-) 
+     3 | 18/20 (23s) | 0/0 (-) | 20/20 (24s) | 0/0 (-) | 11/20 (22s) | 0/0 (-) 
+
+Totals
+  FIFO   planner  57/60 = 95%
+  LIFO   planner  59/60 = 98%
+  random planner  50/60 = 83%
+  all    planner  166/180 = 92%
+
+planner failure causes (total 14)
+    7  late/early departure   by trains: {2: 3, 3: 4}
+    7  timeout   by trains: {3: 7}
+
+solver failure causes (total 0)

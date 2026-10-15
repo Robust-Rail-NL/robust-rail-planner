@@ -1,0 +1,30 @@
+Accepted / total (median seconds of accepted runs)
+trains | FIFO planner | FIFO solver | LIFO planner | LIFO solver | random planner | random solver 
+     1 | 20/20 (38s) | 20/20 (4s) | 20/20 (26s) | 20/20 (2s) | 20/20 (32s) | 13/20 (2s) 
+     2 | 19/20 (37s) | 20/20 (2s) | 19/20 (23s) | 20/20 (3s) | 19/20 (30s) | 13/20 (3s) 
+     3 | 18/20 (24s) | 20/20 (3s) | 20/20 (25s) | 20/20 (3s) | 11/20 (29s) | 7/20 (4s) 
+     4 | 16/20 (26s) | 20/20 (3s) | 16/20 (27s) | 19/20 (3s) | 7/20 (26s) | 3/20 (3s) 
+     5 | 14/20 (29s) | 17/20 (3s) | 12/20 (28s) | 18/20 (4s) | 8/20 (27s) | 6/20 (3s) 
+
+Totals
+  FIFO   planner  87/100 = 87%
+  FIFO   solver   97/100 = 97%
+  LIFO   planner  87/100 = 87%
+  LIFO   solver   97/100 = 97%
+  random planner  65/100 = 65%
+  random solver   42/100 = 42%
+  all    planner  239/300 = 80%
+  all    solver   236/300 = 79%
+
+planner failure causes (total 61)
+   35  late/early departure   by trains: {2: 3, 3: 4, 4: 14, 5: 14}
+   24  timeout   by trains: {3: 7, 4: 7, 5: 10}
+    2  track conflict   by trains: {5: 2}
+
+solver failure causes (total 64)
+   29  late/early departure   by trains: {1: 2, 2: 6, 3: 11, 4: 5, 5: 5}
+   20  unit longer than track   by trains: {1: 5, 3: 2, 4: 6, 5: 7}
+    7  invalid Combine action   by trains: {2: 1, 4: 5, 5: 1}
+    5  other   by trains: {4: 2, 5: 3}
+    2  invalid Wait action   by trains: {5: 2}
+    1  parking not allowed   by trains: {5: 1}
