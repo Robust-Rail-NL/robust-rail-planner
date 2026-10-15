@@ -1,0 +1,62 @@
+instance,tool,seed,reason,seconds
+custom_2_FIFO_12,planning,,plan rejected,36.744
+custom_2_LIFO_17,planning,,plan rejected,23.035
+custom_2_random_12,planning,,plan rejected,32.972
+custom_3_FIFO_0,planning,,plan rejected,30.541
+custom_3_FIFO_9,planning,,plan rejected,24.735
+custom_3_random_11,planning,,timed out after 600s,600.268
+custom_3_random_12,planning,,timed out after 600s,600.232
+custom_3_random_13,planning,,plan rejected,38.857
+custom_3_random_15,planning,,timed out after 600s,600.012
+custom_3_random_16,planning,,timed out after 600s,600.149
+custom_3_random_19,planning,,timed out after 600s,600.113
+custom_3_random_2,planning,,timed out after 600s,600.376
+custom_3_random_3,planning,,timed out after 600s,600.013
+custom_3_random_7,planning,,plan rejected,34.397
+custom_4_FIFO_11,planning,,plan rejected,28.425
+custom_4_FIFO_16,planning,,plan rejected,24.583
+custom_4_FIFO_7,planning,,plan rejected,25.958
+custom_4_FIFO_8,planning,,plan rejected,24.824
+custom_4_LIFO_11,planning,,plan rejected,33.645
+custom_4_LIFO_14,planning,,plan rejected,30.9
+custom_4_LIFO_2,planning,,plan rejected,36.657
+custom_4_LIFO_7,planning,,plan rejected,27.106
+custom_4_random_1,planning,,timed out after 600s,600.02
+custom_4_random_10,planning,,timed out after 600s,600.024
+custom_4_random_11,planning,,timed out after 600s,600.012
+custom_4_random_13,planning,,plan rejected,23.716
+custom_4_random_15,planning,,timed out after 600s,600.013
+custom_4_random_16,planning,,timed out after 600s,600.018
+custom_4_random_17,planning,,plan rejected,22.263
+custom_4_random_18,planning,,plan rejected,451.13
+custom_4_random_3,planning,,plan rejected,29.231
+custom_4_random_5,planning,,timed out after 600s,600.013
+custom_4_random_6,planning,,timed out after 600s,600.011
+custom_4_random_7,planning,,plan rejected,22.401
+custom_4_random_8,planning,,plan rejected,26.602
+custom_5_FIFO_0,planning,,plan rejected,24.017
+custom_5_FIFO_11,planning,,plan rejected,404.125
+custom_5_FIFO_16,planning,,plan rejected,181.301
+custom_5_FIFO_3,planning,,plan rejected,22.811
+custom_5_FIFO_4,planning,,plan rejected,25.574
+custom_5_FIFO_5,planning,,Track 906a is reserved,26.941
+custom_5_LIFO_0,planning,,plan rejected,27.227
+custom_5_LIFO_11,planning,,timed out after 600s,600.062
+custom_5_LIFO_16,planning,,plan rejected,257.574
+custom_5_LIFO_19,planning,,plan rejected,25.961
+custom_5_LIFO_3,planning,,plan rejected,28.202
+custom_5_LIFO_4,planning,,plan rejected,32.712
+custom_5_LIFO_5,planning,,Track 906a is reserved,26.93
+custom_5_LIFO_6,planning,,plan rejected,25.071
+custom_5_random_10,planning,,timed out after 600s,600.016
+custom_5_random_11,planning,,timed out after 600s,600.01
+custom_5_random_12,planning,,timed out after 600s,600.019
+custom_5_random_14,planning,,timed out after 600s,600.037
+custom_5_random_17,planning,,timed out after 600s,600.015
+custom_5_random_2,planning,,timed out after 600s,600.013
+custom_5_random_3,planning,,timed out after 600s,600.024
+custom_5_random_4,planning,,plan rejected,33.421
+custom_5_random_5,planning,,timed out after 600s,600.013
+custom_5_random_6,planning,,plan rejected,25.227
+custom_5_random_7,planning,,timed out after 600s,600.015
+custom_5_random_8,planning,,plan rejected,22.916
