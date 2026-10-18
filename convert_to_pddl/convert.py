@@ -2366,6 +2366,12 @@ def create_instance_from_scenario(
             if len(slot_objects) == 1:
                 problem.set_initial_value(compiled_single_request(slot_units[0], request_obj), True)
                 source_su = source_su_by_unit_sequence.get((slot_units[0].name,))
+                if source_su is None:
+                    # A unit that only becomes its own train by being split
+                    # off a longer arrival departs as its single-unit SU;
+                    # without this it never joins the departure order and can
+                    # never become compiled_departure_ready.
+                    source_su = single_unit_su_by_unit_name.get(slot_units[0].name)
                 if source_su is not None:
                     departure_su_by_source[source_su] = source_su
                     departure_event_records.append(
