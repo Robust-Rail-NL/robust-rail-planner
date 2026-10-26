@@ -1511,7 +1511,7 @@ def convert_plan(plan_file, scenario_file, location_file):
     # OutStanding units that parked in a slot but never got their Exit close
     # out here at the scenario end rather than being left in the yard forever.
     emitted_exit_sus = {
-        a["shuntingUnit"]["id"]
+        _as_id(a["shuntingUnit"]["id"])
         for a in actions
         if a.get("taskType", {}).get("predefined") in ("Exit", "StandOut")
     }
