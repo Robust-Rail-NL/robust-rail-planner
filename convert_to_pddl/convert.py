@@ -2520,7 +2520,7 @@ def create_instance_from_scenario(
 
 
     if output_file is None:
-        output_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", f"{scenario_name}.pddl")
+        output_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", f"{scenario_name}.pddl")
 
     # Serialise the unified-planning Problem to PDDL.
     writer = PDDLWriter(problem)
@@ -2530,7 +2530,7 @@ def create_instance_from_scenario(
 
     if domain_file is not None:
         if os.sep not in domain_file:
-            domain_file = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "data", domain_file)
+            domain_file = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", domain_file)
         writer.write_domain(domain_file)
 
 
