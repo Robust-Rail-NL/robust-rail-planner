@@ -3,6 +3,7 @@ the track the plan parked the train, and the Exit on the request's
 lastParkingTrackPart — never on the PDDL depart action's separate track (a
 zero-length signal a train cannot occupy)."""
 
+import json
 import os
 
 import pytest
@@ -466,3 +467,33 @@ def test_depart_rest_track_must_be_parkable(tmp_path):
     assert any(
         "non-parkable" in p and str(RAIL_TRANSIT) in p for p in problems
     ), problems
+
+
+@pytest.mark.parametrize("park_out_line", [
+    "(parking_fulfill su_train9001 unit9101 parking_2001_slot0 rail_park)",
+    "(park_su su_train9001 unit9101 parking_2001_slot0 rail_park)",
+])
+def test_unit_parked_out_in_a_slot_gets_exactly_one_stand_out(tmp_path, park_out_line):
+    # parking_fulfill and the 4-argument park_su already emit the unit's StandOut. The closing pass that
+    # exits parked-out units at the scenario end compared an int id against the
+    # PDDL name strings of the actions it had emitted, never matched, and
+    # appended a second StandOut. The evaluator then has no outStanding request
+    # left for it and rejects the plan.
+    with open(SCENARIO_FILE) as f:
+        scenario = json.load(f)
+    scenario["out"] = []
+    scenario["outStanding"] = [{
+        "id": 2001, "leaveTrackPart": BUMPER_OUT, "lastParkingTrackPart": RAIL_PARK,
+        "arrival": 0, "departure": 0, "standingIndex": None,
+        "trainUnits": [{"typePrefix": "TestUnit", "carriages": 1, "id": None, "tasks": None}],
+    }]
+    scenario_file = tmp_path / "scenario_outstanding.json"
+    scenario_file.write_text(json.dumps(scenario))
+
+    plan = _run_plan(tmp_path, [
+        "(arrive_su su_train9001 rail_park)",
+        park_out_line,
+    ], scenario_file=str(scenario_file))
+
+    stand_outs = _actions_of_kind(plan, "StandOut")
+    assert len(stand_outs) == 1
