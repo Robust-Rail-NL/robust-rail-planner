@@ -4,8 +4,8 @@ Used by analyze_run.py, startup_effect.py and make_poster_page.py. Only reads th
 results directory; nothing here writes into it.
 
 A results directory holds one folder per scenario, `custom_<trains>_<matching>_<n>/`,
-with the planner's attempt in `planning/` and the solver's in `local_search/seed<k>/`,
-plus the summary files `runs.csv`, `experiment.json` and so on.
+with the planner's attempt in `planning/` and the solver's in `local_search/` (or in
+`local_search/seed<k>/` when the experiment sets `num_seeds`), plus the summary files `runs.csv`, `experiment.json` and so on.
 """
 
 import csv
@@ -25,12 +25,15 @@ def parse_instance(name):
 
 
 def tool_of(runs_csv_tool):
-    """runs.csv calls the solver `local_search_seed<k>` and the planner `planning`."""
+    """runs.csv calls the planner `planning` and the solver `local_search`, or
+    `local_search_seed<k>` when the experiment sets `num_seeds`."""
     return "solver" if runs_csv_tool.startswith("local") else "planner"
 
 
 def attempt_dir(results, instance, tool):
-    """The folder holding one tool's attempt on one scenario."""
+    """The folder holding one tool's attempt on one scenario: `planning/` for the
+    planner; for the solver `local_search/seed<k>/` if it exists, else `local_search/`
+    (the layout of the poster runs, which did not set `num_seeds`)."""
     if tool == "planner":
         return os.path.join(results, instance, "planning")
     seeds = sorted(glob.glob(os.path.join(results, instance, "local_search", "seed*")))
