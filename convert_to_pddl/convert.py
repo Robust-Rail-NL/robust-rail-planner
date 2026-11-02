@@ -1612,6 +1612,16 @@ def create_instance_from_scenario(
             action.add_precondition(
                 up.GE(su_unit_count(action.parent_su), 2 if front else 3)
             )
+            # Once split, the parent no longer holds every unit of the request
+            # it matched, so it may not depart as that request whole; the
+            # request has to be re-coupled from its single units instead.
+            split_request_su = up.Variable(f"{name}_request_su", shunting_unit_type)
+            action.add_effect(
+                fluent=compiled_whole_target(action.parent_su, split_request_su),
+                value=False,
+                condition=compiled_whole_target(action.parent_su, split_request_su),
+                forall=[split_request_su],
+            )
             action.add_effect(active_su(action.child_su), True)
             action.add_effect(su_may_move(action.parent_su), True)
             action.add_effect(su_may_move(action.child_su), True)
@@ -2051,6 +2061,7 @@ def create_instance_from_scenario(
     source_composition_records = []
     single_unit_su_by_unit_name = {}
     direct_departure_sources = set()
+    serviced_source_sus = set()
     for source, index, train in all_trains_with_source(scenario_object):
         preferred_track_keys = ["firstParkingTrackPart"]
         initial_track_id = _train_initial_track_id(train, preferred_track_keys)
@@ -2205,6 +2216,8 @@ def create_instance_from_scenario(
             for first_obj, second_obj in zip(member_unit_objs, member_unit_objs[1:]):
                 problem.set_initial_value(next_in_su(first_obj, second_obj, shunting_unit), True)
             source_composition_records.append((shunting_unit, member_unit_objs))
+            if _train_task_types(train):
+                serviced_source_sus.add(shunting_unit)
 
     # Enforce arrival order: sort inbound trains by arrival time and chain the
     # arrival-precedence fluents so each train can only arrive after the previous one.
@@ -2353,6 +2366,12 @@ def create_instance_from_scenario(
             if len(slot_objects) == 1:
                 problem.set_initial_value(compiled_single_request(slot_units[0], request_obj), True)
                 source_su = source_su_by_unit_sequence.get((slot_units[0].name,))
+                if source_su is None:
+                    # A unit that only becomes its own train by being split
+                    # off a longer arrival departs as its single-unit SU;
+                    # without this it never joins the departure order and can
+                    # never become compiled_departure_ready.
+                    source_su = single_unit_su_by_unit_name.get(slot_units[0].name)
                 if source_su is not None:
                     departure_su_by_source[source_su] = source_su
                     departure_event_records.append(
@@ -2378,7 +2397,12 @@ def create_instance_from_scenario(
                 # needs no split-and-recombine either.
                 if effective_source_units in (slot_units, slot_units[::-1]):
                     problem.set_initial_value(compiled_whole_target(source_su, request_su), True)
-                    problem.set_initial_value(compiled_must_stay_coupled(source_su), True)
+                    # A train with a service task may still split: its units
+                    # can then be serviced on their own (the whole train may be
+                    # longer than the service track) and re-coupled into the
+                    # request. Whole adoption stays available as well.
+                    if source_su not in serviced_source_sus:
+                        problem.set_initial_value(compiled_must_stay_coupled(source_su), True)
                     departure_su_by_source[source_su] = request_su
                     if source_su in direct_departure_sources:
                         problem.set_initial_value(compiled_direct_departure(source_su), True)
