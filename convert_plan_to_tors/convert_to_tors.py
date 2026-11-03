@@ -1670,6 +1670,91 @@ def convert_plan(plan_file, scenario_file, location_file):
 # POST-PROCESS
 # =====================================================
 
+def _order_by_earliest_start(actions):
+    """Reorder actions so that independent ones run in order of start time.
+
+    The PDDL plan lists actions in one sequence, but the sequence is only a
+    linearisation: a unit's whole departure may be listed before an unrelated
+    unit's drive to a facility. The move line in `post_process_actions` walks
+    the list in order, so such an unrelated Move would be pushed behind the
+    departure (issue #58). Here an action keeps its place behind earlier
+    actions that share a wagon or a track resource with it (those orderings
+    are physical); otherwise the action with the earliest start goes first.
+    """
+    def _resources(action):
+        res = {r["id"] for r in action.get("resources", []) if "id" in r}
+        if "location" in action:
+            res.add(action["location"])
+        return res
+
+    # Member ids only (as in Phase 2): unit ids and member ids are separate
+    # namespaces and can collide.
+    wagons = [set(a["shuntingUnit"].get("memberIDs", [])) for a in actions]
+    resources = [_resources(a) for a in actions]
+    n = len(actions)
+    deps = [set() for _ in range(n)]
+    for j in range(n):
+        for i in range(j):
+            if wagons[i] & wagons[j] or resources[i] & resources[j]:
+                deps[j].add(i)
+
+    def _is(action, name):
+        return action["taskType"].get("predefined") == name
+
+    # List scheduling that mirrors Phase 2: simulate the per-wagon chains and
+    # the move line, and always emit the ready action that could start first.
+    # A Move that the line would delay therefore yields to a ready action that
+    # can start earlier, instead of blocking everything listed after it.
+    ordered, done = [], set()
+    remaining = set(range(n))
+    wagon_end, line_end = {}, 0
+
+    def _est(j):
+        action = actions[j]
+        start = int(action["startTime"])
+        if _is(action, "Arrive") or _is(action, "Exit") or _is(action, "StandIn") \
+                or _is(action, "StandOut"):
+            return start
+        start = max(start, max((wagon_end.get(w, 0) for w in wagons[j]), default=0))
+        if _is(action, "Move"):
+            start = max(start, line_end)
+        return start
+
+    dur = [int(a["endTime"]) - int(a["startTime"]) for a in actions]
+    # Latest start per action that still lets every later action of the same
+    # wagons start no later than its own planned start (Exit and Arrive are
+    # pinned to their scenario times, so they anchor the chains).
+    latest = [None] * n
+    for j in reversed(range(n)):
+        succ = [latest[k] for k in range(j + 1, n)
+                if wagons[j] & wagons[k] and latest[k] is not None]
+        pinned = _is(actions[j], "Exit") or _is(actions[j], "Arrive") \
+            or _is(actions[j], "StandIn") or _is(actions[j], "StandOut")
+        if pinned or not succ:
+            latest[j] = int(actions[j]["startTime"])
+        else:
+            latest[j] = min(succ) - dur[j]
+
+    while remaining:
+        ready = [j for j in remaining if deps[j] <= done]
+        # Giffler-Thompson: only actions that can start before the earliest
+        # finishing ready action compete; the most urgent one goes first.
+        first_end = min(_est(k) + dur[k] for k in ready)
+        contenders = [k for k in ready if _est(k) < first_end] or ready
+        j = min(contenders, key=lambda k: (latest[k], _est(k), k))
+        action = actions[j]
+        start = _est(j)
+        end = start + int(action["endTime"]) - int(action["startTime"])
+        if _is(action, "Move"):
+            line_end = end
+        for w in wagons[j]:
+            wagon_end[w] = max(end, wagon_end.get(w, 0))
+        ordered.append(action)
+        done.add(j)
+        remaining.discard(j)
+    return ordered
+
+
 def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
                          track_id_lookup, train_locations, train_arrival_times, scenario, su_id_fn=None,
                          parkable_tracks=None, track_parts_by_id=None,
@@ -1803,6 +1888,8 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
                     su_last_position[child_id] = (action["location"], int(action["endTime"]))
 
         processed_actions.append(action)
+
+    processed_actions[:] = _order_by_earliest_start(processed_actions)
 
     # The action list keeps the PDDL plan's emission order; it is NOT re-sorted
     # by time. Each train's actions carry times from its own per-train clock
@@ -1983,9 +2070,11 @@ def post_process_actions(actions, train_lookup, unit_lookup, track_lookup,
     # --- Phase 4: align Exits to their approach Move ---
     for i, action in enumerate(processed_actions):
         if _kind(action, "Exit") and i > 0:
-            preceding = processed_actions[i - 1]
-            if preceding["shuntingUnit"]["id"] == action["shuntingUnit"]["id"] \
-                    and _kind(preceding, "Move"):
+            preceding = next(
+                (a for a in reversed(processed_actions[:i])
+                 if a["shuntingUnit"]["id"] == action["shuntingUnit"]["id"]),
+                None)
+            if preceding is not None and _kind(preceding, "Move"):
                 end = int(preceding["endTime"])
                 action["startTime"] = _as_time(end)
                 action["endTime"] = _as_time(end)
