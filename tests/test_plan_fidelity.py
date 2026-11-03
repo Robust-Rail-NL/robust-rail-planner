@@ -497,3 +497,52 @@ def test_unit_parked_out_in_a_slot_gets_exactly_one_stand_out(tmp_path, park_out
 
     stand_outs = _actions_of_kind(plan, "StandOut")
     assert len(stand_outs) == 1
+
+
+def _unit_action(su_id, kind, start, end, track_ids):
+    su = {"id": su_id, "memberIDs": [su_id], "parentIDs": [], "childIDs": []}
+    return {"startTime": start, "endTime": end, "taskType": {"predefined": kind},
+            "shuntingUnit": su, "location": track_ids[-1],
+            "resources": [{"id": t} for t in track_ids]}
+
+
+def _two_unit_plan(exit_tracks):
+    """Unit 1 drives 100-200; unit 2's exit drive is pinned to 900-1000 and is
+    listed first in the plan."""
+    return [
+        _unit_action(2, "Move", 900, 1000, exit_tracks),
+        _unit_action(2, "Exit", 1000, 1000, [90]),
+        _unit_action(1, "Move", 100, 200, [10, 11]),
+    ]
+
+
+def _post_process(actions):
+    return post_process_actions(
+        actions,
+        train_lookup={}, unit_lookup={}, track_lookup={}, track_id_lookup={},
+        train_locations={}, train_arrival_times={},
+        scenario={"in": [], "inStanding": [], "outStanding": []},
+    )
+
+
+def test_move_of_unrelated_unit_is_not_pushed_behind_a_later_exit():
+    """Issue #58: the move line walked the plan in list order, so a Move listed
+    after another unit's pinned exit drive started after that exit even though
+    the two units share no track."""
+    out = _post_process(_two_unit_plan([20, 21]))
+    moves = {a["shuntingUnit"]["id"]: a for a in out if _predefined(a) == "Move"}
+    assert int(moves[1]["startTime"]) == 100, moves[1]
+    assert int(moves[1]["endTime"]) == 200, moves[1]
+    assert (int(moves[2]["startTime"]), int(moves[2]["endTime"])) == (900, 1000)
+    # The Exit still directly follows its own unit's Move.
+    exit_action = next(a for a in out if _predefined(a) == "Exit")
+    assert int(exit_action["startTime"]) == 1000
+
+
+def test_plan_order_is_kept_between_moves_sharing_a_track():
+    """The reorder must not swap Moves that use the same track: their plan
+    order is the physical order."""
+    out = _post_process(_two_unit_plan([11, 21]))
+    moves = [a for a in out if _predefined(a) == "Move"]
+    assert [a["shuntingUnit"]["id"] for a in moves] == [2, 1], moves
+    assert int(moves[1]["startTime"]) >= int(moves[0]["endTime"])
