@@ -497,3 +497,47 @@ def test_unit_parked_out_in_a_slot_gets_exactly_one_stand_out(tmp_path, park_out
 
     stand_outs = _actions_of_kind(plan, "StandOut")
     assert len(stand_outs) == 1
+
+
+def _two_member_scenario(tmp_path, tasks_per_member):
+    """The simple scenario with its train coupled to a second unit, 9102. Each
+    entry of tasks_per_member lists the task names that member needs."""
+    with open(SCENARIO_FILE) as f:
+        scenario = json.load(f)
+    train = scenario["in"][0]
+    first = train["members"][0]
+    second = dict(first, id=9102)
+    for member, names in zip((first, second), tasks_per_member):
+        member["tasks"] = [{"type": {"other": name}, "duration": 300} for name in names]
+    train["members"] = [first, second]
+    scenario["out"][0]["trainUnits"] = [dict(u) for u in scenario["out"][0]["trainUnits"] * 2]
+    path = tmp_path / "scenario_two_members.json"
+    path.write_text(json.dumps(scenario))
+    return str(path)
+
+
+def test_coupled_members_with_the_same_task_get_one_service_action(tmp_path):
+    """The evaluator services every member that needs the task in one visit, so
+    a second Service action for the same task type in the same shunting unit is
+    rejected ("Could not find task ... for any train"). Two coupled members that
+    both need Cleaning must therefore produce a single Service action that lasts
+    as long as the two tasks together."""
+    scenario = _two_member_scenario(tmp_path, [["Cleaning"], ["Cleaning"]])
+    plan = _run_plan(tmp_path, PARK_THEN_DEPART_PLAN, scenario_file=scenario)
+
+    services = [a for a in plan["actions"] if a["taskType"].get("other") == "Cleaning"]
+    assert len(services) == 1, services
+    service = services[0]
+    assert int(service["endTime"]) - int(service["startTime"]) == 600
+    assert sorted(service["shuntingUnit"]["memberIDs"]) == [9101, 9102]
+
+
+def test_coupled_members_with_different_tasks_keep_one_action_per_task(tmp_path):
+    """Only the members that need the planned task type are serviced by its
+    action, so the visit lasts that task alone."""
+    scenario = _two_member_scenario(tmp_path, [["Cleaning"], []])
+    plan = _run_plan(tmp_path, PARK_THEN_DEPART_PLAN, scenario_file=scenario)
+
+    services = [a for a in plan["actions"] if a["taskType"].get("other") == "Cleaning"]
+    assert len(services) == 1, services
+    assert int(services[0]["endTime"]) - int(services[0]["startTime"]) == 300

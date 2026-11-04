@@ -1470,26 +1470,32 @@ def convert_plan(plan_file, scenario_file, location_file):
             if not pending_tasks:
                 raise ValueError(f"No pending {pddl_facility} task for {su_id}")
 
-            for member_id, task_index, task in pending_tasks:
-                start_time = max(su_clock.get(su_id, 0), su_arrival.get(su_id, 0))
-                end_time = start_time + int(task["duration"])
-                service_action = create_service_action(
-                    su_id,
-                    start_time,
-                    end_time,
-                    track_id,
-                    facility_id,
-                    facility_type_task,
-                    train_lookup,
-                    unit_lookup,
-                )
-                members = _members_for(su_id)
-                service_action["shuntingUnit"]["memberIDs"] = [member_id] + [
-                    member for member in members if member != member_id
-                ]
-                actions.append(service_action)
+            # One Service action per task type for the whole shunting unit: the
+            # evaluator services every member that needs the task in a single
+            # visit, one after the other, so a second action for the same type
+            # finds nothing left to do and is rejected ("Could not find task ...").
+            # The action spans the visit: the sum of the members' task durations.
+            first_member_id = pending_tasks[0][0]
+            start_time = max(su_clock.get(su_id, 0), su_arrival.get(su_id, 0))
+            end_time = start_time + sum(int(task["duration"]) for _, _, task in pending_tasks)
+            service_action = create_service_action(
+                su_id,
+                start_time,
+                end_time,
+                track_id,
+                facility_id,
+                facility_type_task,
+                train_lookup,
+                unit_lookup,
+            )
+            members = _members_for(su_id)
+            service_action["shuntingUnit"]["memberIDs"] = [first_member_id] + [
+                member for member in members if member != first_member_id
+            ]
+            actions.append(service_action)
+            for member_id, task_index, _ in pending_tasks:
                 completed_service_tasks.add((member_id, task_index))
-                su_clock[su_id] = end_time
+            su_clock[su_id] = end_time
             continue
 
         # Nothing matched. An action the converter does not know would be
