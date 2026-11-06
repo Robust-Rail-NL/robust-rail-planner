@@ -12,6 +12,12 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
+from contextlib import contextmanager
+
+# Taken before the heavy imports below (unified_planning), so that
+# "TIMING stage=total" covers them even though no single stage does.
+PROCESS_START = time.monotonic()
 
 REPO_ROOT = os.path.dirname(os.path.abspath(__file__))
 
@@ -30,6 +36,25 @@ PLANNER_SCRIPTS = {
     "symbolic-rail": os.path.join(PLAN_DIR, "symbolic_planner.jl"),
     "enhsp": os.path.join(PLAN_DIR, "enhsp_planner.jl"),
 }
+
+def emit_timing(stage, seconds):
+    """Print a machine-readable `TIMING stage=<name> seconds=<float>` line.
+
+    Goes to stdout, flushed at once: a run killed by a timeout then keeps the
+    lines of the stages that finished. (stderr is avoided on purpose: callers
+    treat a non-empty .err as a warning.)
+    """
+    print(f"TIMING stage={stage} seconds={seconds:.3f}", flush=True)
+
+
+@contextmanager
+def timed(stage):
+    start = time.monotonic()
+    try:
+        yield
+    finally:
+        emit_timing(stage, time.monotonic() - start)
+
 
 def convert_to_pddl(location_path, scenario_path, domain_out, problem_out):
     converter = importlib.import_module("convert_to_pddl.convert")
@@ -109,15 +134,20 @@ def main():
     problem_pddl = os.path.join(tmp_dir, "problem.pddl")
     raw_plan = os.path.join(tmp_dir, "plan.pddl")
 
-    convert_to_pddl(args.location, args.scenario, domain_pddl, problem_pddl)
-    run_planner(domain_pddl, problem_pddl, args.planner, raw_plan)
+    with timed("pddl_conversion"):
+        convert_to_pddl(args.location, args.scenario, domain_pddl, problem_pddl)
+    with timed("planner_process"):
+        run_planner(domain_pddl, problem_pddl, args.planner, raw_plan)
 
-    if not validate_plan(domain_pddl, problem_pddl, raw_plan):
+    with timed("validation"):
+        plan_is_valid = validate_plan(domain_pddl, problem_pddl, raw_plan)
+    if not plan_is_valid:
         print("Refusing to convert an invalid plan to TORS format.", file=sys.stderr)
         sys.exit(1)
 
     try:
-        tors_plan = convert_plan_to_tors(raw_plan, args.scenario, args.location)
+        with timed("json_conversion"):
+            tors_plan = convert_plan_to_tors(raw_plan, args.scenario, args.location)
     except ScheduleInfeasibleError as exc:
         for problem in exc.problems:
             print("PROBLEM:", problem, file=sys.stderr)
@@ -139,6 +169,7 @@ def main():
     with open(args.output, "w") as f:
         json.dump(tors_plan, f, indent=4)
 
+    emit_timing("total", time.monotonic() - PROCESS_START)
     return tors_plan
 
 
