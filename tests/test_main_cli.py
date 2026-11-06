@@ -3,6 +3,8 @@ subprocess exactly like the Dockerfile / real usage does, against the
 simple-service fixture."""
 import json
 import os
+import re
+import shutil
 import subprocess
 import sys
 
@@ -200,3 +202,62 @@ def test_a_late_departure_is_converted_not_failed(tmp_path):
         "the exit is scheduled whenever the work finishes, which is after the "
         f"deadline of 10 (got {exits[0]['startTime']})"
     )
+
+
+def _timing_lines(stdout):
+    stages = {}
+    for line in stdout.splitlines():
+        m = re.match(r"^TIMING\s+stage=(\w+)\s+seconds=(\d+(?:\.\d+)?)$", line)
+        if m:
+            stages[m.group(1)] = float(m.group(2))
+    return stages
+
+
+def _stats_line(stdout):
+    for line in stdout.splitlines():
+        if line.startswith("STATS "):
+            return dict(kv.split("=") for kv in line.split()[1:])
+    return None
+
+
+@requires_julia
+def test_main_prints_timing_and_stats_lines_on_stdout(tmp_path):
+    """Experiment scripts parse `TIMING stage=... seconds=...` and
+    `STATS expanded=... plan_length=...` from planner.out; keep the format."""
+    result = _run_main(tmp_path / "plan.json")
+    assert result.returncode == 0, result.stderr
+
+    stages = _timing_lines(result.stdout)
+    for stage in ("pddl_conversion", "search", "planner_process",
+                  "validation", "json_conversion", "total"):
+        assert stage in stages, f"missing TIMING stage={stage}:\n{result.stdout}"
+    # The Julia process includes start-up on top of the search itself, and the
+    # whole run includes every stage.
+    assert stages["planner_process"] >= stages["search"]
+    assert stages["total"] >= stages["planner_process"]
+
+    stats = _stats_line(result.stdout)
+    assert stats is not None, result.stdout
+    assert int(stats["expanded"]) > 0
+    assert int(stats["plan_length"]) > 0
+    # Nothing machine-readable leaks to stderr (a non-empty .err counts as a warning).
+    assert "TIMING" not in result.stderr and "STATS" not in result.stderr
+
+
+@pytest.mark.skipif(not os.path.isfile(os.environ.get("ENHSP_JAR", "/opt/enhsp/enhsp.jar"))
+                    or shutil.which("java") is None,
+                    reason="ENHSP jar or java unavailable (set ENHSP_JAR)")
+@requires_julia
+def test_main_enhsp_prints_timing_and_stats_lines(tmp_path):
+    cmd = [sys.executable, os.path.join(REPO_ROOT, "main.py"),
+           "--location", LOCATION_FILE, "--scenario", SCENARIO_FILE,
+           "--planner", "enhsp", "--output", str(tmp_path / "plan.json")]
+    result = subprocess.run(cmd, cwd=REPO_ROOT, capture_output=True, text=True, timeout=180)
+    assert result.returncode == 0, result.stderr
+
+    stages = _timing_lines(result.stdout)
+    for stage in ("pddl_conversion", "search", "enhsp_process", "planner_process", "total"):
+        assert stage in stages, f"missing TIMING stage={stage}:\n{result.stdout}"
+    stats = _stats_line(result.stdout)
+    assert stats is not None, result.stdout
+    assert int(stats["expanded"]) > 0 and int(stats["plan_length"]) > 0

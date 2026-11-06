@@ -29,10 +29,18 @@ function run_symbolic_planner(domain_file, problem_file, plan_file, mode)
 
     println("Planning...")
     planner = WeightedAStarPlanner(heuristic, 4)
+    started = time_ns()
     sol = planner(domain, problem)
+    search_seconds = (time_ns() - started) / 1e9
+    # Machine-readable lines for experiment scripts; flushed so a killed run
+    # keeps what it already printed.
+    println("TIMING stage=search seconds=", round(search_seconds; digits=3))
+    flush(stdout)
 
     if sol.status == :success
         println("Solved problem $(problem.name), plan length $(length(sol.plan))")
+        println("STATS expanded=$(sol.expanded) plan_length=$(length(sol.plan))")
+        flush(stdout)
         mkpath(dirname(plan_file))
         open(plan_file, "w") do file
             for action in sol.plan

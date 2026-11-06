@@ -23,6 +23,19 @@ function parse_args()
     return domain_file, problem_file, plan_file
 end
 
+# Machine-readable output for experiment scripts; flushed so a killed run keeps
+# the lines it already printed.
+function emit_timing(stage, seconds)
+    println("TIMING stage=", stage, " seconds=", round(seconds; digits=3))
+    flush(stdout)
+end
+
+# ENHSP prints e.g. "Expanded Nodes:10" and "Planning Time (msec): 33".
+function enhsp_stat(line, label)
+    startswith(line, label * ":") || return nothing
+    return tryparse(Int, strip(line[length(label)+2:end]))
+end
+
 function run_enhsp_planner(domain_file, problem_file, plan_file)
     println("Planner backend: ENHSP via Julia subprocess")
     java = get(ENV, "JAVA_EXE", default_java())
@@ -35,7 +48,31 @@ function run_enhsp_planner(domain_file, problem_file, plan_file)
     mkpath(dirname(plan_file))
     command = `$(java) -jar $(enhsp_jar) -sp $(plan_file) -h hadd -s wa_star_4 -o $(domain_file) -f $(problem_file)`
     println("Running: ", command)
-    run(command)
+    stats = Dict{String,Int}()
+    started = time_ns()
+    # Echo ENHSP's stdout line by line (so planner.out is unchanged) while
+    # picking its statistics out of it. Throws on a non-zero exit, like run().
+    open(command, "r") do io
+        for line in eachline(io)
+            println(line)
+            flush(stdout)
+            for label in ("Expanded Nodes", "Plan-Length", "Planning Time (msec)")
+                value = enhsp_stat(line, label)
+                value === nothing || (stats[label] = value)
+            end
+        end
+    end
+    process_seconds = (time_ns() - started) / 1e9
+
+    # search = ENHSP's own planning time (heuristic setup + search, excluding JVM
+    # start-up and PDDL parsing); falls back to the whole process if not printed.
+    planning_ms = get(stats, "Planning Time (msec)", nothing)
+    emit_timing("search", planning_ms === nothing ? process_seconds : planning_ms / 1000)
+    emit_timing("enhsp_process", process_seconds)
+    if haskey(stats, "Expanded Nodes") && haskey(stats, "Plan-Length")
+        println("STATS expanded=", stats["Expanded Nodes"], " plan_length=", stats["Plan-Length"])
+        flush(stdout)
+    end
 
     if isfile(plan_file)
         steps = filter(line -> !isempty(strip(line)), readlines(plan_file))
