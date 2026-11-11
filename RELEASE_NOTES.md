@@ -39,7 +39,7 @@ No change to the command line. Output files are unchanged; stdout gains the `TIM
 
 ### Reproducibility note
 
-The Issa solver-versus-planner experiment grid (robust-rail-general, `experiments/issa-grid/`) ran the build `robust-rail-planner 0.5.0-edge+20261106.2f2f34b`, which has the same source tree as this release, for both ENHSP and symbolic-rail.
+The solver-versus-planner experiment grid (robust-rail-general, `experiments/issa-grid/`) ran the build `robust-rail-planner 0.5.0-edge+20261106.2f2f34b`, which has the same source tree as this release, for both ENHSP and symbolic-rail.
 
 ## 0.5.0 — 2026-09-17
 
