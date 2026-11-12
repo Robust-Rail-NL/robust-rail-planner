@@ -65,7 +65,10 @@ The planner image is published under two channels:
 
 Currently manual only — run [`docker-push-edge.sh`](docker-push-edge.sh)
 yourself from the `edge` branch (it checks and refuses to run from anywhere
-else). There is no CI automation building or pushing `edge` on every push to
+else).
+Push `edge` to origin first: the script also refuses unless local `edge` is
+identical to `origin/edge`, so `:edge` only ever contains pushed commits.
+ There is no CI automation building or pushing `edge` on every push to
 the branch. This was a deliberate choice, not an oversight: wiring that up
 means a new category of CI workflow (deploy, not just build/test) and
 storing GHCR push credentials as Actions secrets — a real increase in attack
