@@ -31,6 +31,9 @@ The planner image is published under two channels:
   version). Every change lands here through its own feature branch and a
   reviewed PR into `main` — `stable` means "last reviewed, released
   version."
+  `docker-push.sh` refuses to run unless the working tree is clean and `HEAD` is
+  the commit tagged `v<version>` (by `bump-version.sh`) with that tag pushed to
+  origin; `-f` skips these checks.
 - **`edge`** — a fast, lower-ceremony channel for running a not-yet-reviewed
   fix without waiting for its PR into `main`. Built and pushed via
   [`docker-push-edge.sh`](docker-push-edge.sh) under the floating
