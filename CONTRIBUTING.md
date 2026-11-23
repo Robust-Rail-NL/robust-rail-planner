@@ -13,6 +13,8 @@ Two hooks live here:
 
 - `pre-commit` refuses a direct commit to `edge` (see the branch flow rules
   below) while still allowing a `git merge --no-ff` completion.
+  The guard is shared with the sibling repos, whose copies
+  `robust-rail-general/scripts/check_push_script_sync.py` checks for drift.
 - `pre-push` refuses a direct push to `main`'s `refs/heads/main` ref —
   push a feature branch and open a PR instead.
 
